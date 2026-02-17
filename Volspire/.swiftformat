@@ -1,3 +1,0 @@
---disable trailingCommas
---ifdef no-indent
---swiftversion 6
