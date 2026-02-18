@@ -83,7 +83,7 @@ private extension SearchScreen {
                 .contentMargins(.bottom, ViewConst.screenPaddings, for: .scrollContent)
             }
         }
-        .background(Color(.systemBackground))
+        .gradientBackground()
     }
 }
 

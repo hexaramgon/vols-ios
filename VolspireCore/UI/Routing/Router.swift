@@ -11,6 +11,7 @@ enum Route: Hashable, Equatable {
     case mediaList(_ items: [Media], listMeta: MediaList.Meta?)
     case mediaItem(_ item: Media)
     case downloaded
+    case profile(_ userId: String)
 }
 
 @Observable
@@ -27,6 +28,10 @@ class Router {
 
     func navigateToDownloaded() {
         path.append(Route.downloaded)
+    }
+
+    func navigateToProfile(userId: String) {
+        path.append(Route.profile(userId))
     }
 
     func popToRoot() {

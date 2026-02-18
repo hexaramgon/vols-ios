@@ -87,7 +87,7 @@ struct HomeScreen: View {
         }
         .contentMargins(.bottom, ViewConst.screenPaddings, for: .scrollContent)
         .toolbarTitleDisplayMode(.inlineLarge)
-        .background(Color(.systemBackground))
+        .gradientBackground()
     }
     
     var loadingView: some View {
@@ -152,7 +152,7 @@ struct FilterPillButton: View {
     var body: some View {
         Button(action: action) {
             Text(filter.title)
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(isActive ? .white : .primary)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -161,7 +161,7 @@ struct FilterPillButton: View {
                         ? Color.primary.opacity(0.9)
                         : Color(.tertiarySystemFill)
                 )
-                .clipShape(Capsule())
+                .clipShape(RoundedRectangle(cornerRadius: 4))
         }
         .buttonStyle(.plain)
     }
@@ -197,7 +197,9 @@ private extension HomeScreen {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 14) {
                     ForEach(viewModel.following) { user in
-                        FollowingUserView(user: user)
+                        FollowingUserView(user: user) {
+                            router.navigateToProfile(userId: user.id)
+                        }
                     }
                 }
                 .padding(.horizontal, ViewConst.screenPaddings)
@@ -208,42 +210,46 @@ private extension HomeScreen {
 
 struct FollowingUserView: View {
     let user: FollowingUser
+    let onTap: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
-            if let imageURL = user.profileImageURL {
-                KFImage(imageURL)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 64, height: 64)
-                    .clipShape(Circle())
-                    .overlay(
-                        Circle()
-                            .strokeBorder(Color(.systemBackground), lineWidth: 2)
-                    )
-            } else {
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [.blue.opacity(0.6), .purple.opacity(0.6)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+        Button(action: onTap) {
+            VStack(spacing: 8) {
+                if let imageURL = user.profileImageURL {
+                    KFImage(imageURL)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 64, height: 64)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .strokeBorder(Color(.systemBackground), lineWidth: 2)
                         )
-                    )
-                    .frame(width: 64, height: 64)
-                    .overlay {
-                        Image(systemName: "person.fill")
-                            .font(.title3)
-                            .foregroundStyle(.white)
-                    }
-            }
+                } else {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [.blue.opacity(0.6), .purple.opacity(0.6)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 64, height: 64)
+                        .overlay {
+                            Image(systemName: "person.fill")
+                                .font(.title3)
+                                .foregroundStyle(.white)
+                        }
+                }
 
-            Text(user.username)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
+                Text(user.username)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            .frame(width: 72)
         }
-        .frame(width: 72)
+        .buttonStyle(.plain)
     }
 }
 
@@ -424,7 +430,9 @@ private extension HomeScreen {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 16) {
                     ForEach(viewModel.topProducers) { producer in
-                        ProducerCardView(producer: producer)
+                        ProducerCardView(producer: producer) {
+                            router.navigateToProfile(userId: producer.id)
+                        }
                     }
                 }
                 .padding(.horizontal, ViewConst.screenPaddings)
@@ -435,36 +443,40 @@ private extension HomeScreen {
 
 struct ProducerCardView: View {
     let producer: FollowingUser
+    let onTap: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
-            if let imageURL = producer.profileImageURL {
-                KFImage(imageURL)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 100, height: 100)
-                    .clipShape(Circle())
-            } else {
-                Circle()
-                    .fill(Color(.systemGray4))
-                    .frame(width: 100, height: 100)
-                    .overlay {
-                        Image(systemName: "person.fill")
-                            .font(.title)
-                            .foregroundStyle(.secondary)
-                    }
+        Button(action: onTap) {
+            VStack(spacing: 8) {
+                if let imageURL = producer.profileImageURL {
+                    KFImage(imageURL)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 100, height: 100)
+                        .clipShape(Circle())
+                } else {
+                    Circle()
+                        .fill(Color(.systemGray4))
+                        .frame(width: 100, height: 100)
+                        .overlay {
+                            Image(systemName: "person.fill")
+                                .font(.title)
+                                .foregroundStyle(.secondary)
+                        }
+                }
+
+                Text(producer.username)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+
+                Text("Producer")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-
-            Text(producer.username)
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .lineLimit(1)
-
-            Text("Producer")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .frame(width: 100)
         }
-        .frame(width: 100)
+        .buttonStyle(.plain)
     }
 }
 

@@ -17,6 +17,8 @@ struct RoutedView: View {
             MediaItemScreen(item: item)
         case .downloaded:
             DownloadedScreen()
+        case let .profile(userId):
+            ProfileScreen(userId: userId)
         }
     }
 }

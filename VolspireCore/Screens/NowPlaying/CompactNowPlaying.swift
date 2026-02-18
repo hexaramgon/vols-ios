@@ -58,7 +58,7 @@ private extension CompactNowPlaying {
     var nowPlaying: some View {
         HStack(spacing: 0) {
             artwork(cornerRadius: 5)
-                .frame(width: 30, height: 30)
+                .frame(width: 42, height: 42)
             VStack(spacing: 0) {
                 let title = model.display.title
                 // TODO: MarqueeText

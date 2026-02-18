@@ -28,6 +28,7 @@ public struct ParallaxHeaderView<T: View>: View {
                     width: geometry.size.width,
                     height: contentHeight
                 )
+                .clipped()
                 .offset(y: offset > 0 ? -offset : 0)
         }
         .frame(height: height)

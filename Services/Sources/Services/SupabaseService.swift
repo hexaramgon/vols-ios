@@ -101,10 +101,52 @@ public struct ApiUser: Codable, Sendable, Identifiable {
     }
 }
 
+// MARK: - User Profile Response Models
+
+public struct ApiUserProfile: Codable, Sendable {
+    public let userId: String
+    public let username: String?
+    public let bio: String?
+    public let profileImageUrl: String?
+    public let bannerImageUrl: String?
+    public let location: String?
+    public let followersCount: Int?
+    public let monthlyListenersCount: Int
+    public let trackCount: Int
+    public let tracks: [ApiProfileTrack]
+    
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case username, bio
+        case profileImageUrl = "profile_image_url"
+        case bannerImageUrl = "banner_image_url"
+        case location
+        case followersCount = "followers_count"
+        case monthlyListenersCount = "monthly_listeners_count"
+        case trackCount = "track_count"
+        case tracks
+    }
+}
+
+public struct ApiProfileTrack: Codable, Sendable, Identifiable {
+    public let id: String
+    public let title: String
+    public let coverUrl: String?
+    public let audioUrl: String?
+    public let streams: Int?
+    
+    enum CodingKeys: String, CodingKey {
+        case id, title, streams
+        case coverUrl = "cover_url"
+        case audioUrl = "audio_url"
+    }
+}
+
 // MARK: - Supabase Service Protocol
 
 public protocol SupabaseServiceProtocol: Sendable {
     func getHomeTracks() async throws -> HomeTracksResponse
+    func getUserProfile(userId: String) async throws -> ApiUserProfile
     func rpc<T: Decodable>(_ functionName: String, params: [String: Any]?) async throws -> T
 }
 
@@ -139,6 +181,11 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     /// Fetches home tracks data from Supabase RPC function
     public func getHomeTracks() async throws -> HomeTracksResponse {
         return try await rpc("get_home_tracks", params: nil)
+    }
+    
+    /// Fetches a user profile from Supabase RPC function
+    public func getUserProfile(userId: String) async throws -> ApiUserProfile {
+        return try await rpc("get_user_profile", params: ["profile_id": userId])
     }
     
     /// Generic RPC call to Supabase
