@@ -16,20 +16,13 @@ struct NowPlayingInfoStrip: View {
     @State private var timer: Timer?
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             albumThumb
             slideshowPanels
-            fxButton
         }
-        .frame(height: 72)
+        .frame(height: 130)
         .onAppear { startAutoSlide() }
         .onDisappear { stopAutoSlide() }
-        .sheet(isPresented: Bindable(controller).showingEffectsSheet) {
-            AudioEffectsSheet()
-                .environment(controller)
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
-        }
     }
 }
 
@@ -43,28 +36,11 @@ private extension NowPlayingInfoStrip {
         case let .videoPlayer(player):
             // For video tracks, show a small video preview
             PlayerVideoView(player: player)
-                .frame(width: 72, height: 72)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .frame(width: 130, height: 130)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
         default:
-            ArtworkView(art, cornerRadius: 8)
-                .frame(width: 72, height: 72)
-        }
-    }
-
-    var fxButton: some View {
-        let isActive = controller.audioEffects != .default
-        return Button {
-            controller.showingEffectsSheet = true
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: "wand.and.stars")
-                    .font(.title3)
-                Text("FX")
-                    .font(.caption2)
-                    .fontWeight(.bold)
-            }
-            .foregroundStyle(isActive ? Color.green : Color.white.opacity(0.7))
-            .frame(width: 44, height: 72)
+            ArtworkView(art, cornerRadius: 10)
+                .frame(width: 130, height: 130)
         }
     }
 }
@@ -74,89 +50,107 @@ private extension NowPlayingInfoStrip {
 private extension NowPlayingInfoStrip {
     var slideshowPanels: some View {
         TabView(selection: $currentPage) {
-            trackInfoPanel.tag(0)
-            artistPanel.tag(1)
-            statsPanel.tag(2)
+            descriptionPanel.tag(0)
+            actionsPanel.tag(1)
+            creditsPanel.tag(2)
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .overlay(alignment: .bottom) {
             pageIndicator
                 .padding(.bottom, 2)
         }
     }
 
-    // Panel 1: Title & Subtitle
-    var trackInfoPanel: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(controller.display.title.isEmpty ? "—" : controller.display.title)
-                .font(.subheadline)
+    // Panel 1: Description
+    var descriptionPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let genre = controller.nowPlayingMeta?.genre {
+                Text(genre)
+                    .font(.caption2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.white.opacity(0.15))
+                    .clipShape(Capsule())
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .foregroundStyle(.white)
+    }
+
+    // Panel 2: Actions
+    var actionsPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Actions")
+                .font(.caption2)
                 .fontWeight(.semibold)
-                .lineLimit(2)
-            Text(controller.display.subtitle.isEmpty ? "Unknown" : controller.display.subtitle)
-                .font(.caption)
-                .lineLimit(1)
+                .foregroundStyle(.white.opacity(0.5))
+                .textCase(.uppercase)
+
+            HStack(spacing: 16) {
+                actionButton(icon: "arrow.down.circle", label: "Save")
+                actionButton(icon: "cart", label: "Buy")
+                actionButton(icon: "square.and.arrow.up", label: "Share")
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
     }
 
-    // Panel 2: Artist & Genre
-    var artistPanel: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label {
-                Text(controller.nowPlayingMeta?.artist ?? "Unknown Artist")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
-            } icon: {
-                Image(systemName: "person.fill")
-                    .font(.caption)
-            }
-            Label {
-                Text(controller.nowPlayingMeta?.genre ?? "Music")
-                    .font(.caption)
-                    .lineLimit(1)
-            } icon: {
-                Image(systemName: "guitars.fill")
-                    .font(.caption)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .foregroundStyle(.white)
-    }
+    // Panel 3: Credits & Details
+    var creditsPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Credits")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.white.opacity(0.5))
+                .textCase(.uppercase)
 
-    // Panel 3: Playback Stats
-    var statsPanel: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if let progress = controller.progress {
+            Label {
+                Text(controller.nowPlayingMeta?.artist ?? "Unknown")
+                    .font(.caption)
+                    .lineLimit(1)
+            } icon: {
+                Image(systemName: "music.mic")
+                    .font(.caption2)
+            }
+
+            if let progress = controller.progress, progress.duration > 0 {
                 Label {
-                    Text("Duration: \(progress.duration.asTimeString(style: .positional))")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .lineLimit(1)
+                    Text(progress.duration.asTimeString(style: .positional))
+                        .font(.caption)
                 } icon: {
                     Image(systemName: "clock")
-                        .font(.caption)
+                        .font(.caption2)
                 }
+            }
+
+            if let genre = controller.nowPlayingMeta?.genre {
                 Label {
-                    let pct = progress.duration > 0
-                        ? Int((progress.elapsedTime / progress.duration) * 100)
-                        : 0
-                    Text("\(pct)% played")
+                    Text(genre)
                         .font(.caption)
-                        .lineLimit(1)
                 } icon: {
-                    Image(systemName: "chart.bar.fill")
-                        .font(.caption)
+                    Image(systemName: "guitars.fill")
+                        .font(.caption2)
                 }
-            } else {
-                Text("No playback data")
-                    .font(.caption)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
+    }
+
+    func actionButton(icon: String, label: String) -> some View {
+        Button {
+            // TODO: Implement action
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.body)
+                Text(label)
+                    .font(.caption2)
+            }
+            .foregroundStyle(.white.opacity(0.8))
+        }
     }
 
     // Page dots

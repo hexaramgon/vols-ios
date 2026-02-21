@@ -13,6 +13,7 @@ import Services
 class Dependencies: Observable {
     let apiService: APIService
     let supabaseService: SupabaseService
+    let authManager: AuthManager
     let dataController: DataController
     let mediaState: MediaState
     let mediaPlayer: MediaPlayer
@@ -21,6 +22,7 @@ class Dependencies: Observable {
     init(
         apiService: APIService,
         supabaseService: SupabaseService,
+        authManager: AuthManager,
         dataController: DataController,
         mediaState: MediaState,
         mediaPlayer: MediaPlayer,
@@ -28,6 +30,7 @@ class Dependencies: Observable {
     ) {
         self.apiService = apiService
         self.supabaseService = supabaseService
+        self.authManager = authManager
         self.dataController = dataController
         self.mediaState = mediaState
         self.mediaPlayer = mediaPlayer
@@ -41,6 +44,7 @@ extension Dependencies {
         return Dependencies(
             apiService: APIService(baseURL: ""),
             supabaseService: SupabaseService(),
+            authManager: AuthManager(),
             dataController: DataController(),
             mediaState: DefaultMediaState.stub,
             mediaPlayer: mediaPlayer,
@@ -60,10 +64,12 @@ extension Dependencies {
 
         let apiService = APIService(baseURL: "https://volspire.ru")
         let supabaseService = SupabaseService()
+        let authManager = AuthManager()
 
         return Dependencies(
             apiService: apiService,
             supabaseService: supabaseService,
+            authManager: authManager,
             dataController: dataController,
             mediaState: mediaState,
             mediaPlayer: mediaPlayer,

@@ -15,13 +15,15 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(path: "../SharedUtilities/")
+        .package(path: "../SharedUtilities/"),
+        .package(url: "https://github.com/supabase/supabase-swift", from: "2.0.0")
     ],
     targets: [
         .target(
             name: "Services",
             dependencies: [
-                "SharedUtilities"
+                "SharedUtilities",
+                .product(name: "Supabase", package: "supabase-swift")
             ]
         )
     ]

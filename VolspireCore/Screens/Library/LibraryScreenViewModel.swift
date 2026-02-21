@@ -4,28 +4,35 @@
 //
 //
 
+import Combine
+import Foundation
 import MediaLibrary
 import Observation
 import Player
 
 @Observable @MainActor
 final class LibraryScreenViewModel {
+    var playerState: MediaPlayerState = .paused(media: .none)
+    var playIndicatorSpectrum: [Float] = .init(repeating: 0, count: MediaPlayer.Const.frequencyBands)
+
     weak var mediaState: MediaState?
-    weak var player: MediaPlayer?
+    weak var player: MediaPlayer? {
+        didSet {
+            observeMediaPlayerState()
+        }
+    }
 
-    var recentlyAdded: [MediaItem] {
+    var cancellables = Set<AnyCancellable>()
+
+    var allSongs: [Media] {
         guard let mediaState else { return [] }
-        let lists = mediaState.mediaLists()
-        let tracks = mediaState.allTracks()
+        return mediaState.allTracks()
+    }
 
-        let listItems = lists.map { MediaItem.mediaList($0) }
-        let trackItems = tracks.map { MediaItem.mediaItem($0) }
-
-        let result = (listItems + trackItems)
-            .sorted { $0.timestamp > $1.timestamp }
-            .prefix(20)
-        return Array(result)
+    func play(_ track: Media) {
+        guard let player else { return }
+        player.play(track.id, of: allSongs.map(\.id))
     }
 }
 
-extension LibraryScreenViewModel: LibraryContextMenuHandling {}
+extension LibraryScreenViewModel: PlayerStateObserving {}

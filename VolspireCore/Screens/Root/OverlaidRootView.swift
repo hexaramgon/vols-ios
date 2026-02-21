@@ -10,11 +10,16 @@ import SwiftUI
 
 struct OverlaidRootView: View {
     @State private var expandSheet: Bool = false
+    @State private var conversationState = ConversationState()
     @Environment(\.colorScheme) private var colorScheme
     @Environment(PlayerController.self) var playerController
 
     private var showMiniPlayer: Bool {
         playerController.display.title.isEmpty == false
+    }
+
+    private var isConversationActive: Bool {
+        conversationState.activeConversation != nil
     }
 
     private var collapsedFrame: CGRect {
@@ -46,9 +51,13 @@ struct OverlaidRootView: View {
                         expanded: $expandSheet,
                         collapsedFrame: collapsedFrame
                     )
+                    .offset(y: isConversationActive ? (ViewConst.safeAreaInsets.bottom + 49) : 0)
+                    .allowsHitTesting(!isConversationActive)
+                    .animation(.easeInOut(duration: 0.3), value: isConversationActive)
                     .toolbarColorScheme(colorScheme, for: .navigationBar)
                 }
             }
+            .environment(conversationState)
     }
 }
 

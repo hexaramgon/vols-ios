@@ -6,22 +6,22 @@
 //
 
 import Foundation
+import Supabase
 
 // MARK: - Supabase Configuration
 
 public enum SupabaseConfig {
     public static let baseURL = "https://xkznkdxhynzrmwupufay.supabase.co"
     public static let apiKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhrem5rZHhoeW56cm13dXB1ZmF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY2NzE3MDYsImV4cCI6MjA2MjI0NzcwNn0.yiRjLdzjAAAFJFfLT60ebqXeIF3mvj-UO8qtFq-Tyac"
+    public static let redirectURL = "volspire://auth/callback"
 }
 
-// MARK: - Supabase Headers
+// MARK: - Shared Supabase Client
 
-public enum SupabaseHeader {
-    static let apiKey = "apikey"
-    static let authorization = "Authorization"
-    static let contentType = "Content-Type"
-    static let prefer = "Prefer"
-}
+public let supabaseClient = SupabaseClient(
+    supabaseURL: URL(string: SupabaseConfig.baseURL)!,
+    supabaseKey: SupabaseConfig.apiKey
+)
 
 // MARK: - Home API Response Models
 
@@ -153,108 +153,86 @@ public protocol SupabaseServiceProtocol: Sendable {
 // MARK: - Supabase Service Implementation
 
 public final class SupabaseService: SupabaseServiceProtocol, Sendable {
-    private let baseURL: String
-    private let apiKey: String
-    private let session: URLSession
-    private let decoder: JSONDecoder
-    private let encoder: JSONEncoder
-    
-    public init(
-        baseURL: String = SupabaseConfig.baseURL,
-        apiKey: String = SupabaseConfig.apiKey,
-        session: URLSession = .shared,
-        decoder: JSONDecoder = JSONDecoder(),
-        encoder: JSONEncoder = JSONEncoder()
-    ) {
-        self.baseURL = baseURL
-        self.apiKey = apiKey
-        self.session = session
-        self.decoder = decoder
-        self.encoder = encoder
-        
-        // Configure decoder - using explicit CodingKeys for snake_case mapping
-        self.decoder.dateDecodingStrategy = .iso8601
+    private let client: SupabaseClient
+    private let cache: APICache
+
+    public init(client: SupabaseClient = supabaseClient, cache: APICache = .shared) {
+        self.client = client
+        self.cache = cache
     }
-    
+
     // MARK: - Public Methods
-    
-    /// Fetches home tracks data from Supabase RPC function
+
+    /// Fetches home tracks data from Supabase RPC function (cached 5 min)
     public func getHomeTracks() async throws -> HomeTracksResponse {
-        return try await rpc("get_home_tracks", params: nil)
+        return try await cachedRpc("get_home_tracks", params: nil, ttl: 300)
     }
-    
-    /// Fetches a user profile from Supabase RPC function
+
+    /// Fetches a user profile from Supabase RPC function (cached 5 min)
     public func getUserProfile(userId: String) async throws -> ApiUserProfile {
-        return try await rpc("get_user_profile", params: ["profile_id": userId])
+        return try await cachedRpc("get_user_profile", params: ["profile_id": userId], ttl: 300)
     }
-    
-    /// Generic RPC call to Supabase
+
+    /// Generic RPC call to Supabase (no cache)
     public func rpc<T: Decodable>(_ functionName: String, params: [String: Any]? = nil) async throws -> T {
-        let path = "/rest/v1/rpc/\(functionName)"
-        let request = try buildRequest(path: path, method: .post, body: params)
-        
-        let (data, response) = try await session.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw SupabaseError.invalidResponse
+        return try await performRpc(functionName, params: params)
+    }
+
+    /// Generic RPC call with caching
+    public func cachedRpc<T: Decodable & Encodable & Sendable>(
+        _ functionName: String,
+        params: [String: Any]? = nil,
+        ttl: TimeInterval = APICache.defaultTTL
+    ) async throws -> T {
+        let cacheKey = APICache.key(functionName, params: params)
+
+        // Return cached data if available
+        if let cached: T = await cache.get(cacheKey) {
+            print("[SupabaseService] rpc(\(functionName)) CACHE HIT")
+            return cached
         }
-        
-        try validateStatusCode(httpResponse.statusCode)
-        
+
+        // Fetch from network
+        let result: T = try await performRpc(functionName, params: params)
+
+        // Store in cache
+        await cache.set(cacheKey, value: result, ttl: ttl)
+
+        return result
+    }
+
+    // MARK: - Private
+
+    private func performRpc<T: Decodable>(_ functionName: String, params: [String: Any]? = nil) async throws -> T {
         do {
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            // If decoding fails, try to get error message from response
-            if let errorResponse = try? JSONDecoder().decode(SupabaseErrorResponse.self, from: data) {
-                throw SupabaseError.serverError(errorResponse.message ?? "Unknown error")
+            if let params = params {
+                let jsonData = try JSONSerialization.data(withJSONObject: params)
+                let anyJSON = try JSONDecoder().decode(AnyJSON.self, from: jsonData)
+
+                let response = try await client.rpc(functionName, params: anyJSON)
+                    .execute()
+                print("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
+                return try JSONDecoder().decode(T.self, from: response.data)
+            } else {
+                let response = try await client.rpc(functionName)
+                    .execute()
+                print("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
+                return try JSONDecoder().decode(T.self, from: response.data)
             }
-            throw SupabaseError.decodingError(error)
+        } catch {
+            print("[SupabaseService] rpc(\(functionName)) ERROR: \(error)")
+            throw mapError(error)
         }
     }
-    
-    // MARK: - Private Methods
-    
-    private func buildRequest(
-        path: String,
-        method: HTTPMethod,
-        body: [String: Any]? = nil
-    ) throws -> URLRequest {
-        guard let url = URL(string: baseURL + path) else {
-            throw SupabaseError.invalidURL
+
+    private func mapError(_ error: Error) -> SupabaseError {
+        if let urlError = error as? URLError {
+            return .serverError("Network error: \(urlError.localizedDescription)")
         }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = method.rawValue
-        request.timeoutInterval = 30
-        
-        // Set Supabase-specific headers
-        request.setValue("application/json", forHTTPHeaderField: SupabaseHeader.contentType)
-        request.setValue(apiKey, forHTTPHeaderField: SupabaseHeader.apiKey)
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: SupabaseHeader.authorization)
-        
-        // Set body if provided
-        if let body = body {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        if error is DecodingError {
+            return .decodingError(error)
         }
-        
-        return request
-    }
-    
-    private func validateStatusCode(_ statusCode: Int) throws {
-        switch statusCode {
-        case 200...299:
-            return // Success
-        case 401:
-            throw SupabaseError.unauthorized
-        case 404:
-            throw SupabaseError.notFound
-        case 400...499:
-            throw SupabaseError.clientError(statusCode)
-        case 500...599:
-            throw SupabaseError.serverError("Server error: \(statusCode)")
-        default:
-            throw SupabaseError.unknown(statusCode)
-        }
+        return .serverError(error.localizedDescription)
     }
 }
 
@@ -290,13 +268,4 @@ public enum SupabaseError: Error, LocalizedError {
             return "Unknown error: \(code)"
         }
     }
-}
-
-// MARK: - Supabase Error Response
-
-struct SupabaseErrorResponse: Codable {
-    let message: String?
-    let code: String?
-    let hint: String?
-    let details: String?
 }

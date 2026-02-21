@@ -137,7 +137,8 @@ private extension PlayerController {
             display = .init(
                 artwork: artwork,
                 title: meta.title,
-                subtitle: meta.description ?? ""
+                subtitle: meta.artist ?? ""
+                
             )
             colors = await meta.colors.map { UIColor($0) }
         } else {

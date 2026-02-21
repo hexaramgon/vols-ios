@@ -14,6 +14,11 @@ struct VolspireApp: App {
         WindowGroup {
             AppView()
                 .environment(appDelegate.dependencies)
+                .onOpenURL { url in
+                    Task {
+                        await appDelegate.dependencies?.authManager.handleOAuthCallback(url: url)
+                    }
+                }
         }
     }
 }

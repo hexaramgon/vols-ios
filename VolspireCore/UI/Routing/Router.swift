@@ -12,6 +12,11 @@ enum Route: Hashable, Equatable {
     case mediaItem(_ item: Media)
     case downloaded
     case profile(_ userId: String)
+    case search(_ query: String)
+    case notifications
+    case messages
+    case conversation(_ name: String)
+    case settings
 }
 
 @Observable
@@ -32,6 +37,26 @@ class Router {
 
     func navigateToProfile(userId: String) {
         path.append(Route.profile(userId))
+    }
+
+    func navigateToSearch(query: String) {
+        path.append(Route.search(query))
+    }
+
+    func navigateToNotifications() {
+        path.append(Route.notifications)
+    }
+
+    func navigateToMessages() {
+        path.append(Route.messages)
+    }
+
+    func navigateToConversation(name: String) {
+        path.append(Route.conversation(name))
+    }
+
+    func navigateToSettings() {
+        path.append(Route.settings)
     }
 
     func popToRoot() {

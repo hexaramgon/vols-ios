@@ -14,71 +14,85 @@ struct HomeScreen: View {
     @Environment(Dependencies.self) var dependencies
     @State private var viewModel = HomeScreenViewModel()
     @State private var searchText = ""
+    @State private var showSearchOverlay = false
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                // Loading or Error State
-                if case .loading = viewModel.loadingState, viewModel.featuredItems.isEmpty {
-                    loadingView
-                } else {
-                    // Search Bar
-                    searchBar
-                        .padding(.horizontal, ViewConst.screenPaddings)
-                        .padding(.top, 12)
-                        .padding(.bottom, 12)
+        ZStack {
+            if !showSearchOverlay {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        // Loading or Error State
+                        if case .loading = viewModel.loadingState, viewModel.featuredItems.isEmpty {
+                            loadingView
+                        } else {
+                            // Search Bar
+                            searchBar
+                                .padding(.horizontal, ViewConst.screenPaddings)
+                                .padding(.top, 12)
+                                .padding(.bottom, 12)
+                                .onTapGesture {
+                                    showSearchOverlay = true
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                        isSearchFocused = true
+                                    }
+                                }
 
-                    // Filter Pills
-                    filterPills
-                        .padding(.bottom, 12)
+                            // Filter Pills
+                            filterPills
+                                .padding(.bottom, 12)
 
-                    // Following Section
-                    if !viewModel.following.isEmpty {
-                        followingSection
-                            .padding(.bottom, 20)
+                            // Following Section
+                            if !viewModel.following.isEmpty {
+                                followingSection
+                                    .padding(.bottom, 20)
+                            }
+
+                            // Hero Section
+                            heroSection
+                                .padding(.top, 8)
+
+                            // Recommended Section
+                            horizontalSection(
+                                title: "Recommended for you",
+                                tracks: viewModel.recommendedTracks
+                            )
+                            .padding(.top, 24)
+
+                            // Trending Section
+                            horizontalSection(
+                                title: "Trending Now",
+                                tracks: viewModel.trendingTracks
+                            )
+                            .padding(.top, 24)
+
+                            // New Releases Section
+                            horizontalSection(
+                                title: "New Releases",
+                                tracks: viewModel.newReleases
+                            )
+                            .padding(.top, 24)
+
+                            // Top Producers Section
+                            topProducersSection
+                                .padding(.top, 24)
+
+                            // Recently Played Section
+                            horizontalSection(
+                                title: "Recently Played",
+                                tracks: viewModel.recentlyPlayed
+                            )
+                            .padding(.top, 24)
+                        }
                     }
-
-                    // Hero Section
-                    heroSection
-                        .padding(.top, 8)
-
-                    // Recommended Section
-                    horizontalSection(
-                        title: "Recommended for you",
-                        tracks: viewModel.recommendedTracks
-                    )
-                    .padding(.top, 24)
-
-                    // Trending Section
-                    horizontalSection(
-                        title: "Trending Now",
-                        tracks: viewModel.trendingTracks
-                    )
-                    .padding(.top, 24)
-
-                    // New Releases Section
-                    horizontalSection(
-                        title: "New Releases",
-                        tracks: viewModel.newReleases
-                    )
-                    .padding(.top, 24)
-
-                    // Top Producers Section
-                    topProducersSection
-                        .padding(.top, 24)
-
-                    // Recently Played Section
-                    horizontalSection(
-                        title: "Recently Played",
-                        tracks: viewModel.recentlyPlayed
-                    )
-                    .padding(.top, 24)
+                    .padding(.bottom, 32)
                 }
+                .refreshable {
+                    await viewModel.refresh()
+                }
+            } else {
+                searchOverlay
             }
-            .padding(.bottom, 32)
-        }
-        .refreshable {
-            await viewModel.refresh()
         }
         .task {
             viewModel.mediaState = dependencies.mediaState
@@ -121,6 +135,113 @@ private extension HomeScreen {
         .padding(.vertical, 12)
         .background(Color(.tertiarySystemFill))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    var searchSuggestions: [String] {
+        let all = ["Beats", "Lo-Fi", "Hip Hop", "Ambient", "Trap", "R&B", "DJ Shadow", "Midnight Drive", "Summer Vibes", "City Lights"]
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return Array(all.prefix(6))
+        }
+        let query = searchText.lowercased()
+        let filtered = all.filter { $0.lowercased().contains(query) }
+        return filtered.isEmpty ? Array(all.prefix(6)) : filtered
+    }
+
+    var searchOverlay: some View {
+        VStack(spacing: 0) {
+            // Search input row
+            HStack(spacing: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    TextField("Search songs, artists, producers...", text: $searchText)
+                        .font(.system(size: 15))
+                        .focused($isSearchFocused)
+                        .submitLabel(.search)
+                        .onSubmit {
+                            submitSearch()
+                        }
+
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 16))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color(.tertiarySystemFill))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                Button("Cancel") {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        searchText = ""
+                        isSearchFocused = false
+                        showSearchOverlay = false
+                    }
+                }
+                .font(.system(size: 15))
+                .foregroundStyle(.primary)
+            }
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .padding(.top, 12)
+
+            // Suggestions
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if searchText.isEmpty {
+                        Text("Suggestions")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, ViewConst.screenPaddings)
+                            .padding(.top, 16)
+                            .padding(.bottom, 8)
+                    }
+
+                    ForEach(searchSuggestions, id: \.self) { suggestion in
+                        Button {
+                            searchText = suggestion
+                            submitSearch()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: searchText.isEmpty ? "arrow.up.right" : "magnifyingglass")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 20)
+                                Text(suggestion)
+                                    .font(.system(size: 15))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Spacer()
+                            }
+                            .padding(.horizontal, ViewConst.screenPaddings)
+                            .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            Spacer()
+        }
+        .gradientBackground()
+    }
+
+    func submitSearch() {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        withAnimation(.easeOut(duration: 0.2)) {
+            isSearchFocused = false
+            showSearchOverlay = false
+        }
+        router.navigateToSearch(query: query)
+        searchText = ""
     }
 }
 
@@ -357,7 +478,9 @@ private extension HomeScreen {
                     ForEach(tracks) { track in
                         HorizontalTrackCardView(track: track)
                             .onTapGesture {
-                                viewModel.playTrack(track)
+                                Task {
+                                    await viewModel.playTrack(track)
+                                }
                             }
                     }
                 }

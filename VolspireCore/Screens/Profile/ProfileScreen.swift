@@ -21,11 +21,18 @@ struct ProfileScreen: View {
     @State private var viewModel = ProfileScreenViewModel()
     @State var scrollOffset: CGFloat = 0
     @State private var selectedSection: ProfileSection = .tracks
+    @State private var showEditProfile = false
+    @State private var showShareSheet = false
 
-    let userId: String
+    let userId: String?
 
-    init(userId: String = "current_user") {
+    init(userId: String? = nil) {
         self.userId = userId
+    }
+
+    /// Resolved user ID — uses auth user ID when none is provided (own profile tab)
+    private var resolvedUserId: String {
+        userId ?? dependencies.authManager.currentUserId ?? ""
     }
 
     var navBarOpacity: Double {
@@ -40,17 +47,26 @@ struct ProfileScreen: View {
     }
 
     private var isOwnProfile: Bool {
-        userId == "current_user"
+        userId == nil || userId == dependencies.authManager.currentUserId
     }
 
     var body: some View {
-        ScrollView {
-            scrollContent
-        }
-        .onScrollGeometryChange(for: CGFloat.self) { geometry in
-            geometry.contentOffset.y
-        } action: { _, newValue in
-            scrollOffset = newValue
+        Group {
+            if viewModel.loadingState == .idle || viewModel.loadingState == .loading {
+                ScrollView {
+                    profileSkeletonContent
+                }
+                .scrollDisabled(true)
+            } else {
+                ScrollView {
+                    scrollContent
+                }
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentOffset.y
+                } action: { _, newValue in
+                    scrollOffset = newValue
+                }
+            }
         }
         .contentMargins(.bottom, ViewConst.screenPaddings, for: .scrollContent)
         .ignoresSafeArea(edges: [.top])
@@ -94,18 +110,14 @@ struct ProfileScreen: View {
             .allowsHitTesting(false)
             .animation(.easeInOut(duration: 0.2), value: navBarOpacity)
         }
-        .simultaneousGesture(
-            DragGesture()
-                .onEnded { value in
-                    if value.translation.width > 80 && abs(value.translation.height) < 100 {
-                        dismiss()
-                    }
-                }
-        )
+        .enableSwipeBack()
+        .sheet(isPresented: $showEditProfile) {
+            EditProfileScreen(viewModel: viewModel)
+        }
         .task {
             viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
-            await viewModel.loadProfile(userId: userId)
+            await viewModel.loadProfile(userId: resolvedUserId)
         }
     }
 
@@ -218,6 +230,29 @@ private extension ProfileScreen {
                             .foregroundStyle(.secondary)
                             .padding(.top, 40)
                     }
+
+                    if isOwnProfile {
+                        Button {
+                            Task {
+                                await dependencies.authManager.signOut()
+                            }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "rectangle.portrait.and.arrow.right")
+                                    .font(.system(size: 15))
+                                Text("Sign Out")
+                                    .font(.system(size: 15, weight: .medium))
+                            }
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(Color(.systemGray6))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, ViewConst.screenPaddings)
+                        .padding(.top, 32)
+                    }
                 }
                 .gradientBackground()
             }
@@ -256,40 +291,84 @@ private extension ProfileScreen {
 
     var actionButtons: some View {
         HStack(spacing: 10) {
-            Button {
-                // Follow action
-            } label: {
-                Text("Follow")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 36)
-                    .background(Color.brand)
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            if isOwnProfile {
+                Button {
+                    showEditProfile = true
+                } label: {
+                    Text("Edit Profile")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .background(Color.brand)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+
+                Button {
+                    showShareSheet = true
+                } label: {
+                    Text("Share Profile")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .background(Color(.systemGray5))
+                        .foregroundStyle(.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            } else {
+                Button {
+                    // Follow action
+                } label: {
+                    Text("Follow")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .background(Color.brand)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+
+                Button {
+                    // Collab action
+                } label: {
+                    Text("Collab")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 36)
+                        .background(Color(.systemGray5))
+                        .foregroundStyle(.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
             }
 
-            Button {
-                // Collab action
-            } label: {
-                Text("Collab")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 36)
-                    .background(Color(.systemGray5))
-                    .foregroundStyle(.primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            if isOwnProfile {
+                Button {
+                    router.navigateToSettings()
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .background(Color(.systemGray5))
+                        .foregroundStyle(.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
+            } else {
+                Button {
+                    showShareSheet = true
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .background(Color(.systemGray5))
+                        .foregroundStyle(.primary)
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
             }
-
-            Button {
-                // Share action
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .background(Color(.systemGray5))
-                    .foregroundStyle(.primary)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-            }
+        }
+        .sheet(isPresented: $showShareSheet) {
+            let profileLink = URL(string: "https://volspire.com/profile/\(resolvedUserId)")!
+            ActivityViewController(activityItems: [profileLink])
+                .presentationDetents([.medium, .large])
         }
     }
 
@@ -481,6 +560,156 @@ private extension ProfileScreen {
         }
         .padding(.horizontal, ViewConst.screenPaddings)
         .padding(.vertical, 8)
+    }
+
+    // MARK: - Skeleton Loading
+
+    var profileSkeletonContent: some View {
+        VStack(spacing: 0) {
+            // Banner skeleton
+            ShimmerView()
+                .frame(height: UIScreen.size.width * 0.55)
+
+            VStack(spacing: 0) {
+                // Avatar + name row skeleton
+                HStack(alignment: .center, spacing: 14) {
+                    Circle()
+                        .fill(Color(.systemGray5))
+                        .frame(width: 90, height: 90)
+                        .overlay(ShimmerView().clipShape(Circle()))
+                        .offset(y: -60)
+                        .padding(.bottom, -60)
+
+                    ShimmerView()
+                        .frame(width: 140, height: 20)
+                        .clipShape(Capsule())
+
+                    Spacer()
+                }
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.top, 6)
+
+                // Bio skeleton
+                VStack(alignment: .leading, spacing: 8) {
+                    ShimmerView()
+                        .frame(height: 14)
+                        .clipShape(Capsule())
+                    ShimmerView()
+                        .frame(width: 200, height: 14)
+                        .clipShape(Capsule())
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.top, 20)
+
+                // Location skeleton
+                HStack(spacing: 6) {
+                    ShimmerView()
+                        .frame(width: 16, height: 16)
+                        .clipShape(Circle())
+                    ShimmerView()
+                        .frame(width: 120, height: 14)
+                        .clipShape(Capsule())
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.top, 12)
+
+                // Stats skeleton
+                HStack(spacing: 24) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        VStack(spacing: 4) {
+                            ShimmerView()
+                                .frame(width: 40, height: 18)
+                                .clipShape(Capsule())
+                            ShimmerView()
+                                .frame(width: 60, height: 12)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.top, 20)
+
+                // Action buttons skeleton
+                HStack(spacing: 12) {
+                    ShimmerView()
+                        .frame(height: 36)
+                        .clipShape(Capsule())
+                    ShimmerView()
+                        .frame(width: 36, height: 36)
+                        .clipShape(Circle())
+                }
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.top, 24)
+
+                // Section picker skeleton
+                HStack(spacing: 0) {
+                    ForEach(0..<2, id: \.self) { _ in
+                        ShimmerView()
+                            .frame(height: 32)
+                            .clipShape(Capsule())
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.top, 24)
+
+                // Track list skeleton
+                VStack(spacing: 0) {
+                    ForEach(0..<5, id: \.self) { _ in
+                        HStack(spacing: 12) {
+                            ShimmerView()
+                                .frame(width: 48, height: 48)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                            VStack(alignment: .leading, spacing: 6) {
+                                ShimmerView()
+                                    .frame(width: 160, height: 14)
+                                    .clipShape(Capsule())
+                                ShimmerView()
+                                    .frame(width: 80, height: 12)
+                                    .clipShape(Capsule())
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, ViewConst.screenPaddings)
+                        .padding(.vertical, 10)
+                    }
+                }
+                .padding(.top, 16)
+            }
+            .gradientBackground()
+        }
+        .ignoresSafeArea(edges: .top)
+    }
+}
+
+// MARK: - Shimmer Effect
+
+private struct ShimmerView: View {
+    @State private var phase: CGFloat = -1
+
+    var body: some View {
+        Color(.systemGray5)
+            .overlay(
+                LinearGradient(
+                    colors: [
+                        .clear,
+                        Color.white.opacity(0.3),
+                        .clear,
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .offset(x: phase * 300)
+            )
+            .clipped()
+            .onAppear {
+                withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
+                    phase = 1
+                }
+            }
     }
 }
 

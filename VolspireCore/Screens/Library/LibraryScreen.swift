@@ -6,6 +6,7 @@
 
 import DesignSystem
 import Kingfisher
+import MediaLibrary
 import SwiftUI
 
 struct LibraryScreen: View {
@@ -14,53 +15,68 @@ struct LibraryScreen: View {
     @State private var viewModel = LibraryScreenViewModel()
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                let rowSeparatorLeading: CGFloat = 60
-                NavigationLink(title: "Downloaded", systemImage: "arrow.down.circle")
-                    .onTapGesture {
-                        router.navigateToDownloaded()
-                    }
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                Divider()
-                    .padding(.leading, rowSeparatorLeading)
+        VStack(spacing: 0) {
+            HStack {
+                Text("Library")
+                    .font(.system(size: 26, weight: .semibold))
+                Spacer()
+            }
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
 
-                recentlyAdded
-                    .padding(.horizontal, ViewConst.screenPaddings - LibraryItemsGrid.itemPadding)
-                    .padding(.top, 26)
+            if viewModel.allSongs.isEmpty {
+                ContentUnavailableView(
+                    "No Songs",
+                    systemImage: "music.note",
+                    description: Text("Your library is empty")
+                )
+            } else {
+                List(viewModel.allSongs) { track in
+                    HStack(spacing: 12) {
+                        ArtworkView(
+                            track.meta.artwork.map { .webImage($0) } ?? .radio(name: track.meta.title),
+                            cornerRadius: 4
+                        )
+                        .frame(width: 48, height: 48)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(track.meta.title)
+                                .font(.system(size: 15))
+                                .lineLimit(1)
+                            if let artist = track.meta.artist {
+                                Text(artist)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+
+                        Spacer()
+
+                        if let activity = viewModel.mediaActivity(track.id) {
+                            MediaActivityIndicator(state: activity)
+                                .foregroundStyle(Color.brand)
+                        }
+                    }
+                    .frame(height: 56)
+                    .contentShape(.rect)
+                    .onTapGesture {
+                        viewModel.play(track)
+                    }
+                    .listRowBackground(Color.clear)
+                }
+                .listStyle(.plain)
+                .contentMargins(.bottom, ViewConst.screenPaddings, for: .scrollContent)
             }
         }
-        .contentMargins(.bottom, ViewConst.screenPaddings, for: .scrollContent)
-        .navigationTitle("Library")
-        .toolbarTitleDisplayMode(.inlineLarge)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .navigationBarHidden(true)
+        .gradientBackground()
         .task {
             viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
         }
-    }
-}
-
-private extension LibraryScreen {
-    var recentlyAdded: some View {
-        LibraryItemsGrid(
-            title: "Recently Added",
-            items: viewModel.recentlyAdded,
-            onEvent: { event in
-                switch event {
-                case let .tap(item):
-                    switch item {
-                    case let .mediaList(list):
-                        router.navigateToMedia(items: list.items, listMeta: list.meta)
-                    case let .mediaItem(item):
-                        router.navigateToMedia(item: item)
-                    }
-                case let .selected(menuItem, item):
-                    viewModel.onSelect(menuItem, of: item)
-                }
-
-            },
-            contextMenu: viewModel.contextMenu
-        )
     }
 }
 

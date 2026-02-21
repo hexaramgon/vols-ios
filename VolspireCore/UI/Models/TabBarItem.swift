@@ -8,9 +8,9 @@ import SwiftUI
 
 enum TabBarItem: Hashable, CaseIterable {
     case home
-    case library
+    case workspace
     case newPost
-    case search
+    case library
     case profile
 }
 
@@ -20,7 +20,7 @@ extension TabBarItem {
         case .home: "Home"
         case .library: "Library"
         case .newPost: "New Post"
-        case .search: "Search"
+        case .workspace: "Workspace"
         case .profile: "Profile"
         }
     }
@@ -30,15 +30,12 @@ extension TabBarItem {
         case .home: Image(systemName: "house.fill")
         case .library: Image(systemName: "rectangle.stack.badge.play")
         case .newPost: Image(systemName: "plus.circle.fill")
-        case .search: Image(systemName: "magnifyingglass")
+        case .workspace: Image(systemName: "folder.fill")
         case .profile: Image(systemName: "person.fill")
         }
     }
 
     var role: TabRole? {
-        switch self {
-        case .search: .search
-        default: nil
-        }
+        nil
     }
 }

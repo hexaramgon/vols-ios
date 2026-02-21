@@ -95,57 +95,7 @@ final class ProfileScreenViewModel {
             loadingState = .loaded
         } catch {
             loadingState = .error(error.localizedDescription)
-            loadMockData(userId: userId)
         }
-    }
-
-    private func loadMockData(userId: String) {
-        username = "DJ Shadow"
-        bio = "Producer & beat maker from Los Angeles. Making music since 2018."
-        profileImageURL = URL(string: "https://picsum.photos/seed/profile/200")
-        bannerImageURL = URL(string: "https://picsum.photos/seed/banner/800/400")
-        location = "Los Angeles, CA"
-        followersCount = 1_243
-        monthlyListenersCount = 8_502
-        trackCount = 5
-        tracks = [
-            ProfileTrack(
-                id: "t1",
-                title: "Midnight Drive",
-                coverURL: URL(string: "https://picsum.photos/seed/track1/400"),
-                audioURL: nil,
-                streams: 12_400
-            ),
-            ProfileTrack(
-                id: "t2",
-                title: "Summer Vibes",
-                coverURL: URL(string: "https://picsum.photos/seed/track2/400"),
-                audioURL: nil,
-                streams: 8_320
-            ),
-            ProfileTrack(
-                id: "t3",
-                title: "City Lights",
-                coverURL: URL(string: "https://picsum.photos/seed/track3/400"),
-                audioURL: nil,
-                streams: 5_190
-            ),
-            ProfileTrack(
-                id: "t4",
-                title: "Late Night Session",
-                coverURL: URL(string: "https://picsum.photos/seed/track4/400"),
-                audioURL: nil,
-                streams: 3_740
-            ),
-            ProfileTrack(
-                id: "t5",
-                title: "Ocean Breeze",
-                coverURL: URL(string: "https://picsum.photos/seed/track5/400"),
-                audioURL: nil,
-                streams: 2_100
-            ),
-        ]
-        loadingState = .loaded
     }
 }
 

@@ -30,6 +30,12 @@ struct PlayerControls: View {
                 Spacer()
             }
         }
+        .sheet(isPresented: Bindable(model).showingEffectsSheet) {
+            AudioEffectsSheet()
+                .environment(model)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
     }
 }
 
@@ -62,6 +68,25 @@ private extension PlayerControls {
                     .id(model.display)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            fxButton
+                .padding(.trailing, ViewConst.playerCardPaddings)
+        }
+    }
+
+    var fxButton: some View {
+        let isActive = model.audioEffects != .default
+        return Button {
+            model.showingEffectsSheet = true
+        } label: {
+            VStack() {
+                Image(systemName: "wand.and.stars")
+                    .font(.body)
+                Text("FX")
+                    .font(.caption2)
+                    .fontWeight(.bold)
+            }
+            .foregroundStyle(isActive ? Color.green : Color(palette.translucent))
         }
     }
 }

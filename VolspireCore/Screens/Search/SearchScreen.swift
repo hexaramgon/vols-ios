@@ -14,6 +14,8 @@ struct SearchScreen: View {
     @Environment(Router.self) var router
     @State private var isSearchPresented = false
 
+    var initialQuery: String = ""
+
     var body: some View {
         content
             .navigationTitle("Search")
@@ -27,6 +29,10 @@ struct SearchScreen: View {
             .task {
                 viewModel.mediaState = dependencies.mediaState
                 viewModel.player = dependencies.mediaPlayer
+                if !initialQuery.isEmpty {
+                    viewModel.searchText = initialQuery
+                    isSearchPresented = true
+                }
             }
     }
 }

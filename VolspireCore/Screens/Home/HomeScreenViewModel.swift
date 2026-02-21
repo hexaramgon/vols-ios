@@ -93,7 +93,7 @@ class HomeScreenViewModel {
     }
 
     /// Play a track from the home screen by adding it to the media library and starting playback.
-    func playTrack(_ track: HomeTrack) {
+    func playTrack(_ track: HomeTrack) async {
         guard let audioURL = track.audioURL else { return }
 
         let mediaID = MediaID(track.id)
@@ -108,28 +108,24 @@ class HomeScreenViewModel {
         )
 
         // Ensure the track is in the media state so the player can resolve it
-        Task {
-            await mediaState?.addTrack(media)
-        }
+        await mediaState?.addTrack(media)
 
         // Collect all tracks in the current section for queue context
         let allSectionTracks = (recommendedTracks + trendingTracks + newReleases + recentlyPlayed)
             .filter { $0.audioURL != nil }
 
         // Add all section tracks to media state for queue navigation
-        Task {
-            for t in allSectionTracks where t.id != track.id {
-                let m = Media(
-                    id: MediaID(t.id),
-                    meta: MediaMeta(
-                        artwork: t.coverURL,
-                        title: t.title,
-                        artist: t.artist,
-                        audioURL: t.audioURL
-                    )
+        for t in allSectionTracks where t.id != track.id {
+            let m = Media(
+                id: MediaID(t.id),
+                meta: MediaMeta(
+                    artwork: t.coverURL,
+                    title: t.title,
+                    artist: t.artist,
+                    audioURL: t.audioURL
                 )
-                await mediaState?.addTrack(m)
-            }
+            )
+            await mediaState?.addTrack(m)
         }
 
         let queueIDs = allSectionTracks.map { MediaID($0.id) }

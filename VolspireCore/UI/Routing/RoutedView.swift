@@ -19,6 +19,16 @@ struct RoutedView: View {
             DownloadedScreen()
         case let .profile(userId):
             ProfileScreen(userId: userId)
+        case let .search(query):
+            SearchScreen(initialQuery: query)
+        case .notifications:
+            NotificationsScreen()
+        case .messages:
+            MessagesScreen()
+        case let .conversation(name):
+            ConversationScreen(contactName: name)
+        case .settings:
+            SettingsScreen()
         }
     }
 }
