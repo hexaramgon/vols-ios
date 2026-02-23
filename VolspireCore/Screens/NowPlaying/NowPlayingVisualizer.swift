@@ -12,9 +12,24 @@ struct NowPlayingVisualizer: View {
     let spectrum: [Float]
     let albumArtwork: Image?
     let isPlaying: Bool
+    var backgroundColor: Color = .black
 
     private let barCount = 48
     private let barSpacing: CGFloat = 2
+
+    /// Compute a high-contrast color against the background.
+    /// Shifts hue by 180° and pushes brightness to the opposite extreme.
+    private var invertedColor: Color {
+        let uiColor = UIColor(backgroundColor)
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        uiColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+
+        let newHue = (h + 0.5).truncatingRemainder(dividingBy: 1.0)
+        let newBrightness: CGFloat = b > 0.5 ? 0.15 : 1.0
+        let newSaturation: CGFloat = max(s, 0.6)
+
+        return Color(hue: Double(newHue), saturation: Double(newSaturation), brightness: Double(newBrightness))
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -38,7 +53,8 @@ struct NowPlayingVisualizer: View {
                             value: CGFloat(bands[index]),
                             maxHeight: geo.size.height * 0.85,
                             index: index,
-                            total: barCount
+                            total: barCount,
+                            barColor: invertedColor
                         )
                     }
                 }
@@ -72,22 +88,18 @@ private struct VisualizerBar: View {
     let maxHeight: CGFloat
     let index: Int
     let total: Int
+    let barColor: Color
 
     var body: some View {
         let minHeight: CGFloat = 3
         let height = max(minHeight, value * maxHeight)
 
-        // Color gradient from center outward
-        let center = CGFloat(total) / 2
-        let distance = abs(CGFloat(index) - center) / center
-        let hue = 0.55 - Double(distance) * 0.15 // Blue-ish to teal-ish
-
         RoundedRectangle(cornerRadius: 2)
             .fill(
                 LinearGradient(
                     colors: [
-                        Color(hue: hue, saturation: 0.7, brightness: 0.95),
-                        Color(hue: hue + 0.08, saturation: 0.5, brightness: 0.75),
+                        barColor.opacity(0.95),
+                        barColor.opacity(0.65),
                     ],
                     startPoint: .top,
                     endPoint: .bottom

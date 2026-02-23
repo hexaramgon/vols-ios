@@ -14,22 +14,22 @@ struct PlayerControls: View {
     var body: some View {
         GeometryReader {
             let size = $0.size
-            let spacing = size.verticalSpacing
-            VStack(spacing: 0) {
-                VStack(spacing: spacing) {
+            let spacing = size.verticalSpacing / 8
+            VStack(spacing: spacing )
+                {
                     trackInfo
 
                     TimingIndicator(spacing: spacing)
                         .padding(.top, spacing)
                         .padding(.horizontal, ViewConst.playerCardPaddings)
                         .padding(.horizontal, -ElasticSliderConfig.playbackProgress.growth)
+                    
+                    PlayerButtons(spacing: size.width * 0.05)
+                        .padding(.horizontal, ViewConst.playerCardPaddings)
                 }
-                .frame(height: size.height / 2.5, alignment: .top)
-                PlayerButtons(spacing: size.width * 0.14)
-                    .padding(.horizontal, ViewConst.playerCardPaddings)
-                Spacer()
             }
-        }
+               
+        
         .sheet(isPresented: Bindable(model).showingEffectsSheet) {
             AudioEffectsSheet()
                 .environment(model)
@@ -96,7 +96,7 @@ private extension PlayerControls {
     ZStack(alignment: .bottom) {
         PreviewBackground()
         PlayerControls()
-            .frame(height: 400)
+            .frame(height: 300)
     }
     .environment(playerController)
 }

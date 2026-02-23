@@ -2,42 +2,33 @@
 //  AudioEffectsProcessor.swift
 //  Player
 //
-//  Manages audio effects applied to AVPlayer playback.
-//  Speed + Pitch: AVPlayer.rate with .varispeed time pitch algorithm
-//  (rate changes shift pitch naturally, like vinyl/tape speed control)
+//  Manages audio effects via AudioKit's TimePitch node.
+//  Speed and pitch are controlled independently (unlike AVPlayer's varispeed).
 //
 
+import AudioKit
 import AVFoundation
 
 @MainActor
 public final class AudioEffectsProcessor {
-    private(set) var currentEffects: AudioEffects = .default
+    public private(set) var currentEffects: AudioEffects = .default
 
     public init() {}
 
-    /// Apply effects to the given AVPlayer.
-    public func apply(_ effects: AudioEffects, to player: AVPlayer?) {
+    /// Apply effects to the AudioKit TimePitch node.
+    public func apply(_ effects: AudioEffects, to timePitch: TimePitch) {
         currentEffects = effects
+        timePitch.rate = AUValue(effects.speed)
+        timePitch.pitch = AUValue(effects.pitch)
+    }
 
-        guard let player else { return }
-
-        // Use varispeed: rate changes also shift pitch (vinyl / tape style)
-        player.currentItem?.audioTimePitchAlgorithm = .varispeed
-
-        // Compute effective rate: speed × pitch adjustment
-        // Pitch in cents → rate multiplier: rate = 2^(cents/1200)
-        let pitchRate = pow(2.0, effects.pitch / 1200.0)
-        let effectiveRate = effects.speed * pitchRate
-
-        // Only change rate if player is currently playing
-        if player.rate != 0 {
-            player.rate = effectiveRate
-        }
+    /// Re-apply the current effects (e.g. after resuming).
+    public func reapply(to timePitch: TimePitch) {
+        apply(currentEffects, to: timePitch)
     }
 
     /// Get the effective playback rate combining speed and pitch.
     public var playbackRate: Float {
-        let pitchRate = pow(2.0, currentEffects.pitch / 1200.0)
-        return currentEffects.speed * pitchRate
+        currentEffects.speed
     }
 }

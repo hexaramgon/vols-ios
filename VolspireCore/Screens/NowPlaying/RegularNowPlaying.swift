@@ -27,19 +27,21 @@ struct RegularNowPlaying: View {
                         in: animationNamespace
                     )
                     .frame(height: size.width - Const.horizontalPadding * 2)
-                    .padding(.vertical, size.height < 700 ? 10 : 30)
+                    .overlay(alignment: .bottom) {
+                        actionIconsRow
+                            .padding(.horizontal, 8)
+                            .offset(y: 42)
+                    }
+                    .padding(.vertical, size.height < 700 ? 15 : 40)
                     .padding(.horizontal, 25)
 
                 NowPlayingInfoStrip()
                     .padding(.horizontal, 25)
-                    .padding(.bottom, 8)
 
                 PlayerControls()
-                    .transition(.move(edge: .bottom))
             }
         }
-        .padding(.top, ViewConst.safeAreaInsets.top)
-        .padding(.bottom, ViewConst.safeAreaInsets.bottom)
+        .padding(.top, ViewConst.safeAreaInsets.top / 4)
     }
 }
 
@@ -61,22 +63,30 @@ private extension RegularNowPlaying {
 
     @ViewBuilder
     var artworkOrVisualizer: some View {
-        if isVideo {
-            artwork
-        } else {
-            NowPlayingVisualizer(
-                spectrum: model.visualizerSpectrum,
-                albumArtwork: nil,
-                isPlaying: model.state.isPlaying
-            )
+        let artworkSize = size.width - Const.horizontalPadding * 2
+        Group {
+            if isVideo {
+                artwork(model.display.artwork)
+            } else if model.showAlbumArt {
+                artwork(model.display.albumArtwork)
+            } else {
+                NowPlayingVisualizer(
+                    spectrum: model.visualizerSpectrum,
+                    albumArtwork: nil,
+                    isPlaying: model.state.isPlaying,
+                    backgroundColor: model.colors.first.map { Color($0) } ?? .black
+                )
+            }
         }
+        .frame(width: artworkSize, height: artworkSize)
+        .clipped()
     }
 
     @ViewBuilder
-    var artwork: some View {
+    func artwork(_ art: Artwork) -> some View {
         let small = !model.state.isPlaying
         ArtworkView(
-            model.display.artwork,
+            art,
             cornerRadius: expanded ? 10 : 7,
             background: Color(.palette.playerCard.artworkBackground)
         )
@@ -87,6 +97,27 @@ private extension RegularNowPlaying {
         )
         .padding(small ? 48 : 0)
         .animation(.smooth, value: model.state)
+    }
+
+    var actionIconsRow: some View {
+        HStack {
+            HStack(spacing: 16) {
+                Button { } label: {
+                    Image(systemName: "bookmark")
+                        .font(.title2)
+                }
+                Button { } label: {
+                    Image(systemName: "heart")
+                        .font(.title2)
+                }
+            }
+            Spacer()
+            Button { } label: {
+                Image(systemName: "bubble.right")
+                    .font(.title2)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.8))
     }
 }
 

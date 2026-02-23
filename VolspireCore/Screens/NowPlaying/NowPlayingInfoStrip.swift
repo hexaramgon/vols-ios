@@ -15,12 +15,17 @@ struct NowPlayingInfoStrip: View {
     @State private var currentPage: Int = 0
     @State private var timer: Timer?
 
+    /// Thumbnail size derived from screen width (roughly 30% of width).
+    private var thumbSize: CGFloat {
+        round(UIScreen.size.width * 0.3)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             albumThumb
             slideshowPanels
         }
-        .frame(height: 130)
+        .frame(height: thumbSize)
         .onAppear { startAutoSlide() }
         .onDisappear { stopAutoSlide() }
     }
@@ -31,16 +36,26 @@ struct NowPlayingInfoStrip: View {
 private extension NowPlayingInfoStrip {
     @ViewBuilder
     var albumThumb: some View {
-        let art = controller.display.artwork
-        switch art {
-        case let .videoPlayer(player):
-            // For video tracks, show a small video preview
-            PlayerVideoView(player: player)
-                .frame(width: 130, height: 130)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-        default:
-            ArtworkView(art, cornerRadius: 10)
-                .frame(width: 130, height: 130)
+        Group {
+            if controller.showAlbumArt {
+                // Main area shows album art, so show mini visualizer here
+                NowPlayingVisualizer(
+                    spectrum: controller.visualizerSpectrum,
+                    albumArtwork: nil,
+                    isPlaying: controller.state.isPlaying,
+                    backgroundColor: controller.colors.first.map { Color($0) } ?? .black
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                // Main area shows visualizer, so show album art here
+                ArtworkView(controller.display.albumArtwork, cornerRadius: 10)
+            }
+        }
+        .frame(width: thumbSize, height: thumbSize)
+        .onTapGesture {
+            withAnimation(.smooth) {
+                controller.showAlbumArt.toggle()
+            }
         }
     }
 }
@@ -56,9 +71,14 @@ private extension NowPlayingInfoStrip {
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .environment(\.colorScheme, .dark)
         .overlay(alignment: .bottom) {
             pageIndicator
-                .padding(.bottom, 2)
+                .padding(.bottom, 6)
         }
     }
 
@@ -74,6 +94,7 @@ private extension NowPlayingInfoStrip {
                     .clipShape(Capsule())
             }
         }
+        .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
     }
@@ -87,12 +108,13 @@ private extension NowPlayingInfoStrip {
                 .foregroundStyle(.white.opacity(0.5))
                 .textCase(.uppercase)
 
-            HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 10) {
                 actionButton(icon: "arrow.down.circle", label: "Save")
                 actionButton(icon: "cart", label: "Buy")
                 actionButton(icon: "square.and.arrow.up", label: "Share")
             }
         }
+        .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
     }
@@ -135,6 +157,7 @@ private extension NowPlayingInfoStrip {
                 }
             }
         }
+        .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
     }
@@ -143,11 +166,11 @@ private extension NowPlayingInfoStrip {
         Button {
             // TODO: Implement action
         } label: {
-            VStack(spacing: 4) {
+            HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.body)
                 Text(label)
-                    .font(.caption2)
+                    .font(.caption)
             }
             .foregroundStyle(.white.opacity(0.8))
         }

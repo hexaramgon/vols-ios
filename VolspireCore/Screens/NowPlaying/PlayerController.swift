@@ -15,6 +15,8 @@ import UIKit
 final class PlayerController {
     struct Display: Hashable {
         let artwork: Artwork
+        /// Album artwork for contexts that should not show video (e.g. info strip thumbnail).
+        let albumArtwork: Artwork
         let title: String
         let subtitle: String
     }
@@ -30,6 +32,7 @@ final class PlayerController {
     var visualizerSpectrum: [Float] = []
     var audioEffects: AudioEffects = .default
     var showingEffectsSheet: Bool = false
+    var showAlbumArt: Bool = false
 
     weak var player: MediaPlayer? {
         didSet {
@@ -127,15 +130,17 @@ private extension PlayerController {
                 Self.videoExtensions.contains($0.pathExtension.lowercased())
             } ?? false
 
+            let albumArtwork: Artwork = .radio(meta.artwork, name: meta.title)
             let artwork: Artwork
             if isVideo, let avPlayer {
                 artwork = .videoPlayer(avPlayer)
             } else {
-                artwork = .radio(meta.artwork, name: meta.title)
+                artwork = albumArtwork
             }
 
             display = .init(
                 artwork: artwork,
+                albumArtwork: albumArtwork,
                 title: meta.title,
                 subtitle: meta.artist ?? ""
                 
@@ -165,6 +170,7 @@ extension PlayerController.Display {
     static var placeholder: Self {
         .init(
             artwork: .radio(),
+            albumArtwork: .radio(),
             title: "",
             subtitle: ""
         )

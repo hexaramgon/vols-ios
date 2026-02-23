@@ -14,8 +14,19 @@ struct PlayerButtons: View {
     @State var backwardAnimationTrigger: PlayerButtonTrigger = .one(bouncing: false)
     @State var forwardAnimationTrigger: PlayerButtonTrigger = .one(bouncing: false)
 
+    @State private var isShuffled = false
+    @State private var repeatMode = 0 // 0 = off, 1 = all, 2 = one
+
     var body: some View {
         HStack(spacing: spacing) {
+            // Shuffle button
+            Button {
+                isShuffled.toggle()
+            } label: {
+                Image(systemName: "shuffle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(isShuffled ? .green : Color(Palette.PlayerCard.translucent))
+            }
             let isSwitchDisabled: Bool = !model.commandProfile.isSwitchTrackEnabled
             PlayerButton(
                 label: {
@@ -61,6 +72,14 @@ struct PlayerButtons: View {
             )
             .disabled(isSwitchDisabled)
             .blendMode(isSwitchDisabled ? .overlay : .normal)
+            // Repeat button
+            Button {
+                repeatMode = (repeatMode + 1) % 3
+            } label: {
+                Image(systemName: repeatMode == 2 ? "repeat.1" : "repeat")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(repeatMode > 0 ? .green : Color(Palette.PlayerCard.translucent))
+            }
         }
         .playerButtonStyle(.expandedPlayer)
     }

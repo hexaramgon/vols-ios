@@ -15,13 +15,15 @@ let package = Package(
         )
     ],
     dependencies: [
-        .package(path: "../MediaLibrary/")
+        .package(path: "../MediaLibrary/"),
+        .package(url: "https://github.com/AudioKit/AudioKit", from: "5.6.0"),
     ],
     targets: [
         .target(
             name: "Player",
             dependencies: [
-                "MediaLibrary"
+                "MediaLibrary",
+                .product(name: "AudioKit", package: "AudioKit"),
             ]
         )
     ]

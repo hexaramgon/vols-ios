@@ -153,7 +153,6 @@ private extension MediaPlayer {
            let audioURL = meta.audioURL
         {
             urlPlayer.play(url: audioURL)
-            avPlayer = urlPlayer.player
         } else {
             print("MediaPlayer: No audio URL found for \(mediaID)")
             avPlayer = nil
@@ -279,6 +278,10 @@ extension MediaPlayer: URLAudioPlayerDelegate {
     public func urlAudioPlayer(_: URLAudioPlayer, didUpdateProgress prog: PlaybackProgress) {
         progress = prog
         updateSystemNowPlaying()
+    }
+
+    public func urlAudioPlayer(_: URLAudioPlayer, didSetupVideoPlayer player: AVPlayer?) {
+        avPlayer = player
     }
 
     public func urlAudioPlayerDidFinishPlaying(_: URLAudioPlayer) {

@@ -10,7 +10,7 @@ import SwiftUI
 public enum ViewConst {}
 
 public extension ViewConst {
-    static let playerCardPaddings: CGFloat = 28
+    static let playerCardPaddings: CGFloat = 24
     static let screenPaddings: CGFloat = 20
     static let itemPeekAmount: CGFloat = 36
     static let compactNowPlayingHeight: CGFloat = 56
