@@ -13,6 +13,7 @@
 		AD9E1B532EC3127D002E768E /* Services in Frameworks */ = {isa = PBXBuildFile; productRef = AD9E1B522EC3127D002E768E /* Services */; };
 		ADB3236E2EC4F7FC002AD1F5 /* Player in Frameworks */ = {isa = PBXBuildFile; productRef = ADB3236D2EC4F7FC002AD1F5 /* Player */; };
 		ADB5B3AF2D2F96A8006001EF /* Kingfisher in Frameworks */ = {isa = PBXBuildFile; productRef = ADB5B3AE2D2F96A8006001EF /* Kingfisher */; };
+		ADWF00012F46C000006001EF /* Waveform in Frameworks */ = {isa = PBXBuildFile; productRef = ADWF00002F46C000006001EF /* Waveform */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,6 +64,7 @@
 				AD97F4F82EC091DC007DFBA2 /* SharedUtilities in Frameworks */,
 				AD1941EC2EC4D5FA00197279 /* MediaLibrary in Frameworks */,
 				ADB5B3AF2D2F96A8006001EF /* Kingfisher in Frameworks */,
+				ADWF00012F46C000006001EF /* Waveform in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -121,6 +123,7 @@
 				AD9E1B522EC3127D002E768E /* Services */,
 				AD1941EB2EC4D5FA00197279 /* MediaLibrary */,
 				ADB3236D2EC4F7FC002AD1F5 /* Player */,
+				ADWF00002F46C000006001EF /* Waveform */,
 			);
 			productName = Volspire;
 			productReference = AD2F42562D2F948D00F8EAF1 /* Volspire.app */;
@@ -176,6 +179,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				ADB5B3AD2D2F96A8006001EF /* XCRemoteSwiftPackageReference "Kingfisher" */,
+				ADWF00032F46C000006001EF /* XCRemoteSwiftPackageReference "Waveform" */,
 				AD6013A62EC09C900023137C /* XCLocalSwiftPackageReference "DesignSystem" */,
 				AD1941ED2EC4D5FB00197279 /* XCLocalSwiftPackageReference "MediaLibrary" */,
 				ADB3236F2EC4F7FD002AD1F5 /* XCLocalSwiftPackageReference "Player" */,
@@ -546,6 +550,14 @@
 				minimumVersion = 8.1.3;
 			};
 		};
+		ADWF00032F46C000006001EF /* XCRemoteSwiftPackageReference "Waveform" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AudioKit/Waveform.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -578,6 +590,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = ADB5B3AD2D2F96A8006001EF /* XCRemoteSwiftPackageReference "Kingfisher" */;
 			productName = Kingfisher;
+		};
+		ADWF00002F46C000006001EF /* Waveform */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = ADWF00032F46C000006001EF /* XCRemoteSwiftPackageReference "Waveform" */;
+			productName = Waveform;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

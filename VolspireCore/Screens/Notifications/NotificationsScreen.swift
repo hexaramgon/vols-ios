@@ -5,33 +5,14 @@
 //
 
 import DesignSystem
+import Kingfisher
+import Services
 import SwiftUI
-
-struct NotificationItem: Identifiable {
-    let id: String
-    let icon: String
-    let iconColor: Color
-    let title: String
-    let subtitle: String
-    let time: String
-    let isUnread: Bool
-}
 
 struct NotificationsScreen: View {
     @Environment(Router.self) var router
-
     @Environment(\.dismiss) private var dismiss
-
-    private let notifications: [NotificationItem] = [
-        NotificationItem(id: "1", icon: "person.fill.badge.plus", iconColor: .blue, title: "New Follower", subtitle: "DJ Shadow started following you", time: "2m ago", isUnread: true),
-        NotificationItem(id: "2", icon: "heart.fill", iconColor: .pink, title: "Track Liked", subtitle: "Midnight Drive was liked by 12 people", time: "15m ago", isUnread: true),
-        NotificationItem(id: "3", icon: "bubble.left.fill", iconColor: .green, title: "New Comment", subtitle: "\"Fire beat! Can I use this?\" on Lo-Fi Session", time: "1h ago", isUnread: true),
-        NotificationItem(id: "4", icon: "arrow.down.circle.fill", iconColor: .purple, title: "Download Complete", subtitle: "Summer EP - Master.wav is ready", time: "2h ago", isUnread: false),
-        NotificationItem(id: "5", icon: "music.note", iconColor: .orange, title: "New Release", subtitle: "An artist you follow dropped a new track", time: "3h ago", isUnread: false),
-        NotificationItem(id: "6", icon: "star.fill", iconColor: .yellow, title: "Featured", subtitle: "Your track was added to Trending Now", time: "5h ago", isUnread: false),
-        NotificationItem(id: "7", icon: "person.2.fill", iconColor: .blue, title: "Collab Request", subtitle: "ProducerX wants to collaborate with you", time: "8h ago", isUnread: false),
-        NotificationItem(id: "8", icon: "heart.fill", iconColor: .pink, title: "Track Liked", subtitle: "Beat Sketch 17 was liked by 5 people", time: "1d ago", isUnread: false),
-    ]
+    @State private var viewModel = NotificationsScreenViewModel()
 
     var body: some View {
         ScrollView {
@@ -54,51 +35,87 @@ struct NotificationsScreen: View {
                 .padding(.top, 8)
                 .padding(.bottom, 16)
 
-                ForEach(notifications) { item in
-                    notificationRow(item)
-                    if item.id != notifications.last?.id {
-                        Divider()
-                            .padding(.leading, 68)
-                            .padding(.horizontal, ViewConst.screenPaddings)
+                switch viewModel.loadingState {
+                case .idle, .loading:
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 60)
+                case .error(let message):
+                    ContentUnavailableView(
+                        "Something went wrong",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(message)
+                    )
+                case .loaded where viewModel.notifications.isEmpty:
+                    ContentUnavailableView(
+                        "No Notifications",
+                        systemImage: "bell.slash",
+                        description: Text("You're all caught up")
+                    )
+                case .loaded:
+                    ForEach(viewModel.notifications) { item in
+                        notificationRow(item)
+                        if item.id != viewModel.notifications.last?.id {
+                            Divider()
+                                .padding(.leading, 68)
+                                .padding(.horizontal, ViewConst.screenPaddings)
+                        }
                     }
                 }
             }
+        }
+        .refreshable {
+            await viewModel.refresh()
         }
         .navigationBarBackButtonHidden(true)
         .toolbarBackground(.hidden, for: .navigationBar)
         .enableSwipeBack()
         .gradientBackground()
+        .task {
+            await viewModel.loadNotifications()
+        }
     }
 
-    private func notificationRow(_ item: NotificationItem) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(item.iconColor.opacity(0.12))
-                    .frame(width: 40, height: 40)
+    private func notificationRow(_ item: ApiNotification) -> some View {
+        let iconName = viewModel.icon(for: item)
+        let color = colorFor(item)
 
-                Image(systemName: item.icon)
-                    .font(.system(size: 16))
-                    .foregroundStyle(item.iconColor)
+        return HStack(alignment: .top, spacing: 14) {
+            if let imageUrl = item.actor?.profileImageUrl, let url = URL(string: imageUrl) {
+                KFImage(url)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 40, height: 40)
+                    .clipShape(Circle())
+            } else {
+                ZStack {
+                    Circle()
+                        .fill(color.opacity(0.12))
+                        .frame(width: 40, height: 40)
+
+                    Image(systemName: iconName)
+                        .font(.system(size: 16))
+                        .foregroundStyle(color)
+                }
             }
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
-                    Text(item.title)
-                        .font(.system(size: 15, weight: item.isUnread ? .semibold : .regular))
+                    Text(viewModel.title(for: item))
+                        .font(.system(size: 15, weight: item.isRead ? .regular : .semibold))
                     Spacer()
-                    Text(item.time)
+                    Text(viewModel.relativeTime(from: item.createdAt))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
 
-                Text(item.subtitle)
+                Text(viewModel.subtitle(for: item))
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
 
-            if item.isUnread {
+            if !item.isRead {
                 Circle()
                     .fill(Color.brand)
                     .frame(width: 8, height: 8)
@@ -107,8 +124,20 @@ struct NotificationsScreen: View {
         }
         .padding(.horizontal, ViewConst.screenPaddings)
         .padding(.vertical, 12)
-        .background(item.isUnread ? Color.brand.opacity(0.04) : Color.clear)
+        .background(item.isRead ? Color.clear : Color.brand.opacity(0.04))
         .contentShape(.rect)
+    }
+
+    private func colorFor(_ item: ApiNotification) -> Color {
+        switch viewModel.iconColor(for: item) {
+        case "blue": return .blue
+        case "pink": return .pink
+        case "green": return .green
+        case "purple": return .purple
+        case "orange": return .orange
+        case "yellow": return .yellow
+        default: return .gray
+        }
     }
 }
 

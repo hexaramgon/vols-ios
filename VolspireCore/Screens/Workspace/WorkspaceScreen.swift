@@ -5,6 +5,7 @@
 //
 
 import DesignSystem
+import Services
 import SwiftUI
 
 struct WorkspaceScreen: View {
@@ -28,7 +29,6 @@ struct WorkspaceScreen: View {
                     }
                     .buttonStyle(.plain)
                     Button {
-                        // Notifications action
                         router.navigateToNotifications()
                     } label: {
                         Image(systemName: "bell")
@@ -41,28 +41,69 @@ struct WorkspaceScreen: View {
                 .padding(.top, 8)
                 .padding(.bottom, 12)
 
-                // Quick Access
-                quickAccessSection
-
-                // View mode toggle + sort
-                toolbar
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                    .padding(.top, 20)
-                    .padding(.bottom, 8)
-
-                // Files & Folders
-                if viewMode == .grid {
-                    gridContent
+                switch viewModel.loadingState {
+                case .idle, .loading:
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 60)
+                case .error(let message):
+                    ContentUnavailableView(
+                        "Something went wrong",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(message)
+                    )
+                case .loaded where viewModel.folders.isEmpty:
+                    ContentUnavailableView(
+                        "No Folders",
+                        systemImage: "folder",
+                        description: Text("Create a folder to get started")
+                    )
+                case .loaded:
+                    toolbar
                         .padding(.horizontal, ViewConst.screenPaddings)
-                } else {
-                    listContent
+                        .padding(.top, 20)
+                        .padding(.bottom, 8)
+
+                    if viewMode == .grid {
+                        gridContent
+                            .padding(.horizontal, ViewConst.screenPaddings)
+                    } else {
+                        listContent
+                    }
                 }
             }
             .padding(.bottom, 32)
         }
+        .refreshable {
+            await viewModel.refresh()
+        }
         .contentMargins(.bottom, ViewConst.screenPaddings, for: .scrollContent)
         .navigationBarHidden(true)
         .gradientBackground()
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                viewModel.showCreateFolder = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 56, height: 56)
+                    .background(Color.blue)
+                    .clipShape(Circle())
+                    .shadow(color: .black.opacity(0.25), radius: 8, x: 0, y: 4)
+            }
+            .padding(.trailing, ViewConst.screenPaddings)
+            .padding(.bottom, 80)
+        }
+        .task {
+            await viewModel.loadFolders()
+        }
+        .sheet(isPresented: $viewModel.showCreateFolder) {
+            createFolderSheet
+        }
+        .sheet(item: $viewModel.editingFolder) { _ in
+            editFolderSheet
+        }
     }
 }
 
@@ -76,47 +117,10 @@ enum WorkspaceViewMode {
 
 private extension WorkspaceScreen {
 
-    // MARK: Quick Access
-    var quickAccessSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    ForEach(viewModel.quickAccess) { item in
-                        quickAccessCard(item)
-                    }
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-            }
-        }
-    }
-
-    func quickAccessCard(_ item: WorkspaceItem) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(.systemGray6))
-
-                Image(systemName: item.icon)
-                    .font(.system(size: 24))
-                    .foregroundStyle(item.iconColor)
-            }
-            .frame(width: 120, height: 80)
-
-            Text(item.name)
-                .font(.system(size: 13, weight: .medium))
-                .lineLimit(1)
-
-            Text(item.modifiedDate)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-        }
-        .frame(width: 120)
-    }
-
     // MARK: Toolbar
     var toolbar: some View {
         HStack {
-            Text("My Files")
+            Text("My Folders")
                 .font(.system(size: 16, weight: .semibold))
 
             Spacer()
@@ -134,8 +138,7 @@ private extension WorkspaceScreen {
 
                 Menu {
                     Button("Name") {}
-                    Button("Date modified") {}
-                    Button("Size") {}
+                    Button("Date created") {}
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                         .font(.system(size: 14))
@@ -148,9 +151,12 @@ private extension WorkspaceScreen {
     // MARK: List Content
     var listContent: some View {
         LazyVStack(spacing: 0) {
-            ForEach(viewModel.files) { item in
-                fileRow(item)
-                if item.id != viewModel.files.last?.id {
+            ForEach(viewModel.folders) { folder in
+                folderRow(folder)
+                    .onTapGesture {
+                        router.navigateToFolder(folderId: folder.folderId, folderName: folder.name)
+                    }
+                if folder.id != viewModel.folders.last?.id {
                     Divider()
                         .padding(.leading, 60)
                         .padding(.horizontal, ViewConst.screenPaddings)
@@ -159,30 +165,30 @@ private extension WorkspaceScreen {
         }
     }
 
-    func fileRow(_ item: WorkspaceItem) -> some View {
+    func folderRow(_ folder: ApiUserFolder) -> some View {
         HStack(spacing: 14) {
             ZStack {
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(item.iconColor.opacity(0.12))
+                    .fill(viewModel.iconColor(for: folder).opacity(0.12))
                     .frame(width: 40, height: 40)
 
-                Image(systemName: item.icon)
+                Image(systemName: folder.role == "owner" ? "folder.fill" : "folder.fill.badge.person.crop")
                     .font(.system(size: 18))
-                    .foregroundStyle(item.iconColor)
+                    .foregroundStyle(viewModel.iconColor(for: folder))
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
+                Text(folder.name)
                     .font(.system(size: 15))
                     .lineLimit(1)
 
                 HStack(spacing: 6) {
-                    if let size = item.size {
-                        Text(size)
+                    if folder.role != "owner" {
+                        Text(folder.role.capitalized)
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                     }
-                    Text(item.modifiedDate)
+                    Text(viewModel.relativeTime(from: folder.createdAt))
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -191,7 +197,7 @@ private extension WorkspaceScreen {
             Spacer()
 
             Button {
-                // More actions
+                viewModel.startEditing(folder)
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.system(size: 14))
@@ -213,36 +219,166 @@ private extension WorkspaceScreen {
             ],
             spacing: 12
         ) {
-            ForEach(viewModel.files) { item in
-                fileGridCard(item)
+            ForEach(viewModel.folders) { folder in
+                folderGridCard(folder)
+                    .onTapGesture {
+                        router.navigateToFolder(folderId: folder.folderId, folderName: folder.name)
+                    }
             }
         }
     }
 
-    func fileGridCard(_ item: WorkspaceItem) -> some View {
+    func folderGridCard(_ folder: ApiUserFolder) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack {
                 Color(.systemGray6)
 
-                Image(systemName: item.icon)
+                Image(systemName: folder.role == "owner" ? "folder.fill" : "folder.fill.badge.person.crop")
                     .font(.system(size: 32))
-                    .foregroundStyle(item.iconColor)
+                    .foregroundStyle(viewModel.iconColor(for: folder))
             }
             .frame(height: 100)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
+                Text(folder.name)
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
 
-                Text(item.modifiedDate)
+                Text(viewModel.relativeTime(from: folder.createdAt))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 4)
             .padding(.top, 8)
         }
+    }
+
+    // MARK: Create Folder Sheet
+    var createFolderSheet: some View {
+        folderFormSheet(
+            title: "New Folder",
+            name: $viewModel.newFolderName,
+            description: $viewModel.newFolderDescription,
+            actionLabel: "Create Folder",
+            actionIcon: "plus.circle.fill",
+            isBusy: viewModel.isCreatingFolder,
+            isValid: !viewModel.newFolderName.trimmingCharacters(in: .whitespaces).isEmpty,
+            onCancel: { viewModel.showCreateFolder = false },
+            onAction: { await viewModel.createFolder() }
+        )
+    }
+
+    // MARK: Edit Folder Sheet
+    var editFolderSheet: some View {
+        folderFormSheet(
+            title: "Edit Folder",
+            name: $viewModel.editFolderName,
+            description: $viewModel.editFolderDescription,
+            actionLabel: "Save Changes",
+            actionIcon: "checkmark.circle.fill",
+            isBusy: viewModel.isEditingFolder,
+            isValid: !viewModel.editFolderName.trimmingCharacters(in: .whitespaces).isEmpty,
+            onCancel: { viewModel.editingFolder = nil },
+            onAction: { await viewModel.editFolder() }
+        )
+    }
+
+    private func folderFormSheet(
+        title: String,
+        name: Binding<String>,
+        description: Binding<String>,
+        actionLabel: String,
+        actionIcon: String,
+        isBusy: Bool,
+        isValid: Bool,
+        onCancel: @escaping () -> Void,
+        onAction: @escaping () async -> Void
+    ) -> some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Button {
+                    onCancel()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 32, height: 32)
+                        .background(Color(.tertiarySystemFill))
+                        .clipShape(Circle())
+                }
+
+                Spacer()
+
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+
+                Spacer()
+
+                Color.clear.frame(width: 32, height: 32)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 12)
+
+            // Fields
+            VStack(spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Name")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    TextField("Folder name", text: name)
+                        .font(.system(size: 16))
+                        .padding(12)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Description")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    TextField("Optional description...", text: description, axis: .vertical)
+                        .font(.system(size: 16))
+                        .lineLimit(2...4)
+                        .padding(12)
+                        .background(Color(.secondarySystemGroupedBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+
+            Spacer()
+
+            // Action button
+            Button {
+                Task { await onAction() }
+            } label: {
+                HStack(spacing: 10) {
+                    if isBusy {
+                        ProgressView()
+                            .tint(.white)
+                    } else {
+                        Image(systemName: actionIcon)
+                            .font(.system(size: 18))
+                    }
+                    Text(isBusy ? "Working..." : actionLabel)
+                        .font(.system(size: 16, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(isValid && !isBusy ? Color.brand : Color(.systemGray3))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .disabled(!isValid || isBusy)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 24)
+        }
+        .gradientBackground()
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
     }
 }
 

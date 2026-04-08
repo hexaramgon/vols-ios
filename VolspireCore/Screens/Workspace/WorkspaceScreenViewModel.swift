@@ -4,97 +4,115 @@
 //
 //
 
+import Foundation
 import Observation
+import Services
 import SwiftUI
 
-struct WorkspaceItem: Identifiable {
-    let id: String
-    let name: String
-    let icon: String
-    let iconColor: Color
-    let type: WorkspaceItemType
-    let size: String?
-    let modifiedDate: String
-
-    enum WorkspaceItemType {
-        case folder, audio, project, document, image
-    }
+enum WorkspaceLoadingState {
+    case idle
+    case loading
+    case loaded
+    case error(String)
 }
 
 @Observable @MainActor
 final class WorkspaceScreenViewModel {
+    var folders: [ApiUserFolder] = []
+    var loadingState: WorkspaceLoadingState = .idle
+    var showCreateFolder = false
+    var newFolderName = ""
+    var newFolderDescription = ""
+    var isCreatingFolder = false
+    var editingFolder: ApiUserFolder? = nil
+    var editFolderName = ""
+    var editFolderDescription = ""
+    var isEditingFolder = false
 
-    var quickAccess: [WorkspaceItem] {
-        [
-            WorkspaceItem(
-                id: "qa1", name: "Summer EP", icon: "folder.fill",
-                iconColor: .blue, type: .folder, size: nil, modifiedDate: "Feb 15"
-            ),
-            WorkspaceItem(
-                id: "qa2", name: "Final Mix v3.wav", icon: "waveform",
-                iconColor: .purple, type: .audio, size: "48 MB", modifiedDate: "Feb 14"
-            ),
-            WorkspaceItem(
-                id: "qa3", name: "Beat Tape 2026", icon: "folder.fill",
-                iconColor: .blue, type: .folder, size: nil, modifiedDate: "Feb 12"
-            ),
-            WorkspaceItem(
-                id: "qa4", name: "Cover Art.png", icon: "photo.fill",
-                iconColor: .green, type: .image, size: "3.2 MB", modifiedDate: "Feb 10"
-            ),
-        ]
+    private let supabaseService: SupabaseService
+
+    init(supabaseService: SupabaseService = SupabaseService()) {
+        self.supabaseService = supabaseService
     }
 
-    var files: [WorkspaceItem] {
-        [
-            WorkspaceItem(
-                id: "f1", name: "Projects", icon: "folder.fill",
-                iconColor: .blue, type: .folder, size: nil, modifiedDate: "Today"
-            ),
-            WorkspaceItem(
-                id: "f2", name: "Samples", icon: "folder.fill",
-                iconColor: .blue, type: .folder, size: nil, modifiedDate: "Yesterday"
-            ),
-            WorkspaceItem(
-                id: "f3", name: "Stems", icon: "folder.fill",
-                iconColor: .blue, type: .folder, size: nil, modifiedDate: "Feb 14"
-            ),
-            WorkspaceItem(
-                id: "f4", name: "Collabs", icon: "folder.fill",
-                iconColor: .blue, type: .folder, size: nil, modifiedDate: "Feb 12"
-            ),
-            WorkspaceItem(
-                id: "f5", name: "Midnight Drive - Master.wav", icon: "waveform",
-                iconColor: .purple, type: .audio, size: "52 MB", modifiedDate: "Today"
-            ),
-            WorkspaceItem(
-                id: "f6", name: "Lo-Fi Session 04.wav", icon: "waveform",
-                iconColor: .purple, type: .audio, size: "38 MB", modifiedDate: "Yesterday"
-            ),
-            WorkspaceItem(
-                id: "f7", name: "Beat Sketch 17.wav", icon: "waveform",
-                iconColor: .purple, type: .audio, size: "24 MB", modifiedDate: "Feb 15"
-            ),
-            WorkspaceItem(
-                id: "f8", name: "Vocal Take 3 - Raw.wav", icon: "waveform",
-                iconColor: .purple, type: .audio, size: "18 MB", modifiedDate: "Feb 14"
-            ),
-            WorkspaceItem(
-                id: "f9", name: "Summer EP - Notes.txt", icon: "doc.text.fill",
-                iconColor: .gray, type: .document, size: "2 KB", modifiedDate: "Feb 13"
-            ),
-            WorkspaceItem(
-                id: "f10", name: "Album Cover Final.png", icon: "photo.fill",
-                iconColor: .green, type: .image, size: "4.8 MB", modifiedDate: "Feb 12"
-            ),
-            WorkspaceItem(
-                id: "f11", name: "Session Recording 02-10.wav", icon: "waveform",
-                iconColor: .purple, type: .audio, size: "67 MB", modifiedDate: "Feb 10"
-            ),
-            WorkspaceItem(
-                id: "f12", name: "Mix Reference Tracks", icon: "folder.fill",
-                iconColor: .blue, type: .folder, size: nil, modifiedDate: "Feb 8"
-            ),
-        ]
+    func loadFolders() async {
+        guard case .idle = loadingState else { return }
+        loadingState = .loading
+
+        do {
+            folders = try await supabaseService.getUserFolders()
+            loadingState = .loaded
+        } catch {
+            print("[WorkspaceVM] Failed to load folders: \(error)")
+            loadingState = .error(error.localizedDescription)
+        }
+    }
+
+    func refresh() async {
+        loadingState = .idle
+        await loadFolders()
+    }
+
+    func createFolder() async {
+        guard !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        isCreatingFolder = true
+        do {
+            let desc = newFolderDescription.trimmingCharacters(in: .whitespaces)
+            try await supabaseService.createFolder(
+                name: newFolderName.trimmingCharacters(in: .whitespaces),
+                description: desc.isEmpty ? nil : desc
+            )
+            newFolderName = ""
+            newFolderDescription = ""
+            showCreateFolder = false
+            await refresh()
+        } catch {
+            print("[WorkspaceVM] Failed to create folder: \(error)")
+        }
+        isCreatingFolder = false
+    }
+
+    func startEditing(_ folder: ApiUserFolder) {
+        editingFolder = folder
+        editFolderName = folder.name
+        editFolderDescription = folder.description ?? ""
+    }
+
+    func editFolder() async {
+        guard let folder = editingFolder,
+              !editFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        isEditingFolder = true
+        do {
+            let desc = editFolderDescription.trimmingCharacters(in: .whitespaces)
+            try await supabaseService.editFolder(
+                folderId: folder.folderId,
+                name: editFolderName.trimmingCharacters(in: .whitespaces),
+                description: desc.isEmpty ? nil : desc
+            )
+            editingFolder = nil
+            await refresh()
+        } catch {
+            print("[WorkspaceVM] Failed to edit folder: \(error)")
+        }
+        isEditingFolder = false
+    }
+
+    // MARK: - Display Helpers
+
+    func iconColor(for folder: ApiUserFolder) -> Color {
+        folder.role == "owner" ? .blue : .orange
+    }
+
+    func relativeTime(from dateString: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = formatter.date(from: dateString) ?? {
+            formatter.formatOptions = [.withInternetDateTime]
+            return formatter.date(from: dateString)
+        }()
+        guard let date else { return "" }
+        let relative = RelativeDateTimeFormatter()
+        relative.unitsStyle = .abbreviated
+        return relative.localizedString(for: date, relativeTo: .now)
     }
 }

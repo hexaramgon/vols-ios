@@ -6,6 +6,7 @@
 
 import DesignSystem
 import Kingfisher
+import MediaLibrary
 import Services
 import SwiftUI
 
@@ -112,7 +113,13 @@ struct ProfileScreen: View {
         }
         .enableSwipeBack()
         .sheet(isPresented: $showEditProfile) {
-            EditProfileScreen(viewModel: viewModel)
+            EditProfileScreen(viewModel: viewModel, userId: resolvedUserId)
+        }
+        .sheet(isPresented: $viewModel.showCreateService) {
+            CreateServiceScreen(viewModel: viewModel)
+        }
+        .sheet(item: $viewModel.editingService) { service in
+            CreateServiceScreen(viewModel: viewModel, editing: service)
         }
         .task {
             viewModel.mediaState = dependencies.mediaState
@@ -211,9 +218,25 @@ private extension ProfileScreen {
                         .frame(maxHeight: .infinity, alignment: .top)
                         .tag(ProfileSection.tracks)
 
-                        servicesContent
-                            .frame(maxHeight: .infinity, alignment: .top)
-                            .tag(ProfileSection.services)
+                        VStack(spacing: 0) {
+                            if isOwnProfile {
+                                HStack {
+                                    Spacer()
+                                    Button {
+                                        viewModel.showCreateService = true
+                                    } label: {
+                                        Image(systemName: "plus")
+                                            .font(.system(size: 15, weight: .semibold))
+                                            .foregroundStyle(Color.brand)
+                                    }
+                                }
+                                .padding(.horizontal, ViewConst.screenPaddings)
+                                .padding(.top, 8)
+                            }
+                            servicesContent
+                        }
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .tag(ProfileSection.services)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                     .frame(minHeight: 600)
@@ -229,29 +252,6 @@ private extension ProfileScreen {
                             .font(.system(size: 14))
                             .foregroundStyle(.secondary)
                             .padding(.top, 40)
-                    }
-
-                    if isOwnProfile {
-                        Button {
-                            Task {
-                                await dependencies.authManager.signOut()
-                            }
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "rectangle.portrait.and.arrow.right")
-                                    .font(.system(size: 15))
-                                Text("Sign Out")
-                                    .font(.system(size: 15, weight: .medium))
-                            }
-                            .foregroundStyle(.red)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                            .background(Color(.systemGray6))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.horizontal, ViewConst.screenPaddings)
-                        .padding(.top, 32)
                     }
                 }
                 .gradientBackground()
@@ -274,7 +274,7 @@ private extension ProfileScreen {
         }
         .frame(width: 100, height: 100)
         .clipShape(Circle())
-        .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 3))
+        // .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 3))
     }
 
     var profileInfo: some View {
@@ -317,16 +317,26 @@ private extension ProfileScreen {
                 }
             } else {
                 Button {
-                    // Follow action
+                    Task {
+                        await viewModel.toggleFollow(userId: resolvedUserId)
+                    }
                 } label: {
-                    Text("Follow")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 36)
-                        .background(Color.brand)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    Group {
+                        if viewModel.isTogglingFollow {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Text(viewModel.isFollowing ? "Following" : "Follow")
+                        }
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 36)
+                    .background(viewModel.isFollowing ? Color(.systemGray5) : Color.brand)
+                    .foregroundStyle(viewModel.isFollowing ? Color.primary : Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
                 }
+                .disabled(viewModel.isTogglingFollow)
 
                 Button {
                     // Collab action
@@ -409,28 +419,40 @@ private extension ProfileScreen {
     }
 
     var servicesContent: some View {
-        VStack(spacing: 12) {
-            serviceCard(
-                title: "Mixing & Mastering",
-                description: "Professional mix and master for your track",
-                type: "Audio",
-                price: "$150"
-            )
-            serviceCard(
-                title: "Beat Production",
-                description: "Custom beat tailored to your style",
-                type: "Production",
-                price: "$200"
-            )
-            serviceCard(
-                title: "Vocal Recording",
-                description: "Studio-quality vocal recording session",
-                type: "Recording",
-                price: "$80"
-            )
+        Group {
+            if viewModel.services.isEmpty {
+                emptyPlaceholder(
+                    icon: "briefcase",
+                    title: "No services yet",
+                    subtitle: "Services will appear here once added"
+                )
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(viewModel.services) { service in
+                        if isOwnProfile {
+                            serviceCard(
+                                title: service.title,
+                                description: service.description,
+                                type: service.serviceType,
+                                price: service.price
+                            )
+                            .onTapGesture {
+                                viewModel.editingService = service
+                            }
+                        } else {
+                            serviceCard(
+                                title: service.title,
+                                description: service.description,
+                                type: service.serviceType,
+                                price: service.price
+                            )
+                        }
+                    }
+                }
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.top, 8)
+            }
         }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.top, 8)
     }
 
     func serviceCard(title: String, description: String, type: String, price: String) -> some View {
@@ -488,6 +510,10 @@ private extension ProfileScreen {
                 latestReleaseCard(latest)
                     .padding(.horizontal, ViewConst.screenPaddings)
                     .padding(.bottom, 24)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        viewModel.play(latest)
+                    }
             }
 
             // Curated Tracks
@@ -499,6 +525,10 @@ private extension ProfileScreen {
 
                 ForEach(viewModel.curatedTracks) { track in
                     trackRow(track)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            viewModel.play(track)
+                        }
                 }
             }
         }
@@ -530,6 +560,11 @@ private extension ProfileScreen {
             }
 
             Spacer()
+
+            if let activity = viewModel.mediaActivity(MediaID(track.id)) {
+                MediaActivityIndicator(state: activity)
+                    .foregroundStyle(Color.brand)
+            }
         }
     }
 
@@ -557,6 +592,11 @@ private extension ProfileScreen {
             }
 
             Spacer()
+
+            if let activity = viewModel.mediaActivity(MediaID(track.id)) {
+                MediaActivityIndicator(state: activity)
+                    .foregroundStyle(Color.brand)
+            }
         }
         .padding(.horizontal, ViewConst.screenPaddings)
         .padding(.vertical, 8)
@@ -682,34 +722,6 @@ private extension ProfileScreen {
             .gradientBackground()
         }
         .ignoresSafeArea(edges: .top)
-    }
-}
-
-// MARK: - Shimmer Effect
-
-private struct ShimmerView: View {
-    @State private var phase: CGFloat = -1
-
-    var body: some View {
-        Color(.systemGray5)
-            .overlay(
-                LinearGradient(
-                    colors: [
-                        .clear,
-                        Color.white.opacity(0.3),
-                        .clear,
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .offset(x: phase * 300)
-            )
-            .clipped()
-            .onAppear {
-                withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-                    phase = 1
-                }
-            }
     }
 }
 

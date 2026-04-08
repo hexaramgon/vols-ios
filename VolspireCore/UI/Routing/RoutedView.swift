@@ -29,6 +29,8 @@ struct RoutedView: View {
             ConversationScreen(contactName: name)
         case .settings:
             SettingsScreen()
+        case let .folderContents(folderId, folderName):
+            FolderContentsScreen(folderId: folderId, folderName: folderName)
         }
     }
 }

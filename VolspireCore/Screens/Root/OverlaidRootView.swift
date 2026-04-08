@@ -58,7 +58,28 @@ struct OverlaidRootView: View {
                 }
             }
             .environment(conversationState)
+            .onChange(of: playerController.pendingProfileNavigation) { _, userId in
+                guard let userId else { return }
+                // Collapse the player
+                withAnimation(.playerExpandAnimation) {
+                    expandSheet = false
+                }
+                // Post notification so the active tab can navigate
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NotificationCenter.default.post(
+                        name: .navigateToProfile,
+                        object: nil,
+                        userInfo: ["userId": userId]
+                    )
+                    playerController.pendingProfileNavigation = nil
+                }
+            }
     }
+}
+
+extension Notification.Name {
+    static let navigateToProfile = Notification.Name("navigateToProfile")
+    static let navigateToProfileFromTab = Notification.Name("navigateToProfileFromTab")
 }
 
 #Preview {

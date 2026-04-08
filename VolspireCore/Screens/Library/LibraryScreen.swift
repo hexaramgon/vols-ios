@@ -7,12 +7,14 @@
 import DesignSystem
 import Kingfisher
 import MediaLibrary
+import Services
 import SwiftUI
 
 struct LibraryScreen: View {
     @Environment(Router.self) var router
     @Environment(Dependencies.self) var dependencies
     @State private var viewModel = LibraryScreenViewModel()
+    @State private var selectedTrack: ApiUserLike? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,26 +27,36 @@ struct LibraryScreen: View {
             .padding(.top, 8)
             .padding(.bottom, 12)
 
-            if viewModel.allSongs.isEmpty {
+            switch viewModel.loadingState {
+            case .idle, .loading:
+                ProgressView()
+                    .frame(maxHeight: .infinity)
+            case .error(let message):
                 ContentUnavailableView(
-                    "No Songs",
-                    systemImage: "music.note",
-                    description: Text("Your library is empty")
+                    "Something went wrong",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(message)
                 )
-            } else {
-                List(viewModel.allSongs) { track in
+            case .loaded where viewModel.likedTracks.isEmpty:
+                ContentUnavailableView(
+                    "No Liked Songs",
+                    systemImage: "heart",
+                    description: Text("Songs you like will appear here")
+                )
+            case .loaded:
+                List(viewModel.likedTracks) { track in
                     HStack(spacing: 12) {
                         ArtworkView(
-                            track.meta.artwork.map { .webImage($0) } ?? .radio(name: track.meta.title),
+                            track.coverUrl.flatMap { URL(string: $0) }.map { .webImage($0) } ?? .radio(name: track.title),
                             cornerRadius: 4
                         )
                         .frame(width: 48, height: 48)
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(track.meta.title)
+                            Text(track.title)
                                 .font(.system(size: 15))
                                 .lineLimit(1)
-                            if let artist = track.meta.artist {
+                            if let artist = track.artist?.username {
                                 Text(artist)
                                     .font(.system(size: 13))
                                     .foregroundStyle(.secondary)
@@ -54,10 +66,21 @@ struct LibraryScreen: View {
 
                         Spacer()
 
-                        if let activity = viewModel.mediaActivity(track.id) {
+                        if let activity = viewModel.mediaActivity(MediaID(track.trackId)) {
                             MediaActivityIndicator(state: activity)
                                 .foregroundStyle(Color.brand)
                         }
+
+                        Button {
+                            selectedTrack = track
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 32, height: 32)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                     .frame(height: 56)
                     .contentShape(.rect)
@@ -68,6 +91,9 @@ struct LibraryScreen: View {
                 }
                 .listStyle(.plain)
                 .contentMargins(.bottom, ViewConst.screenPaddings, for: .scrollContent)
+                .refreshable {
+                    await viewModel.refreshLikes()
+                }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -76,6 +102,15 @@ struct LibraryScreen: View {
         .task {
             viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
+            await viewModel.loadLikes()
+        }
+        .sheet(item: $selectedTrack) { track in
+            LibraryTrackSheet(track: track, viewModel: viewModel, router: router) {
+                selectedTrack = nil
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.ultraThinMaterial)
         }
     }
 }

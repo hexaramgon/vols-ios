@@ -27,10 +27,12 @@ class ConversationState {
 
 struct RootTabView: View {
     @State private var showNewPost = false
+    @State private var selectedPostType: String?
     @State private var selectedTab: TabBarItem = .home
     @State private var dragOffset: CGFloat = 0
     @State private var isDraggingBack = false
     @Environment(ConversationState.self) var conversationState
+    @Environment(Dependencies.self) var dependencies
 
     init() {
         let isDark = UITraitCollection.current.userInterfaceStyle == .dark
@@ -76,9 +78,37 @@ struct RootTabView: View {
                 }
             }
             .sheet(isPresented: $showNewPost) {
-                NewPostView()
+                NewPostView { postType in
+                    selectedPostType = postType
+                }
+            }
+            .fullScreenCover(item: Binding(
+                get: { selectedPostType.map { PostTypeID(id: $0) } },
+                set: { selectedPostType = $0?.id }
+            )) { wrapper in
+                UploadTrackScreen(
+                    viewModel: UploadTrackViewModel(
+                        supabaseService: dependencies.supabaseService,
+                        authManager: dependencies.authManager,
+                        postType: wrapper.id
+                    )
+                )
             }
             .ignoresSafeArea(.keyboard)
+            .onReceive(NotificationCenter.default.publisher(for: .navigateToProfile)) { notification in
+                if let userId = notification.userInfo?["userId"] as? String {
+                    // Switch to home tab so Router is available
+                    selectedTab = .home
+                    // Post again with slight delay so HomeScreen's router picks it up
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        NotificationCenter.default.post(
+                            name: .navigateToProfileFromTab,
+                            object: nil,
+                            userInfo: ["userId": userId]
+                        )
+                    }
+                }
+            }
 
             if let name = conversationState.activeConversation {
                 ConversationScreen(contactName: name, onBack: {
@@ -126,6 +156,10 @@ struct RootTabView: View {
         }
         .environment(conversationState)
     }
+}
+
+private struct PostTypeID: Identifiable {
+    let id: String
 }
 
 private extension TabBarItem {

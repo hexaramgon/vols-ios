@@ -17,6 +17,7 @@ enum Route: Hashable, Equatable {
     case messages
     case conversation(_ name: String)
     case settings
+    case folderContents(folderId: String, folderName: String)
 }
 
 @Observable
@@ -57,6 +58,10 @@ class Router {
 
     func navigateToSettings() {
         path.append(Route.settings)
+    }
+
+    func navigateToFolder(folderId: String, folderName: String) {
+        path.append(Route.folderContents(folderId: folderId, folderName: folderName))
     }
 
     func popToRoot() {

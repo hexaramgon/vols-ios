@@ -8,6 +8,7 @@ import DesignSystem
 import AVFoundation
 import MediaLibrary
 import Player
+import Services
 import SwiftUI
 import UIKit
 
@@ -30,9 +31,13 @@ final class PlayerController {
     var isScrubbing: Bool = false
     var nowPlayingMeta: MediaMeta?
     var visualizerSpectrum: [Float] = []
+    var rawAudioSamples: [Float] = []
     var audioEffects: AudioEffects = .default
     var showingEffectsSheet: Bool = false
-    var showAlbumArt: Bool = false
+    var showAlbumArt: Bool = true
+    var trackDetail: ApiTrackDetail?
+    /// Set this to trigger navigation to an artist's profile (collapses the player).
+    var pendingProfileNavigation: String?
 
     weak var player: MediaPlayer? {
         didSet {
@@ -43,6 +48,8 @@ final class PlayerController {
     weak var mediaState: MediaState?
 
     private var cancellables = Set<AnyCancellable>()
+    private let supabaseService = SupabaseService()
+    private var lastFetchedTrackId: String?
 
     var isLiveStream: Bool {
         commandProfile.isLiveStream
@@ -89,6 +96,7 @@ private extension PlayerController {
         player.$state
             .sink { [weak self] state in
                 self?.state = state
+                self?.fetchTrackDetailIfNeeded()
             }
             .store(in: &cancellables)
 
@@ -121,6 +129,21 @@ private extension PlayerController {
                 self?.visualizerSpectrum = spectrum
             }
             .store(in: &cancellables)
+
+        player.$rawAudioSamples
+            .sink { [weak self] samples in
+                guard let self else { return }
+                if samples.isEmpty {
+                    self.rawAudioSamples = []
+                    return
+                }
+                self.rawAudioSamples.append(contentsOf: samples)
+                let capacity = 8192
+                if self.rawAudioSamples.count > capacity {
+                    self.rawAudioSamples.removeFirst(self.rawAudioSamples.count - capacity)
+                }
+            }
+            .store(in: &cancellables)
     }
 
     func updateDisplay(withMeta meta: MediaMeta?, avPlayer: AVPlayer?) async {
@@ -150,6 +173,20 @@ private extension PlayerController {
             display = .placeholder
             nowPlayingMeta = nil
             colors = [UIColor(.graySecondary)]
+        }
+    }
+
+    func fetchTrackDetailIfNeeded() {
+        guard let trackId = state.currentMediaID?.value,
+              trackId != lastFetchedTrackId else { return }
+        lastFetchedTrackId = trackId
+        trackDetail = nil
+        Task {
+            do {
+                trackDetail = try await supabaseService.getTrackMetadata(trackId: trackId)
+            } catch {
+                print("[PlayerController] getTrackMetadata failed: \(error)")
+            }
         }
     }
 }

@@ -389,11 +389,13 @@ private extension URLAudioPlayer {
 
     func startSpectrumUpdates() {
         spectrumUpdateTimer?.invalidate()
-        spectrumUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.03, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.pollSpectrum()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        spectrumUpdateTimer = timer
     }
 
     func stopSpectrumUpdates() {
@@ -405,6 +407,8 @@ private extension URLAudioPlayer {
         guard let tap = rawDataTap else { return }
         let rawData = tap.data
         guard !rawData.isEmpty else { return }
+
+        delegate?.urlAudioPlayer(self, didUpdateRawSamples: rawData)
 
         let fullSpectrum = analyzer.analyzeRaw(samples: rawData, channelCount: 1)
         delegate?.urlAudioPlayer(self, didUpdateSpectrum: fullSpectrum)
@@ -503,6 +507,7 @@ private extension URLAudioPlayer {
 public protocol URLAudioPlayerDelegate: AnyObject {
     func urlAudioPlayer(_ player: URLAudioPlayer, didUpdateSpectrum spectrum: [Float])
     func urlAudioPlayer(_ player: URLAudioPlayer, didUpdateSmallSpectrum spectrum: [Float])
+    func urlAudioPlayer(_ player: URLAudioPlayer, didUpdateRawSamples samples: [Float])
     func urlAudioPlayer(_ player: URLAudioPlayer, didUpdateProgress progress: PlaybackProgress)
     func urlAudioPlayer(_ player: URLAudioPlayer, didSetupVideoPlayer avPlayer: AVPlayer?)
     func urlAudioPlayerDidFinishPlaying(_ player: URLAudioPlayer)

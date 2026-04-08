@@ -27,6 +27,7 @@ public final class MediaPlayer {
     @Published public private(set) var commandProfile: CommandProfile?
     @Published public private(set) var playIndicatorSpectrum: [Float]
     @Published public private(set) var visualizerSpectrum: [Float]
+    @Published public private(set) var rawAudioSamples: [Float]
     @Published public private(set) var nowPlayingMeta: MediaMeta?
     @Published public private(set) var avPlayer: AVPlayer?
     @Published public var audioEffects: AudioEffects = .default
@@ -44,6 +45,7 @@ public final class MediaPlayer {
         commandProfile = CommandProfile(isLiveStream: false, isSwitchTrackEnabled: false)
         playIndicatorSpectrum = .init(repeating: 0, count: Const.frequencyBands)
         visualizerSpectrum = .init(repeating: 0, count: AudioSpectrumAnalyzer.defaultBandCount)
+        rawAudioSamples = []
         systemMediaInterface.setRemoteCommandProfile(commandProfile!)
         audioSession.delegate = self
         systemMediaInterface.delegate = self
@@ -273,6 +275,10 @@ extension MediaPlayer: URLAudioPlayerDelegate {
 
     public func urlAudioPlayer(_: URLAudioPlayer, didUpdateSmallSpectrum spectrum: [Float]) {
         playIndicatorSpectrum = spectrum
+    }
+
+    public func urlAudioPlayer(_: URLAudioPlayer, didUpdateRawSamples samples: [Float]) {
+        rawAudioSamples = samples
     }
 
     public func urlAudioPlayer(_: URLAudioPlayer, didUpdateProgress prog: PlaybackProgress) {

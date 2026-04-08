@@ -5,6 +5,7 @@
 //
 
 import DesignSystem
+import Kingfisher
 import MediaLibrary
 import SwiftUI
 
@@ -48,11 +49,33 @@ private extension PlayerControls {
         UIColor.palette.playerCard.self
     }
 
+    @ViewBuilder
     var trackInfo: some View {
-        HStack(alignment: .center, spacing: 15) {
+        HStack(alignment: .center) {
+            // Artist profile picture (always reserve space)
+            Group {
+                if let urlString = model.trackDetail?.artist?.profileImageUrl,
+                   let url = URL(string: urlString) {
+                    KFImage(url)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Circle()
+                        .fill(Color.white.opacity(0.1))
+                }
+            }
+            .frame(width: 40, height: 40)
+            .clipShape(Circle())
+            .padding(.leading, ViewConst.playerCardPaddings)
+            .onTapGesture {
+                if let userId = model.trackDetail?.artist?.userId {
+                    model.pendingProfileNavigation = userId
+                }
+            }
+
             VStack(alignment: .leading, spacing: 4) {
                 let fade = ViewConst.playerCardPaddings
-                let cfg = MarqueeText.Config(leftFade: fade, rightFade: fade)
+                let cfg = MarqueeText.Config(leftFade: 0, rightFade: fade)
                 let title = model.display.title.isEmpty ? " " : model.display.title
                 let subtitle = model.display.subtitle.isEmpty ? " " : model.display.subtitle
                 MarqueeText(title, config: cfg)

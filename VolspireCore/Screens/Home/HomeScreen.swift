@@ -102,18 +102,157 @@ struct HomeScreen: View {
         .contentMargins(.bottom, ViewConst.screenPaddings, for: .scrollContent)
         .toolbarTitleDisplayMode(.inlineLarge)
         .gradientBackground()
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToProfileFromTab)) { notification in
+            if let userId = notification.userInfo?["userId"] as? String {
+                router.navigateToProfile(userId: userId)
+            }
+        }
     }
     
     var loadingView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-                .scaleEffect(1.2)
-            Text("Loading...")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            // Search bar skeleton
+            ShimmerView()
+                .frame(height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.top, 12)
+                .padding(.bottom, 12)
+
+            // Filter pills skeleton
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(0..<5, id: \.self) { i in
+                        ShimmerView()
+                            .frame(width: CGFloat([60, 75, 50, 65, 55][i]), height: 34)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+                .padding(.horizontal, ViewConst.screenPaddings)
+            }
+            .padding(.bottom, 12)
+
+            // Following section skeleton
+            VStack(spacing: 0) {
+                HStack {
+                    ShimmerView()
+                        .frame(width: 90, height: 16)
+                        .clipShape(Capsule())
+                    Spacer()
+                    ShimmerView()
+                        .frame(width: 50, height: 14)
+                        .clipShape(Capsule())
+                }
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.bottom, 12)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 14) {
+                        ForEach(0..<6, id: \.self) { _ in
+                            VStack(spacing: 8) {
+                                ShimmerView()
+                                    .frame(width: 64, height: 64)
+                                    .clipShape(Circle())
+                                ShimmerView()
+                                    .frame(width: 50, height: 10)
+                                    .clipShape(Capsule())
+                            }
+                            .frame(width: 72)
+                        }
+                    }
+                    .padding(.horizontal, ViewConst.screenPaddings)
+                }
+            }
+            .padding(.bottom, 20)
+
+            // Featured section skeleton
+            VStack(alignment: .leading, spacing: 12) {
+                ShimmerView()
+                    .frame(width: 90, height: 20)
+                    .clipShape(Capsule())
+                    .padding(.horizontal, ViewConst.screenPaddings)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 16) {
+                        ForEach(0..<2, id: \.self) { _ in
+                            ShimmerView()
+                                .frame(width: 300, height: 170)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                    .padding(.horizontal, ViewConst.screenPaddings)
+                }
+            }
+            .padding(.top, 8)
+
+            // Horizontal track section skeleton
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    ShimmerView()
+                        .frame(width: 170, height: 20)
+                        .clipShape(Capsule())
+                    Spacer()
+                    ShimmerView()
+                        .frame(width: 50, height: 14)
+                        .clipShape(Capsule())
+                }
+                .padding(.horizontal, ViewConst.screenPaddings)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            VStack(alignment: .leading, spacing: 8) {
+                                ShimmerView()
+                                    .frame(width: 150, height: 150)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                ShimmerView()
+                                    .frame(width: 120, height: 14)
+                                    .clipShape(Capsule())
+                                ShimmerView()
+                                    .frame(width: 70, height: 12)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    }
+                    .padding(.horizontal, ViewConst.screenPaddings)
+                }
+            }
+            .padding(.top, 24)
+
+            // Second horizontal section skeleton
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    ShimmerView()
+                        .frame(width: 130, height: 20)
+                        .clipShape(Capsule())
+                    Spacer()
+                    ShimmerView()
+                        .frame(width: 50, height: 14)
+                        .clipShape(Capsule())
+                }
+                .padding(.horizontal, ViewConst.screenPaddings)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(0..<3, id: \.self) { _ in
+                            VStack(alignment: .leading, spacing: 8) {
+                                ShimmerView()
+                                    .frame(width: 150, height: 150)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                ShimmerView()
+                                    .frame(width: 100, height: 14)
+                                    .clipShape(Capsule())
+                                ShimmerView()
+                                    .frame(width: 60, height: 12)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    }
+                    .padding(.horizontal, ViewConst.screenPaddings)
+                }
+            }
+            .padding(.top, 24)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 100)
     }
 }
 

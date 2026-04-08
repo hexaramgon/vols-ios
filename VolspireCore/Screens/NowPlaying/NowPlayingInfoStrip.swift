@@ -6,6 +6,7 @@
 import DesignSystem
 import Kingfisher
 import Player
+import Services
 import SwiftUI
 
 /// A row below the Now Playing artwork: small album cover on the left,
@@ -43,7 +44,8 @@ private extension NowPlayingInfoStrip {
                     spectrum: controller.visualizerSpectrum,
                     albumArtwork: nil,
                     isPlaying: controller.state.isPlaying,
-                    backgroundColor: controller.colors.first.map { Color($0) } ?? .black
+                    backgroundColor: controller.colors.first.map { Color($0) } ?? .black,
+                    rawSamples: controller.rawAudioSamples
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             } else {
@@ -84,17 +86,32 @@ private extension NowPlayingInfoStrip {
 
     // Panel 1: Description
     var descriptionPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if let genre = controller.nowPlayingMeta?.genre {
-                Text(genre)
-                    .font(.caption2)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(Color.white.opacity(0.15))
-                    .clipShape(Capsule())
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Description")
+                .font(.caption2)
+                .fontWeight(.semibold)
+                .foregroundStyle(.white.opacity(0.5))
+                .textCase(.uppercase)
+
+            if let desc = controller.trackDetail?.description, !desc.isEmpty {
+                Text(desc)
+                    .font(.caption)
+                    .lineLimit(4)
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+
+            if let streams = controller.trackDetail?.streams, streams > 0 {
+                Label {
+                    Text("\(streams) streams")
+                        .font(.caption)
+                } icon: {
+                    Image(systemName: "play.fill")
+                        .font(.caption)
+                }
+                .foregroundStyle(.white.opacity(0.6))
             }
         }
-        .padding(12)
+        .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
     }
@@ -108,20 +125,20 @@ private extension NowPlayingInfoStrip {
                 .foregroundStyle(.white.opacity(0.5))
                 .textCase(.uppercase)
 
-            VStack(alignment: .leading, spacing: 10) {
+            FlowLayout(spacing: 8) {
                 actionButton(icon: "arrow.down.circle", label: "Save")
                 actionButton(icon: "cart", label: "Buy")
                 actionButton(icon: "square.and.arrow.up", label: "Share")
             }
         }
-        .padding(12)
+        .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
     }
 
     // Panel 3: Credits & Details
     var creditsPanel: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Credits")
                 .font(.caption2)
                 .fontWeight(.semibold)
@@ -129,35 +146,28 @@ private extension NowPlayingInfoStrip {
                 .textCase(.uppercase)
 
             Label {
-                Text(controller.nowPlayingMeta?.artist ?? "Unknown")
+                Text(controller.trackDetail?.artist?.username ?? controller.nowPlayingMeta?.artist ?? "Unknown")
                     .font(.caption)
                     .lineLimit(1)
             } icon: {
                 Image(systemName: "music.mic")
-                    .font(.caption2)
+                    .font(.caption)
             }
 
-            if let progress = controller.progress, progress.duration > 0 {
-                Label {
-                    Text(progress.duration.asTimeString(style: .positional))
-                        .font(.caption)
-                } icon: {
-                    Image(systemName: "clock")
-                        .font(.caption2)
-                }
-            }
-
-            if let genre = controller.nowPlayingMeta?.genre {
-                Label {
-                    Text(genre)
-                        .font(.caption)
-                } icon: {
-                    Image(systemName: "guitars.fill")
-                        .font(.caption2)
+            if let credits = controller.trackDetail?.credits, !credits.isEmpty {
+                ForEach(Array(credits.sorted(by: { $0.key < $1.key })), id: \.key) { role, name in
+                    Label {
+                        Text("\(role): \(name)")
+                            .font(.caption)
+                            .lineLimit(1)
+                    } icon: {
+                        Image(systemName: "person")
+                            .font(.caption)
+                    }
                 }
             }
         }
-        .padding(12)
+        .padding(10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
     }
@@ -166,13 +176,16 @@ private extension NowPlayingInfoStrip {
         Button {
             // TODO: Implement action
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.body)
+                    .font(.subheadline)
                 Text(label)
-                    .font(.caption)
+                    .font(.subheadline)
             }
-            .foregroundStyle(.white.opacity(0.8))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.white.opacity(0.12), in: Capsule())
+            .foregroundStyle(.white.opacity(0.9))
         }
     }
 
@@ -215,4 +228,49 @@ private extension NowPlayingInfoStrip {
             .padding(.horizontal, 25)
     }
     .environment(playerController)
+}
+
+// MARK: - FlowLayout
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        for (index, origin) in result.origins.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (origins: [CGPoint], size: CGSize) {
+        let maxWidth = proposal.width ?? .infinity
+        var origins: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalSize: CGSize = .zero
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            origins.append(CGPoint(x: x, y: y))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+            totalSize.width = max(totalSize.width, x - spacing)
+            totalSize.height = max(totalSize.height, y + rowHeight)
+        }
+        return (origins, totalSize)
+    }
 }
