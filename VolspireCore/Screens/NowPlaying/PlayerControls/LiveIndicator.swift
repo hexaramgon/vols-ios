@@ -19,7 +19,7 @@ struct LiveIndicator: View {
                 .mask(fadeMask)
                 .foregroundStyle(Color(palette.translucent))
             Text("LIVE")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.appSubheadlineSemibold)
                 .foregroundStyle(Color(palette.opaque))
         }
     }

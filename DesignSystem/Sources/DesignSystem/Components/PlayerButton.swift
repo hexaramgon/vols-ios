@@ -31,12 +31,12 @@ public struct PlayerButton<Content: View>: View {
 
     public var body: some View {
         label
-            .scaleEffect(pressed ? 0.9 : 1)
+            .scaleEffect(pressed && config.showsPressFeedback ? 0.9 : 1)
             .frame(width: config.size, height: config.size)
             .foregroundStyle(color)
-            .background(showCircle ? config.tint : .clear)
+            .background(showCircle && config.showsPressFeedback ? config.tint : .clear)
             .clipShape(Ellipse())
-            .scaleEffect(pressed ? 0.85 : 1)
+            .scaleEffect(pressed && config.showsPressFeedback ? 0.85 : 1)
             .contentShape(.circle)
             .onPressGesture(
                 interval: config.updateInterval,
@@ -71,7 +71,8 @@ public struct PlayerButton<Content: View>: View {
 
 private extension PlayerButton {
     var color: Color {
-        isEnabled ? showCircle ? config.pressedColor : config.labelColor : config.disabledColor
+        guard isEnabled else { return config.disabledColor }
+        return showCircle && config.showsPressFeedback ? config.pressedColor : config.labelColor
     }
 }
 
@@ -92,6 +93,9 @@ public struct PlayerButtonConfig {
     let tint: Color
     let pressedColor: Color
     let disabledColor: Color
+    /// When false, the press circle + scale/colour change are suppressed (used
+    /// by the mini player, which shouldn't show a tap highlight).
+    let showsPressFeedback: Bool
 
     public init(
         updateInterval: TimeInterval = 0.1,
@@ -99,7 +103,8 @@ public struct PlayerButtonConfig {
         labelColor: Color = .init(UIColor.label),
         tint: Color = .init(UIColor.tintColor),
         pressedColor: Color = .init(UIColor.secondaryLabel),
-        disabledColor: Color = .iconSecondary
+        disabledColor: Color = .iconSecondary,
+        showsPressFeedback: Bool = true
     ) {
         self.updateInterval = updateInterval
         self.size = size
@@ -107,6 +112,7 @@ public struct PlayerButtonConfig {
         self.tint = tint
         self.pressedColor = pressedColor
         self.disabledColor = disabledColor
+        self.showsPressFeedback = showsPressFeedback
     }
 }
 

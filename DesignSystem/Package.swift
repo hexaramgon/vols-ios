@@ -27,6 +27,9 @@ let package = Package(
             dependencies: [
                 "Kingfisher",
                 "SharedUtilities"
+            ],
+            resources: [
+                .process("Resources/Fonts")
             ]
         )
     ]

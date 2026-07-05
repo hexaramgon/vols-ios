@@ -25,6 +25,7 @@ struct MediaListScreen: View {
             .task {
                 viewModel.mediaState = dependencies.mediaState
                 viewModel.player = dependencies.mediaPlayer
+                await viewModel.registerItems() // so tapping a row can resolve its audio URL
             }
     }
 }

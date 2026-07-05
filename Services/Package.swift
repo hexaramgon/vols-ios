@@ -16,14 +16,16 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../SharedUtilities/"),
-        .package(url: "https://github.com/supabase/supabase-swift", from: "2.0.0")
+        .package(url: "https://github.com/supabase/supabase-swift", from: "2.0.0"),
+        .package(url: "https://github.com/google/GoogleSignIn-iOS", from: "8.0.0")
     ],
     targets: [
         .target(
             name: "Services",
             dependencies: [
                 "SharedUtilities",
-                .product(name: "Supabase", package: "supabase-swift")
+                .product(name: "Supabase", package: "supabase-swift"),
+                .product(name: "GoogleSignIn", package: "GoogleSignIn-iOS")
             ]
         )
     ]

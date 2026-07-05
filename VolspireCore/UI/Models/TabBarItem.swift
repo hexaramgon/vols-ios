@@ -4,38 +4,35 @@
 //
 //
 
+import DesignSystem
 import SwiftUI
 
 enum TabBarItem: Hashable, CaseIterable {
-    case home
-    case workspace
+    case home       // "Explore"
+    case library    // "Library" — saved tracks + Workspace folders
     case newPost
-    case library
+    case inbox       // Messages / conversations
     case profile
 }
 
 extension TabBarItem {
     var title: String {
         switch self {
-        case .home: "Home"
+        case .home: "Explore"
         case .library: "Library"
         case .newPost: "New Post"
-        case .workspace: "Workspace"
+        case .inbox: "Inbox"
         case .profile: "Profile"
         }
     }
 
     var image: Image {
         switch self {
-        case .home: Image(systemName: "house.fill")
-        case .library: Image(systemName: "rectangle.stack.badge.play")
-        case .newPost: Image(systemName: "plus.circle.fill")
-        case .workspace: Image(systemName: "folder.fill")
-        case .profile: Image(systemName: "person.fill")
+        case .home: Image(lucide: .house)
+        case .library: Image(lucide: .library)
+        case .newPost: Image(lucide: .circlePlus)
+        case .inbox: Image(lucide: .inbox)
+        case .profile: Image(lucide: .circleUser) // fallback; replaced by avatar in RootTabView
         }
-    }
-
-    var role: TabRole? {
-        nil
     }
 }

@@ -24,7 +24,7 @@ struct MediaItemView: View {
             artwork
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.title)
-                    .font(.system(size: 16))
+                    .font(.appBody)
                 Text(model.subtitle ?? "")
                     .font(.appFont.mediaListItemSubtitle)
                     .foregroundStyle(Color(.palette.textTertiary))
@@ -39,7 +39,7 @@ struct MediaItemView: View {
     var artwork: some View {
         ZStack {
             ArtworkView(
-                model.artwork.map { .webImage($0) } ?? .radio(name: model.title),
+                model.artwork.map { .webImage($0) } ?? .placeholder(name: model.title),
                 cornerRadius: 5
             )
             if let activity = model.activity {
@@ -56,10 +56,9 @@ struct MediaItemView: View {
 #Preview(traits: .sizeThatFitsLayout) {
     MediaItemView(
         model: .init(
-            artwork: URL(string: "https://raw.githubusercontent.com/tmp-acc/GTA-V-Radio-Stations-TestDownload" +
-                "/master/radio_01_class_rock/radio_01_class_rock.png"),
-            title: "Los Santos Rock Radio",
-            subtitle: "Classic rock, soft rock, pop rock",
+            artwork: nil,
+            title: "Sample Track",
+            subtitle: "Sample Artist",
             activity: .paused
         )
     )

@@ -7,13 +7,13 @@
 import SwiftUI
 
 public enum AppFont {
-    public static let timingIndicator: Font = .system(size: 12, weight: .semibold)
-    static let miniPlayerTitle: Font = .system(size: 15, weight: .medium)
-    public static let button: Font = .system(size: 17, weight: .semibold)
-    public static let mediaListHeaderSubtitle: Font = .system(size: 20)
-    public static let mediaListItemSubtitle: Font = .system(size: 13)
-    public static let mediaListItemFooter: Font = .system(size: 15)
-    static let tabbar: Font = .system(size: 10)
+    public static let timingIndicator: Font = .geist(12, weight: .semibold)
+    static let miniPlayerTitle: Font = .geist(15, weight: .medium)
+    public static let button: Font = .geist(17, weight: .semibold)
+    public static let mediaListHeaderSubtitle: Font = .geist(20)
+    public static let mediaListItemSubtitle: Font = .geist(13)
+    public static let mediaListItemFooter: Font = .geist(15)
+    static let tabbar: Font = .geist(10)
 }
 
 public extension Font {

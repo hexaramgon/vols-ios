@@ -8,6 +8,11 @@ import SwiftUI
 import UIKit
 
 public extension Color {
+    /// The app's single dark base background — every full-screen background
+    /// (`Color.vBase` in the app target, `.gradientBackground()` here) should
+    /// point at this one value so they can never drift apart again.
+    static let appBase = Color(white: 0.05)
+
     static let spectrum: [Color] = [
         Color("AppCoral", bundle: .module),
         Color("AppOrange", bundle: .module),

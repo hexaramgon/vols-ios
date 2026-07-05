@@ -17,10 +17,10 @@ struct EmptyScreenView: View {
                 .font(.system(size: 48))
                 .foregroundStyle(Color(.palette.stroke))
             Text(title)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.appTitleSemibold)
                 .padding(.top, 16)
             Text(description)
-                .font(.system(size: 17, weight: .regular))
+                .font(.appBodyLarge)
                 .padding(.top, 8)
                 .foregroundStyle(Color(.palette.textTertiary))
         }
@@ -31,7 +31,7 @@ struct EmptyScreenView: View {
 #Preview {
     EmptyScreenView(
         systemImage: "icloud.and.arrow.down",
-        title: "Download Sim Stations to Listen to Offline",
-        description: "Downloaded Stations will appear here."
+        title: "Download Music to Listen Offline",
+        description: "Downloaded tracks will appear here."
     )
 }

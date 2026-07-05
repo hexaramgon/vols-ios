@@ -8,14 +8,14 @@ import AVFoundation
 import Foundation
 
 public enum Artwork: Hashable {
-    case radio(name: String? = nil)
+    case placeholder(name: String? = nil)
     case album
     case webImage(URL)
     case videoPlayer(AVPlayer)
 
     public static func == (lhs: Artwork, rhs: Artwork) -> Bool {
         switch (lhs, rhs) {
-        case let (.radio(a), .radio(b)): a == b
+        case let (.placeholder(a), .placeholder(b)): a == b
         case (.album, .album): true
         case let (.webImage(a), .webImage(b)): a == b
         case let (.videoPlayer(a), .videoPlayer(b)): a === b
@@ -25,7 +25,7 @@ public enum Artwork: Hashable {
 
     public func hash(into hasher: inout Hasher) {
         switch self {
-        case let .radio(name):
+        case let .placeholder(name):
             hasher.combine(0)
             hasher.combine(name)
         case .album:
@@ -41,22 +41,22 @@ public enum Artwork: Hashable {
 }
 
 public extension Artwork {
-    static func radio(
+    static func placeholder(
         _ url: URL?,
         name: String? = nil
     ) -> Artwork {
-        url.map { .webImage($0) } ?? .radio(name: name)
+        url.map { .webImage($0) } ?? .placeholder(name: name)
     }
 
     static func album(_ url: URL?) -> Artwork {
         url.map { .webImage($0) } ?? .album
     }
 
-    static func radioImage(
+    static func placeholderImage(
         _ urlString: String?,
         name: String? = nil
     ) -> Artwork {
-        .radio(
+        .placeholder(
             urlString.flatMap { URL(string: $0) },
             name: name
         )

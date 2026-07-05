@@ -9,23 +9,29 @@ import SwiftUI
 enum MediaActivity {
     case paused
     case buffering
-    case spectrum([Float])
+    case playing
 }
 
+/// Small static "now playing" marker shown over the active track's artwork in
+/// lists. Replaces the old FFT-driven equalizer — fixed bars, no spectrum and no
+/// per-frame work.
 struct MediaActivityIndicator: View {
     let state: MediaActivity
 
     var body: some View {
-        AudioSpectrumView(
-            size: .init(width: 16, height: 22),
-            spectrum: spectrumValues,
-        )
+        HStack(alignment: .center, spacing: 2) {
+            ForEach(Array(barHeights.enumerated()), id: \.offset) { _, height in
+                Capsule()
+                    .frame(width: 2.5, height: 22 * height)
+            }
+        }
+        .frame(width: 16, height: 22)
     }
 
-    var spectrumValues: [Float] {
+    private var barHeights: [CGFloat] {
         switch state {
-        case let .spectrum(values): values
-        default: .init(repeating: 0, count: 5)
+        case .playing: [0.45, 0.9, 0.6, 0.8]
+        case .paused, .buffering: [0.3, 0.3, 0.3, 0.3]
         }
     }
 }
@@ -34,8 +40,9 @@ struct MediaActivityIndicator: View {
     VStack {
         MediaActivityIndicator(state: .paused)
         MediaActivityIndicator(state: .buffering)
-        MediaActivityIndicator(state: .spectrum([0.3, 0.8, 0.4, 0.6, 0.0]))
+        MediaActivityIndicator(state: .playing)
     }
+    .foregroundStyle(.white)
     .padding(10)
     .background(Color.gray)
 }

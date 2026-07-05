@@ -2,6 +2,9 @@
 //  LoginScreen.swift
 //  Volspire
 //
+//  Sign-in page mirroring the web app's /login: black background with the
+//  radial top glow, "Welcome Back" heading, Apple + Google sign-in, labeled
+//  email/password fields, white CTA, and the register link.
 //
 
 import AuthenticationServices
@@ -13,182 +16,142 @@ struct LoginScreen: View {
     @Environment(Dependencies.self) var dependencies
     @State private var email = ""
     @State private var password = ""
-    @State private var isSignUp = false
     @State private var isLoading = false
+    @State private var showRegister = false
+    @State private var registerViewModel: RegisterViewModel?
 
     private var authManager: AuthManager {
         dependencies.authManager
     }
 
+    private var canSubmit: Bool {
+        !email.trimmingCharacters(in: .whitespaces).isEmpty && !password.isEmpty
+    }
+
     var body: some View {
         ZStack {
-            // Full branded background
-            LinearGradient(
-                colors: [
-                    Color.brand,
-                    Color.brand.opacity(0.7),
-                    Color(.systemBackground)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            // One shared background — switching between login and register
+            // slides the content only, like navigating pages on the web.
+            AuthBackground()
 
-            ScrollView {
-                VStack(spacing: 0) {
-                    Spacer().frame(height: 100)
+            // Crossfade with a small directional drift (±40pt) — the same
+            // motion the wizard steps use. Full-width slides read as clunky.
+            if showRegister, let registerViewModel {
+                RegisterScreen(viewModel: registerViewModel) {
+                    withAnimation(.easeOut(duration: 0.25)) { showRegister = false }
+                }
+                .transition(.opacity.combined(with: .offset(x: 40)))
+            } else {
+                loginForm
+                    .transition(.opacity.combined(with: .offset(x: -40)))
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: showRegister)
+        .preferredColorScheme(.dark)
+    }
 
-                    // App icon
-                    Image("Volspire", bundle: nil)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 100, height: 100)
-                        .clipShape(RoundedRectangle(cornerRadius: 22))
-                        .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
-
-                    Text("Volspire")
-                        .font(.system(size: 34, weight: .bold))
+    private var loginForm: some View {
+        ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
+                    VolspireWordmark(height: 30)
                         .foregroundStyle(.white)
-                        .padding(.top, 16)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 28)
 
-                    Text("Discover, create, and share music")
-                        .font(.system(size: 16))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .padding(.top, 4)
+                    Text("Welcome Back")
+                        .font(.appTitleXL)
+                        .foregroundStyle(.white)
+                        .padding(.top, 44)
 
-                    Spacer().frame(height: 50)
+                    Text("Log in to your account to continue.")
+                        .font(.appCalloutRegular)
+                        .foregroundStyle(Color.vText2)
+                        .padding(.top, 8)
 
-                    // Social sign-in buttons
                     VStack(spacing: 12) {
-                        // Sign in with Apple
-                        SignInWithAppleButton(.signIn) { request in
-                            request.requestedScopes = [.fullName, .email]
-                        } onCompletion: { result in
-                            handleAppleSignIn(result)
-                        }
-                        .signInWithAppleButtonStyle(.white)
-                        .frame(height: 50)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                        // Sign in with Google
-                        Button {
+                        appleButton
+                        GoogleAuthButton(label: "Sign in with Google", isLoading: isLoading) {
                             Task {
                                 isLoading = true
                                 await authManager.signInWithGoogle()
                                 isLoading = false
                             }
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "globe")
-                                    .font(.system(size: 18, weight: .medium))
-                                Text("Sign in with Google")
-                                    .font(.system(size: 17, weight: .medium))
-                            }
-                            .foregroundStyle(.primary)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .background(.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
                         }
                     }
-                    .padding(.horizontal, 32)
+                    .padding(.top, 32)
 
-                    // Divider
-                    HStack {
-                        Rectangle()
-                            .fill(.white.opacity(0.3))
-                            .frame(height: 1)
-                        Text("or")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.white.opacity(0.6))
-                            .padding(.horizontal, 12)
-                        Rectangle()
-                            .fill(.white.opacity(0.3))
-                            .frame(height: 1)
+                    AuthOrDivider()
+                        .padding(.vertical, 24)
+
+                    VStack(spacing: 20) {
+                        AuthTextField(
+                            label: "Email address",
+                            text: $email,
+                            keyboard: .emailAddress,
+                            contentType: .emailAddress
+                        )
+                        AuthSecureField(label: "Password", text: $password)
                     }
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 24)
 
-                    // Email form
-                    VStack(spacing: 14) {
-                        TextField("Email", text: $email)
-                            .textContentType(.emailAddress)
-                            .keyboardType(.emailAddress)
-                            .autocapitalization(.none)
-                            .disableAutocorrection(true)
-                            .font(.system(size: 16))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                        SecureField("Password", text: $password)
-                            .textContentType(isSignUp ? .newPassword : .password)
-                            .font(.system(size: 16))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .background(.ultraThinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-                        Button {
-                            Task {
-                                isLoading = true
-                                if isSignUp {
-                                    await authManager.signUpWithEmail(email: email, password: password)
-                                } else {
-                                    await authManager.signInWithEmail(email: email, password: password)
-                                }
-                                isLoading = false
-                            }
-                        } label: {
-                            Group {
-                                if isLoading {
-                                    ProgressView()
-                                        .tint(.white)
-                                } else {
-                                    Text(isSignUp ? "Create Account" : "Sign In")
-                                        .font(.system(size: 17, weight: .semibold))
-                                }
-                            }
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 50)
-                            .background(Color.brand)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .disabled(email.isEmpty || password.isEmpty || isLoading)
-                        .opacity(email.isEmpty || password.isEmpty ? 0.6 : 1)
-                    }
-                    .padding(.horizontal, 32)
-
-                    // Error message
                     if let error = authManager.errorMessage {
-                        Text(error)
-                            .font(.system(size: 14))
-                            .foregroundStyle(.red)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 32)
-                            .padding(.top, 12)
+                        AuthErrorBanner(message: error)
+                            .padding(.top, 16)
                     }
 
-                    // Toggle sign up / sign in
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isSignUp.toggle()
-                            authManager.setError(nil)
+                    AuthPrimaryButton(
+                        title: "Log In",
+                        loadingTitle: "Logging in…",
+                        isLoading: isLoading,
+                        isDisabled: !canSubmit
+                    ) {
+                        Task {
+                            isLoading = true
+                            await authManager.signInWithEmail(email: email, password: password)
+                            isLoading = false
                         }
-                    } label: {
-                        Text(isSignUp ? "Already have an account? **Sign In**" : "Don't have an account? **Sign Up**")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.white.opacity(0.8))
                     }
-                    .padding(.top, 20)
+                    .padding(.top, 24)
 
-                    Spacer().frame(height: 60)
+                    Button {
+                        authManager.setError(nil)
+                        // Fresh wizard state each visit, built before the
+                        // transition so the slide animates real content.
+                        registerViewModel = RegisterViewModel(
+                            authManager: authManager,
+                            supabaseService: dependencies.supabaseService
+                        )
+                        withAnimation(.easeOut(duration: 0.25)) { showRegister = true }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("Don't have an account?")
+                                .foregroundStyle(Color.vText3)
+                            Text("Sign up")
+                                .foregroundStyle(.white)
+                                .fontWeight(.medium)
+                        }
+                        .font(.appCalloutRegular)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 28)
+                    .padding(.bottom, 48)
                 }
+                .padding(.horizontal, 28)
+                .frame(maxWidth: 440)
             }
             .scrollDismissesKeyboard(.interactively)
+    }
+
+    private var appleButton: some View {
+        SignInWithAppleButton(.signIn) { request in
+            request.requestedScopes = [.fullName, .email]
+        } onCompletion: { result in
+            handleAppleSignIn(result)
         }
+        .signInWithAppleButtonStyle(.white)
+        .frame(height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private func handleAppleSignIn(_ result: Result<ASAuthorization, Error>) {

@@ -35,5 +35,5 @@ public struct NavigationLink: View {
 }
 
 #Preview {
-    NavigationLink(title: "Sim Radio", systemImage: "gamecontroller")
+    NavigationLink(title: "Settings", systemImage: "gearshape")
 }

@@ -2,209 +2,196 @@
 //  AudioEffectsSheet.swift
 //  Volspire
 //
-//  Bottom sheet with sliders for Speed and Pitch controls.
+//  Playback-speed control with a preserve-pitch toggle. Styled to sit with the
+//  rest of the player: frosted panel, Geist type, white accents, soft cards.
 //
 
+import DesignSystem
 import Player
+import Services
 import SwiftUI
 
 struct AudioEffectsSheet: View {
     @Environment(PlayerController.self) var controller
-    @Environment(\.dismiss) var dismiss
+
+    /// Live slider value while dragging; committed to the player on release.
     @State private var localSpeed: Float?
-    @State private var localPitch: Float?
+
+    private var speedValue: Float { localSpeed ?? controller.audioEffects.speed }
+    private var isModified: Bool { controller.audioEffects != .default }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    speedSection
-                    Divider().overlay(Color.white.opacity(0.1))
-                    pitchSection
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
-            }
-            .navigationTitle("Audio FX")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Reset") {
-                        controller.applyEffects(.default)
-                    }
-                    .foregroundStyle(.white.opacity(0.7))
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .fontWeight(.semibold)
-                }
-            }
-            .background(Color(.systemBackground).opacity(0.95))
+        VStack(spacing: 22) {
+            hero
+            speedSlider
+            togglesCard
+            if isModified { resetButton }
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 24)
+        .padding(.top, 30)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity)
+        .environment(\.colorScheme, .dark)
+        .foregroundStyle(.white)
+        // Darker frosted panel to match the web's modal background.
+        .sheetBackground()
     }
 }
 
-// MARK: - Speed
+// MARK: - Pieces
 
 private extension AudioEffectsSheet {
-    var speedSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Speed", systemImage: "gauge.with.needle")
-                    .font(.headline)
-                Spacer()
-                Text(String(format: "%.2fx", localSpeed ?? controller.audioEffects.speed))
-                    .font(.subheadline)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
+    /// Big live speed read-out + label.
+    var hero: some View {
+        VStack(spacing: 4) {
+            Text(String(format: "%.2f×", speedValue))
+                .font(.appDisplayLarge)
+                .monospacedDigit()
+                .foregroundStyle(.white)
+            Text("Playback speed")
+                .font(.appCaption2Medium)
+                .tracking(1.4)
+                .textCase(.uppercase)
+                .foregroundStyle(.white.opacity(0.4))
+        }
+    }
 
+    var speedSlider: some View {
+        VStack(spacing: 8) {
             Slider(
-                value: Binding(
-                    get: { localSpeed ?? controller.audioEffects.speed },
-                    set: { localSpeed = $0 }
-                ),
+                value: Binding(get: { speedValue }, set: { localSpeed = $0 }),
                 in: 0.25 ... 2.0,
-                step: 0.05,
+                step: 0.01,
                 onEditingChanged: { editing in
-                    if !editing, let val = localSpeed {
-                        var fx = controller.audioEffects
-                        fx.speed = val
-                        controller.applyEffects(fx)
-                        localSpeed = nil
-                    }
+                    if !editing, let val = localSpeed { commitSpeed(val) }
                 }
             )
-            .tint(.green)
+            .tint(.white)
+            // Tick as the speed moves through each 0.05× step (quantised so it's a
+            // gentle ratchet, not a continuous buzz).
+            .sensoryFeedback(.selection, trigger: Int((speedValue / 0.05).rounded()))
 
-            HStack {
-                Text("0.25x")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("1.0x")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("2.0x")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            // 0.25× far-left, 2× far-right, 1× at its true spot on the track.
+            GeometryReader { geo in
+                let onePos = CGFloat((1.0 - 0.25) / (2.0 - 0.25))
+                Text("0.25×")
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
+                Text("2×")
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .trailing)
+                Text("1×")
+                    .position(x: geo.size.width * onePos, y: geo.size.height / 2)
             }
-
-            // Quick presets
-            HStack(spacing: 8) {
-                ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { rate in
-                    speedPresetButton(rate: Float(rate))
-                }
-            }
+            .frame(height: 14)
+            .font(.appCaption2)
+            .foregroundStyle(.white.opacity(0.35))
         }
     }
 
-    func speedPresetButton(rate: Float) -> some View {
-        let isSelected = abs(controller.audioEffects.speed - rate) < 0.01
-        return Button {
-            var fx = controller.audioEffects
-            fx.speed = rate
-            controller.applyEffects(fx)
-        } label: {
-            Text(String(format: rate == floor(rate) ? "%.0fx" : "%.2fx", rate))
-                .font(.caption)
-                .fontWeight(.medium)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(isSelected ? Color.green : Color.white.opacity(0.1))
-                )
-                .foregroundStyle(isSelected ? .black : .white)
+    /// Both toggle rows grouped in one card with a hairline between them.
+    var togglesCard: some View {
+        VStack(spacing: 0) {
+            toggleRow(
+                title: "Preserve pitch",
+                subtitle: controller.audioEffects.preservePitch
+                    ? "Speed changes tempo only"
+                    : "Speed changes pitch too",
+                isOn: controller.audioEffects.preservePitch,
+                action: { setPreservePitch($0) }
+            )
+
+            Divider()
+                .overlay(Color.white.opacity(0.08))
+                .padding(.leading, 16)
+
+            toggleRow(
+                title: "Carry to next track",
+                subtitle: controller.persistAudioEdits
+                    ? "Settings apply to every track"
+                    : "Settings reset on track change",
+                isOn: controller.persistAudioEdits,
+                action: { controller.persistAudioEdits = $0 }
+            )
         }
+        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    func toggleRow(title: String, subtitle: String, isOn: Bool, action: @escaping (Bool) -> Void) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.appCallout)
+                    .foregroundStyle(.white)
+                Text(subtitle)
+                    .font(.appCaption)
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            Spacer(minLength: 0)
+            fxToggle(isOn: isOn, action: action)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    var resetButton: some View {
+        Button {
+            localSpeed = nil
+            controller.applyEffects(.default)
+        } label: {
+            Text("Reset")
+                .font(.appSubheadlineMedium)
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Soft switch matching the player's white accent: ON = white / dark knob.
+    func fxToggle(isOn: Bool, action: @escaping (Bool) -> Void) -> some View {
+        Button { action(!isOn) } label: {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                Capsule()
+                    .fill(isOn ? Color.white : Color.white.opacity(0.22))
+                    .frame(width: 44, height: 26)
+                Circle()
+                    .fill(isOn ? Color.black : Color.white.opacity(0.85))
+                    .frame(width: 18, height: 18)
+                    .padding(4)
+            }
+        }
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.18), value: isOn)
     }
 }
 
-// MARK: - Pitch
+// MARK: - Actions
 
 private extension AudioEffectsSheet {
-    var pitchSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Pitch", systemImage: "music.note")
-                    .font(.headline)
-                Spacer()
-                let semitones = (localPitch ?? controller.audioEffects.pitch) / 100
-                Text(String(format: "%+.1f st", semitones))
-                    .font(.subheadline)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-
-            Slider(
-                value: Binding(
-                    get: { localPitch ?? controller.audioEffects.pitch },
-                    set: { localPitch = $0 }
-                ),
-                in: -1200 ... 1200,
-                step: 100,
-                onEditingChanged: { editing in
-                    if !editing, let val = localPitch {
-                        var fx = controller.audioEffects
-                        fx.pitch = val
-                        controller.applyEffects(fx)
-                        localPitch = nil
-                    }
-                }
-            )
-            .tint(.blue)
-
-            HStack {
-                Text("-12 st")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("0")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("+12 st")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Quick presets
-            HStack(spacing: 8) {
-                ForEach([-500, -200, 0, 200, 500], id: \.self) { cents in
-                    pitchPresetButton(cents: Float(cents))
-                }
-            }
-        }
+    func commitSpeed(_ value: Float) {
+        var fx = controller.audioEffects
+        fx.speed = value
+        controller.applyEffects(fx)
+        AnalyticsService.shared?.log(.audioSettingsChanged, trackId: controller.state.currentMediaID?.value, metadata: ["setting": "speed", "speed": .double(Double(fx.speed)), "preserve_pitch": .bool(fx.preservePitch)])
+        localSpeed = nil
     }
 
-    func pitchPresetButton(cents: Float) -> some View {
-        let isSelected = abs(controller.audioEffects.pitch - cents) < 1
-        let semitones = cents / 100
-        let label = cents == 0 ? "Normal" : String(format: "%+.0f st", semitones)
-        return Button {
-            var fx = controller.audioEffects
-            fx.pitch = cents
-            controller.applyEffects(fx)
-        } label: {
-            Text(label)
-                .font(.caption)
-                .fontWeight(.medium)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(isSelected ? Color.blue : Color.white.opacity(0.1))
-                )
-                .foregroundStyle(isSelected ? .white : .white)
-        }
+    func setPreservePitch(_ on: Bool) {
+        var fx = controller.audioEffects
+        fx.preservePitch = on
+        controller.applyEffects(fx)
+        AnalyticsService.shared?.log(.audioSettingsChanged, trackId: controller.state.currentMediaID?.value, metadata: ["setting": "preserve_pitch", "speed": .double(Double(fx.speed)), "preserve_pitch": .bool(fx.preservePitch)])
     }
 }
 
 #Preview {
     @Previewable @State var controller = PlayerController.stub
-    AudioEffectsSheet()
-        .environment(controller)
+    Color.black.ignoresSafeArea()
+        .sheet(isPresented: .constant(true)) {
+            AudioEffectsSheet()
+                .environment(controller)
+                .presentationDetents([.height(440)])
+                .presentationDragIndicator(.visible)
+        }
 }

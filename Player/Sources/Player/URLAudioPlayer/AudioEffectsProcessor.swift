@@ -2,12 +2,18 @@
 //  AudioEffectsProcessor.swift
 //  Player
 //
-//  Manages audio effects via AudioKit's TimePitch node.
-//  Speed and pitch are controlled independently (unlike AVPlayer's varispeed).
+//  Reproduces the web app's `playbackRate` + `preservesPitch` behavior using
+//  two nodes so each mode uses the right algorithm:
+//   • preserve pitch ON  → TimePitch (phase-vocoder time-stretch, pitch held)
+//   • preserve pitch OFF → VariSpeed (resampling, pitch follows speed)
+//  Routing the varispeed case through resampling — instead of a simultaneous
+//  time-stretch + pitch-shift on TimePitch — avoids the phasey/"echoey"
+//  artifacts that stacking both phase-vocoder operations produces.
 //
 
 import AudioKit
 import AVFoundation
+import Foundation
 
 @MainActor
 public final class AudioEffectsProcessor {
@@ -15,19 +21,32 @@ public final class AudioEffectsProcessor {
 
     public init() {}
 
-    /// Apply effects to the AudioKit TimePitch node.
-    public func apply(_ effects: AudioEffects, to timePitch: TimePitch) {
+    /// Apply effects across the VariSpeed + TimePitch pair. Only one node is
+    /// ever non-neutral; the unused node is reset to 1.0 first so speed is never
+    /// momentarily applied twice while switching modes.
+    public func apply(_ effects: AudioEffects, variSpeed: VariSpeed, timePitch: TimePitch) {
         currentEffects = effects
-        timePitch.rate = AUValue(effects.speed)
-        timePitch.pitch = AUValue(effects.pitch)
+        let rate = AUValue(effects.speed)
+
+        if effects.preservePitch {
+            // Tempo only — bypass resampling, stretch with the phase vocoder.
+            variSpeed.rate = 1
+            timePitch.pitch = 0
+            timePitch.rate = rate
+        } else {
+            // Varispeed — bypass the phase vocoder, resample cleanly.
+            timePitch.rate = 1
+            timePitch.pitch = 0
+            variSpeed.rate = rate
+        }
     }
 
-    /// Re-apply the current effects (e.g. after resuming).
-    public func reapply(to timePitch: TimePitch) {
-        apply(currentEffects, to: timePitch)
+    /// Re-apply the current effects (e.g. after resuming or seeking).
+    public func reapply(variSpeed: VariSpeed, timePitch: TimePitch) {
+        apply(currentEffects, variSpeed: variSpeed, timePitch: timePitch)
     }
 
-    /// Get the effective playback rate combining speed and pitch.
+    /// Effective playback rate (speed), used to keep the muted video layer in sync.
     public var playbackRate: Float {
         currentEffects.speed
     }

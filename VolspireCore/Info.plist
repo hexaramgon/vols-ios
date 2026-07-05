@@ -14,11 +14,29 @@
 				<string>volspire</string>
 			</array>
 		</dict>
+		<!-- Google Sign-In reversed-client-id URL scheme. Commented out until a
+		     real iOS client ID is configured — the `YOUR_IOS_CLIENT_ID` placeholder
+		     contains underscores, which are invalid in a URL scheme and fail App
+		     Store validation. Restore (with the real ID) to re-enable Google sign-in. -->
+		<!--
 		<dict>
 			<key>CFBundleTypeRole</key>
-			<string>None</string>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>com.volspire.googlesignin</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.YOUR_IOS_CLIENT_ID</string>
+			</array>
 		</dict>
+		-->
 	</array>
+	<key>GIDClientID</key>
+	<string>YOUR_IOS_CLIENT_ID.apps.googleusercontent.com</string>
+	<!-- The app uses only standard HTTPS/TLS + auth encryption (exempt), so it
+	     declares no non-exempt encryption — skips the export-compliance prompt. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

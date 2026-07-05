@@ -38,7 +38,7 @@ private extension MediaItemScreen {
                 item: .init(
                     title: meta.title,
                     subtitle: meta.subtitle,
-                    artwork: meta.artwork.map { .webImage($0) } ?? .radio(name: meta.title)
+                    artwork: meta.artwork.map { .webImage($0) } ?? .placeholder(name: meta.title)
                 ),
                 onEvent: { _ in
                     viewModel.onPlay()
@@ -99,7 +99,7 @@ private struct ItemView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(1)
         }
-        .font(.system(size: 16))
+        .font(.appBody)
         .frame(height: 50)
         .contentShape(.rect)
     }

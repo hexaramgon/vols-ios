@@ -26,7 +26,7 @@ struct MediaListHeaderView: View {
             .padding(.horizontal, 48)
 
             Text(item.title)
-                .font(.system(size: 22, weight: .bold))
+                .font(.appTitle)
                 .padding(.top, 23)
 
             if let subtitle = item.subtitle {
@@ -79,7 +79,7 @@ private extension MediaListHeaderView {
         item: .init(
             title: item.meta.title,
             subtitle: item.meta.subtitle,
-            artwork: .radio(item.meta.artwork)
+            artwork: .placeholder(item.meta.artwork)
         ),
         onEvent: { _ in }
     )

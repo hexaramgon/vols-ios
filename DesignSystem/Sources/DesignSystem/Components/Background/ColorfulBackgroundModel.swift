@@ -19,15 +19,31 @@ class ColorfulBackgroundModel {
 
     func onAppear() {
         shown = true
-        animate()
         animatedData = points
+    }
 
-        animationTimerCancellable = Timer
-            .publish(every: Self.animationDuration * 0.9, on: .main, in: .common)
-            .autoconnect()
-            .sink { [weak self] _ in
-                self?.animate()
-            }
+    /// Start/stop the perpetual gradient flow. When stopped, the points are frozen
+    /// at their current interpolated value so the Metal shader stops redrawing every
+    /// frame (huge GPU/energy win while the background isn't visible/expanded).
+    func setAnimating(_ active: Bool) {
+        if active {
+            guard animationTimerCancellable == nil else { return }
+            shown = true
+            animate()
+            animationTimerCancellable = Timer
+                .publish(every: Self.animationDuration * 0.9, on: .main, in: .common)
+                .autoconnect()
+                .sink { [weak self] _ in
+                    self?.animate()
+                }
+        } else {
+            animationTimerCancellable?.cancel()
+            animationTimerCancellable = nil
+            // Freeze at the current frame so the in-flight 20s animation stops too.
+            var tx = Transaction()
+            tx.disablesAnimations = true
+            withTransaction(tx) { points = animatedData }
+        }
     }
 
     func onUpdate(animatedData: ColorPoints) {

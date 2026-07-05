@@ -15,189 +15,205 @@ struct NowPlayingInfoStrip: View {
     @Environment(PlayerController.self) var controller
     @State private var currentPage: Int = 0
     @State private var timer: Timer?
+    @State private var showFolderPicker = false
+    @State private var showAddToPlaylist = false
 
     /// Thumbnail size derived from screen width (roughly 30% of width).
     private var thumbSize: CGFloat {
         round(UIScreen.size.width * 0.3)
     }
 
+    private var currentTrackId: String? {
+        controller.state.currentMediaID?.value
+    }
+
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            albumThumb
-            slideshowPanels
+        HStack(alignment: .center, spacing: 12) {
+            slideshowPanels          // About / Credits (left, card background)
+            actionsColumn            // Actions (right, no background)
         }
         .frame(height: thumbSize)
+        // Resolve the strip's geometry as one unit so it tracks the drag-to-dismiss
+        // rigidly with the rest of the player (otherwise it "moves first").
+        .geometryGroup()
         .onAppear { startAutoSlide() }
         .onDisappear { stopAutoSlide() }
+        .sheet(isPresented: $showFolderPicker) {
+            if let id = currentTrackId {
+                WorkspaceFolderPicker(trackId: id)
+            }
+        }
+        .sheet(isPresented: $showAddToPlaylist) {
+            if let id = currentTrackId {
+                AddToPlaylistSheet(trackId: id)
+            }
+        }
     }
 }
 
-// MARK: - Album Thumbnail
+// MARK: - Actions (permanent, right side, no background)
 
 private extension NowPlayingInfoStrip {
-    @ViewBuilder
-    var albumThumb: some View {
-        Group {
-            if controller.showAlbumArt {
-                // Main area shows album art, so show mini visualizer here
-                NowPlayingVisualizer(
-                    spectrum: controller.visualizerSpectrum,
-                    albumArtwork: nil,
-                    isPlaying: controller.state.isPlaying,
-                    backgroundColor: controller.colors.first.map { Color($0) } ?? .black,
-                    rawSamples: controller.rawAudioSamples
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            } else {
-                // Main area shows visualizer, so show album art here
-                ArtworkView(controller.display.albumArtwork, cornerRadius: 10)
-            }
+    /// Two compact circular icon actions on the right: Add to playlist on top,
+    /// Workspace (add to workspace) below — saves the horizontal space the labels took.
+    var actionsColumn: some View {
+        VStack(spacing: 12) {
+            circleAction(.listMusic, label: "Add to playlist") { showAddToPlaylist = true }
+            circleAction(.folder, label: "Workspace") { showFolderPicker = true }
         }
-        .frame(width: thumbSize, height: thumbSize)
-        .onTapGesture {
-            withAnimation(.smooth) {
-                controller.showAlbumArt.toggle()
-            }
-        }
+        .frame(maxHeight: .infinity, alignment: .center)
     }
 }
 
 // MARK: - Slideshow
 
 private extension NowPlayingInfoStrip {
-    var slideshowPanels: some View {
-        TabView(selection: $currentPage) {
-            descriptionPanel.tag(0)
-            actionsPanel.tag(1)
-            creditsPanel.tag(2)
-        }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(
-            .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-        .environment(\.colorScheme, .dark)
-        .overlay(alignment: .bottom) {
-            pageIndicator
-                .padding(.bottom, 6)
-        }
+    /// White text throughout (legible over a full-bleed video), with a drop shadow
+    /// applied at the panel level.
+    enum Theme {
+        static let header = Color.white.opacity(0.9)
+        static let body = Color.white
+        static let muted = Color.white.opacity(0.7)
+        static let role = Color.white.opacity(0.85)
+        static let chipFill = Color(white: 0.04)      // ~neutral-950
+        static let hairline = Color.white.opacity(0.12)
+        static let border = Color.white.opacity(0.1)  // ~neutral-800/60
     }
 
-    // Panel 1: Description
+    var slideshowPanels: some View {
+        // Pure-SwiftUI crossfade slideshow (no UIPageViewController) so the card
+        // tracks the drag-to-dismiss in lockstep with the rest of the player.
+        ZStack(alignment: .bottomLeading) {
+            descriptionPanel.opacity(currentPage == 0 ? 1 : 0)
+            creditsPanel.opacity(currentPage == 1 ? 1 : 0)
+        }
+        // Bottom-align the content so it sits low, right above the title (rather
+        // than floating in the middle of the strip with a big gap below it).
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        .padding(.vertical, 12)
+        .environment(\.colorScheme, .dark)
+        // Keep panel content within bounds — never let it spill onto the artwork /
+        // like row above or the track title below.
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    // Panel 1: About (description + tags)
     var descriptionPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Description")
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .foregroundStyle(.white.opacity(0.5))
-                .textCase(.uppercase)
+            panelHeader("About")
 
             if let desc = controller.trackDetail?.description, !desc.isEmpty {
                 Text(desc)
-                    .font(.caption)
-                    .lineLimit(4)
-                    .foregroundStyle(.white.opacity(0.8))
+                    .font(.appFootnote)
+                    .lineLimit(1)
+                    .foregroundStyle(Theme.body)
+                    .infoTextShadow()
+            } else {
+                Text("No description provided.")
+                    .font(.appFootnote)
+                    .italic()
+                    .foregroundStyle(Theme.muted)
+                    .infoTextShadow()
             }
 
-            if let streams = controller.trackDetail?.streams, streams > 0 {
-                Label {
-                    Text("\(streams) streams")
-                        .font(.caption)
-                } icon: {
-                    Image(systemName: "play.fill")
-                        .font(.caption)
+            // Tags carry their own white background, so they need no shadow.
+            if let tags = controller.trackDetail?.metadata?.tags, !tags.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(tags, id: \.self) { tagChip($0) }
                 }
-                .foregroundStyle(.white.opacity(0.6))
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .foregroundStyle(.white)
+        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // Panel 2: Actions
-    var actionsPanel: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Actions")
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .foregroundStyle(.white.opacity(0.5))
-                .textCase(.uppercase)
-
-            FlowLayout(spacing: 8) {
-                actionButton(icon: "arrow.down.circle", label: "Save")
-                actionButton(icon: "cart", label: "Buy")
-                actionButton(icon: "square.and.arrow.up", label: "Share")
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .foregroundStyle(.white)
-    }
-
-    // Panel 3: Credits & Details
+    // Panel 2: Credits — the people on the track, capped to one compact line.
     var creditsPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Credits")
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .foregroundStyle(.white.opacity(0.5))
-                .textCase(.uppercase)
+            panelHeader("Credits")
 
-            Label {
-                Text(controller.trackDetail?.artist?.username ?? controller.nowPlayingMeta?.artist ?? "Unknown")
-                    .font(.caption)
+            HStack(spacing: 8) {
+                creditAvatar
+                Text(creditsSummary)
+                    .font(.appFootnote)
                     .lineLimit(1)
-            } icon: {
-                Image(systemName: "music.mic")
-                    .font(.caption)
-            }
-
-            if let credits = controller.trackDetail?.credits, !credits.isEmpty {
-                ForEach(Array(credits.sorted(by: { $0.key < $1.key })), id: \.key) { role, name in
-                    Label {
-                        Text("\(role): \(name)")
-                            .font(.caption)
-                            .lineLimit(1)
-                    } icon: {
-                        Image(systemName: "person")
-                            .font(.caption)
-                    }
-                }
+                    .foregroundStyle(Theme.body)
+                    .infoTextShadow()
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .foregroundStyle(.white)
+        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    func actionButton(icon: String, label: String) -> some View {
-        Button {
-            // TODO: Implement action
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.subheadline)
-                Text(label)
-                    .font(.subheadline)
+    /// The primary (artist) avatar shown beside the credits line.
+    var creditAvatar: some View {
+        let username = controller.trackDetail?.artist?.username ?? controller.nowPlayingMeta?.artist
+        let url = controller.trackDetail?.artist?.profileImageUrl.flatMap { URL(string: $0) }
+        return Group {
+            if let url {
+                KFImage(url).downsampled(to: 26).resizable().scaledToFill()
+            } else {
+                Text(String(username?.first ?? "?").uppercased())
+                    .font(.appCaption2Bold)
+                    .foregroundStyle(.white)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(.white.opacity(0.12), in: Capsule())
-            .foregroundStyle(.white.opacity(0.9))
         }
+        .frame(width: 26, height: 26)
+        .background(Color(white: 0.15))
+        .clipShape(Circle())
     }
 
-    // Page dots
-    var pageIndicator: some View {
-        HStack(spacing: 6) {
-            ForEach(0 ..< 3, id: \.self) { index in
-                Circle()
-                    .fill(index == currentPage ? Color.white : Color.white.opacity(0.4))
-                    .frame(width: 5, height: 5)
-            }
+    /// Artist + collaborators as a single "·"-joined line.
+    var creditsSummary: String {
+        var people: [String] = []
+        if let artist = controller.trackDetail?.artist?.username ?? controller.nowPlayingMeta?.artist {
+            people.append("@\(artist)")
         }
+        if let credits = controller.trackDetail?.credits {
+            people.append(contentsOf: credits.compactMap { $0.username.map { "@\($0)" } })
+        }
+        return people.isEmpty ? "No credits listed." : people.joined(separator: "  ·  ")
+    }
+
+    func tagChip(_ tag: String) -> some View {
+        Text("#\(tag)")
+            .font(.appCaption2Medium)
+            .foregroundStyle(Color(white: 0.1))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(Color.white, in: Capsule())
+    }
+
+    /// A circular icon action — a see-through blurred fill so the background
+    /// behind it (incl. a bright full-bleed video) shows through, blurred.
+    func circleAction(_ icon: LucideIcon.Name, label: String, action: @escaping () -> Void = {}) -> some View {
+        Button(action: action) {
+            LucideIcon(icon, .lg)
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    func panelHeader(_ text: String) -> some View {
+        Text(text)
+            .font(.appMicroSemibold)
+            .tracking(0.6)
+            .foregroundStyle(Theme.header)
+            .textCase(.uppercase)
+            .infoTextShadow()
+    }
+
+}
+
+private extension View {
+    /// Soft dark drop shadow so white text stays legible over a bright video.
+    /// Applied per-text (not the whole panel) so the white-backed tag chips are
+    /// left untouched.
+    func infoTextShadow() -> some View {
+        shadow(color: .black.opacity(0.55), radius: 3, y: 1)
     }
 }
 
@@ -205,10 +221,11 @@ private extension NowPlayingInfoStrip {
 
 private extension NowPlayingInfoStrip {
     func startAutoSlide() {
+        timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { _ in
             Task { @MainActor in
                 withAnimation(.easeInOut(duration: 0.4)) {
-                    currentPage = (currentPage + 1) % 3
+                    currentPage = (currentPage + 1) % 2
                 }
             }
         }

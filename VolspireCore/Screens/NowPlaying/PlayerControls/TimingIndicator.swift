@@ -78,9 +78,15 @@ extension ElasticSliderConfig {
             labelLocation: .bottom,
             maxStretch: 0,
             minimumTrackActiveColor: Color(Palette.PlayerCard.opaque),
-            minimumTrackInactiveColor: Color(Palette.PlayerCard.translucent),
-            maximumTrackColor: Color(Palette.PlayerCard.translucent),
-            blendMode: .overlay,
+            // Played portion solid white so progress reads clearly against the
+            // brighter unfilled track.
+            minimumTrackInactiveColor: Color(Palette.PlayerCard.opaque),
+            // Remaining/unfilled track: a solid mid-dark grey, clearly dimmer than
+            // the white played portion.
+            maximumTrackColor: Color(white: 0.4),
+            // Normal (not .overlay): .overlay crushed the slider + labels toward
+            // black on the dark player background, making them nearly invisible.
+            blendMode: .normal,
             syncLabelsStyle: true
         )
     }

@@ -13,68 +13,159 @@ struct RegularNowPlaying: View {
     var expanded: Bool
     var size: CGSize
     var animationNamespace: Namespace.ID
+    /// Active panel (0 = main, 1 = comments). Owned by ExpandableNowPlaying so the
+    /// dismiss pan gesture can drive left/right swipes between panels.
+    @Binding var selectedPanel: Int
+    /// Live horizontal drag offset from the pan gesture, so the panels track the finger.
+    var pageDragX: CGFloat = 0
+    /// Reflects whether the comments list is scrolled to the top — drives the
+    /// "only dismiss from the top" behaviour in the parent's pan gesture.
+    @Binding var commentsAtTop: Bool
+    /// True while a dismiss drag is in progress — freezes the comments list so it
+    /// doesn't rubber-band away from the rest of the player.
+    var commentsScrollLocked: Bool = false
+    /// When false (workspace file or comments panel) the cover doesn't glide on
+    /// expand/collapse — it just fades with the rest of the player.
+    var coverMatchEnabled: Bool = true
+    /// Immersive video: hide the info strip and minimize the controls (compact
+    /// transport only), leaving more of the video visible.
+    var minimized: Bool = false
 
-    /// Delays content appearance so the background animation can catch up.
-    @State private var showContent: Bool = false
-    @State private var selectedPanel: Int = 0
+    /// Keeps the expanded content mounted through the dismiss animation so the
+    /// whole view fades out together with the docking artwork (instead of
+    /// snapping away) — then unmounts once the collapse has finished.
+    @State private var renderContent: Bool = false
+    @State private var unmountWork: DispatchWorkItem?
+    /// Shared comments state: the list (in the pager) and the input bar (in the
+    /// controls, morphed from the Comments button) read the same model.
+    @State private var commentsModel = NowPlayingCommentsModel()
 
     var body: some View {
-        VStack() {
-            if expanded {
-                TabView(selection: $selectedPanel) {
-                    // Panel 1: Artwork / Visualizer + Info Strip
-                    VStack() {
-                        artworkOrVisualizer
-                            .matchedGeometryEffect(
-                                id: PlayerMatchedGeometry.artwork,
-                                in: animationNamespace
+        VStack(spacing: 0) {
+            if renderContent {
+                if model.currentFileId != nil {
+                    // Workspace file → comments only. No artwork/info pager (so no
+                    // cover, ABOUT strip, cart/folder, save/playlist/fx) — it's not a
+                    // real track. Open straight to the comments panel.
+                    NowPlayingCommentsPanel(model: commentsModel, atTop: $commentsAtTop, scrollLocked: commentsScrollLocked)
+                        .padding(.top, ViewConst.safeAreaInsets.top)
+                        .padding(.bottom, 6)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: expandedCommentsHeight)
+                        .transition(.identity)
+
+                    PlayerControls(
+                        commentsModel: commentsModel,
+                        composerNamespace: animationNamespace,
+                        commentsOpen: true
+                    )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .transition(.move(edge: .bottom))
+                } else {
+                    // Real track → artwork ⇄ comments pager.
+                    GeometryReader { geo in
+                        HStack(spacing: 0) {
+                            mainPanel
+                                .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+
+                            NowPlayingCommentsPanel(
+                                model: commentsModel,
+                                onClose: { withAnimation(.smooth(duration: 0.32)) { selectedPanel = 0 } },
+                                atTop: $commentsAtTop,
+                                scrollLocked: commentsScrollLocked
                             )
-                            .frame(height: artworkSize)
-                            .overlay(alignment: .bottom) {
-                                actionIconsRow
-                                    .offset(y: 42)
-                            }
-                            .padding(.bottom, artworkVerticalPadding)
-                            .padding(.horizontal, 25)
-
-                        NowPlayingInfoStrip()
-                            .padding(.horizontal, 25)
+                                .padding(.top, ViewConst.safeAreaInsets.top)
+                                .padding(.bottom, 6)
+                                .frame(width: geo.size.width, height: geo.size.height)
+                        }
+                        .offset(x: -CGFloat(selectedPanel) * geo.size.width + pageDragX)
                     }
-                    .tag(0)
+                    .frame(height: selectedPanel == 1 ? expandedCommentsHeight : mainContentHeight)
+                    .transition(.identity)
 
-                    // Panel 2: Comments
-                    NowPlayingCommentsPanel()
-                        .padding(.vertical, 16)
-                        .tag(1)
+                    PlayerControls(
+                        onComment: {
+                            withAnimation(.smooth(duration: 0.32)) {
+                                selectedPanel = selectedPanel == 1 ? 0 : 1
+                            }
+                        },
+                        commentsModel: commentsModel,
+                        composerNamespace: animationNamespace,
+                        commentsOpen: selectedPanel == 1,
+                        minimized: minimized
+                    )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .transition(.move(edge: .bottom))
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .opacity(showContent ? 1 : 0)
-
-                PlayerControls()
-                    .frame(height: size.height * 0.32)
-                    .opacity(showContent ? 1 : 0)
-
-                // Spacer()
-                //     .frame(height: size.height * 0.05)
+            }
+        }
+        .allowsHitTesting(expanded)
+        .overlay(alignment: .top) { offlineIndicator }
+        .animation(.easeInOut(duration: 0.25), value: commentsModel.loadFailed)
+        // Reset the slider to the artwork only when the track changes from the
+        // one whose comments you opened — a plain collapse/expand keeps comments
+        // where you left them.
+        .onChange(of: model.state.currentMediaID?.value) { _, _ in
+            if selectedPanel != 0 {
+                withAnimation(.smooth(duration: 0.32)) { selectedPanel = 0 }
             }
         }
         .onChange(of: expanded) { _, isExpanded in
+            unmountWork?.cancel()
             if isExpanded {
-                // Delay content reveal until the background has animated in
-                withAnimation(.easeIn(duration: 0.25).delay(Animation.playerExpandAnimationDuration * 0.6)) {
-                    showContent = true
+                // Mount within the expand animation so the controls slide up and
+                // the whole view fades in together (driven by the parent opacity).
+                withAnimation(.playerExpandAnimation) {
+                    renderContent = true
                 }
             } else {
-                // Hide immediately when collapsing
-                showContent = false
+                // Keep the content mounted through the collapse so it fades out
+                // with the docking artwork, then unmount once settled.
+                let work = DispatchWorkItem { renderContent = false }
+                unmountWork = work
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + Animation.playerExpandAnimationDuration,
+                    execute: work
+                )
+            }
+        }
+        .onAppear {
+            if expanded {
+                renderContent = true
             }
         }
     }
 }
 
 private extension RegularNowPlaying {
+    /// Offline indicator — shown when the comments fetch got no response (same
+    /// "couldn't get a response" signal the Home page uses).
+    @ViewBuilder
+    var offlineIndicator: some View {
+        if expanded, commentsModel.loadFailed {
+            HStack(spacing: 6) {
+                LucideIcon(.triangleAlert, .xs)
+                Text("No connection").font(.appCaptionMedium)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.12)))
+            .padding(.top, ViewConst.safeAreaInsets.top + 8)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
     enum Const {
-        static let horizontalPadding: CGFloat = 25
+        static let horizontalPadding: CGFloat = 32
+        /// Active like colour — tailwind pink-400, matching the web player.
+        static let likedPink = Color(red: 0.957, green: 0.447, blue: 0.714)
+        /// Inactive action tint. The web uses a dim neutral-400, but that's only
+        /// legible on its solid dark bar — over the player's album-art gradient it
+        /// disappears, so we keep the inactive state bright (distinction comes from
+        /// the colour + fill when active).
+        static let inactiveTint = Color.white.opacity(0.85)
     }
 
     /// Artwork square dimension (same as before).
@@ -82,9 +173,38 @@ private extension RegularNowPlaying {
         size.width - Const.horizontalPadding * 2
     }
 
-    /// Top + bottom padding around the artwork.
+    /// Gap below the artwork before the info strip.
     var artworkVerticalPadding: CGFloat {
-        size.height < 700 ? 15 : 40
+        size.height < 700 ? 8 : 16
+    }
+
+    /// Info-strip thumbnail height — mirrors `NowPlayingInfoStrip.thumbSize`
+    /// (the strip is sized to its square thumbnail).
+    var infoStripHeight: CGFloat {
+        round(size.width * 0.3)
+    }
+
+    /// Top inset above the artwork. Kept tight (the cover was widened via a
+    /// smaller `horizontalPadding`, and this shrank by the same amount) so the
+    /// artwork grows *upward* into this space without moving anything below it —
+    /// `mainContentHeight` is unchanged.
+    var artworkTopInset: CGFloat {
+        ViewConst.safeAreaInsets.top + (size.height < 700 ? 2 : 24)
+    }
+
+    /// Natural height of the main panel: top inset + artwork + the gap +
+    /// the info strip. The pager hugs this so the controls fill whatever's left
+    /// instead of leaving a fixed gap in the middle.
+    var mainContentHeight: CGFloat {
+        artworkTopInset + artworkSize + artworkVerticalPadding + infoStripHeight
+    }
+
+    /// When comments are open the box grows to take the controls' empty space,
+    /// reserving just enough for the (compacted) transport + input row at the
+    /// bottom. Uses the full screen height (the player ignores the safe area, so
+    /// `size` here is only the safe-area box). Never shrinks below the normal box.
+    var expandedCommentsHeight: CGFloat {
+        max(mainContentHeight, UIScreen.size.height - 320)
     }
 
 
@@ -101,60 +221,113 @@ private extension RegularNowPlaying {
 
     @ViewBuilder
     var artworkOrVisualizer: some View {
-        let artworkSize = size.width - Const.horizontalPadding * 2
-        Group {
-            if isVideo {
-                artwork(model.display.artwork)
-            } else if model.showAlbumArt {
+        if isVideo, model.isPortraitVideo {
+            // Portrait video plays full-bleed behind everything (see
+            // ExpandableNowPlaying). Keep a clear, same-sized matched-geometry frame
+            // here so the layout and the expand/collapse glide stay intact without
+            // double-rendering the video.
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: artworkSize)
+                .matchedGeometryEffect(id: PlayerMatchedGeometry.artwork, in: animationNamespace, isSource: coverMatchEnabled && expanded)
+        } else if isVideo {
+            // Landscape/square video uses the full screen width (its native ratio is
+            // preserved, centered) so it isn't boxed into the square.
+            artwork(model.display.artwork)
+                .frame(maxWidth: .infinity)
+                .frame(height: artworkSize)
+                .matchedGeometryEffect(id: PlayerMatchedGeometry.artwork, in: animationNamespace, isSource: coverMatchEnabled && expanded)
+        } else if model.display.isVideoTrack {
+            // Video track whose AVPlayer hasn't spun up yet: show a loading state
+            // rather than flashing the album cover; the video takes over once ready.
+            videoLoadingPlaceholder
+        } else {
+            // Album cover — a centered square (matched-geometry on the square so the
+            // expand/collapse glide to the mini-player stays clean). The inner cover
+            // cross-fades when the track changes (next/previous) while the outer
+            // matched-geometry frame stays stable for the expand glide. The glide is
+            // skipped (just a fade) when there's no cover to glide to — see
+            // `coverMatchEnabled`.
+            ZStack {
                 artwork(model.display.albumArtwork)
-            } else {
-                NowPlayingVisualizer(
-                    spectrum: model.visualizerSpectrum,
-                    albumArtwork: nil,
-                    isPlaying: model.state.isPlaying,
-                    backgroundColor: model.colors.first.map { Color($0) } ?? .black,
-                    rawSamples: model.rawAudioSamples
-                )
+                    .frame(width: artworkSize, height: artworkSize)
+                    .id(model.display)
+                    .transition(.opacity)
             }
+            .frame(width: artworkSize, height: artworkSize)
+            .matchedGeometryEffect(id: PlayerMatchedGeometry.artwork, in: animationNamespace, isSource: coverMatchEnabled && expanded)
+            .frame(maxWidth: .infinity)
+            .animation(.smooth(duration: 0.3), value: model.display)
         }
-        .frame(width: artworkSize, height: artworkSize)
-        .clipped()
+    }
+
+    /// Loading state for a video track while its player spins up — just a spinner
+    /// over a transparent area, framed like the video so the matched-geometry glide
+    /// and the swap to the video stay seamless.
+    var videoLoadingPlaceholder: some View {
+        ProgressView()
+            .tint(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: artworkSize)
+            .matchedGeometryEffect(id: PlayerMatchedGeometry.artwork, in: animationNamespace, isSource: coverMatchEnabled && expanded)
     }
 
     @ViewBuilder
     func artwork(_ art: Artwork) -> some View {
-        let small = !model.state.isPlaying
         ArtworkView(
             art,
             cornerRadius: expanded ? 10 : 7,
-            background: Color(.palette.playerCard.artworkBackground)
+            background: Color(.palette.playerCard.artworkBackground),
+            videoAspectFit: true
         )
+        // Static shadow — the cover doesn't resize or change on play/pause for now.
         .shadow(
-            color: Color(.sRGBLinear, white: 0, opacity: small ? 0.13 : 0.33),
-            radius: small ? 3 : 8,
-            y: small ? 3 : 10
+            color: Color(.sRGBLinear, white: 0, opacity: 0.33),
+            radius: 8,
+            y: 10
         )
+    }
+
+    /// Artwork/visualizer (with the like/save/comment row) + the info strip.
+    /// Crossfaded with the comments panel via the comment button.
+    var mainPanel: some View {
+        // spacing 0 so the panel's height is exactly artwork + the explicit
+        // bottom padding + info strip (keeps `mainContentHeight` accurate).
+        VStack(spacing: 0) {
+            artworkOrVisualizer
+                // Action button row (like/save/comment) removed for now —
+                // re-add this overlay to bring it back.
+                // .overlay(alignment: .bottom) {
+                //     actionIconsRow
+                //         .offset(y: 42)
+                //         .padding(.horizontal, 25)
+                // }
+                .padding(.bottom, artworkVerticalPadding)
+
+            NowPlayingInfoStrip()
+                // Align the credits/About + buttons with the title, scrubber and the
+                // rest of the player content (same inset everywhere).
+                .padding(.horizontal, ViewConst.playerCardPaddings)
+                // Hidden in minimized (immersive) mode.
+                .opacity(minimized ? 0 : 1)
+        }
+        // A little below the safe-area edge so the cover doesn't hug the notch and
+        // the stack reads more vertically centred (kept in sync with mainContentHeight).
+        .padding(.top, artworkTopInset)
     }
 
     var actionIconsRow: some View {
         HStack {
-            HStack(spacing: 16) {
-                Button { } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "bookmark")
-                            .font(.title2)
-                        Text(formatCount(model.trackDetail?.saves ?? 0))
-                            .font(.callout)
-                    }
-                }
-                Button { } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "heart")
-                            .font(.title2)
-                        Text(formatCount(model.trackDetail?.likes ?? 0))
-                            .font(.callout)
-                    }
-                }
+            HStack(spacing: 20) {
+                interactionButton(
+                    outline: .bookmark, filled: .bookmarkFill,
+                    isActive: model.isSaved, activeColor: .white, count: model.saveCount
+                ) { Task { await model.toggleSave() } }
+
+                interactionButton(
+                    outline: .heart, filled: .heartFill,
+                    isActive: model.isLiked, activeColor: Const.likedPink, count: model.likeCount
+                ) { Task { await model.toggleLike() } }
             }
             Spacer()
             Button {
@@ -162,15 +335,41 @@ private extension RegularNowPlaying {
                     selectedPanel = selectedPanel == 1 ? 0 : 1
                 }
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: selectedPanel == 1 ? "bubble.right.fill" : "bubble.right")
-                        .font(.title2)
+                // Count first, then icon — it sits on the right edge, so the icon
+                // hugs the edge and the number reads inward.
+                HStack(spacing: 5) {
                     Text(formatCount(model.trackDetail?.comments ?? 0))
-                        .font(.callout)
+                        .font(.body)
+                    LucideIcon(.messageCircle, .xxl)
                 }
+                .foregroundStyle(Const.inactiveTint)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// A like/save button: outline icon when inactive, a coloured *filled* icon
+    /// that pops in when active (mirrors the web's `fill-current` treatment).
+    func interactionButton(
+        outline: LucideIcon.Name,
+        filled: LucideIcon.Name,
+        isActive: Bool,
+        activeColor: Color,
+        count: Int,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                FillIcon(outline: outline, filled: filled, isActive: isActive, activeColor: activeColor, size: 28)
+                Text(formatCount(count))
+                    .font(.body)
+                    .foregroundStyle(isActive ? activeColor : Const.inactiveTint)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: count)
+                    .animation(.easeInOut(duration: 0.18), value: isActive)
             }
         }
-        .foregroundStyle(.white.opacity(0.8))
+        .buttonStyle(.plain)
     }
 
     private func formatCount(_ count: Int) -> String {
@@ -182,6 +381,35 @@ private extension RegularNowPlaying {
     }
 }
 
+/// Crossfades a Lucide outline icon to its filled, coloured variant when `isActive`,
+/// popping the icon as it fills in — the now-playing like/save affordance.
+private struct FillIcon: View {
+    let outline: LucideIcon.Name
+    let filled: LucideIcon.Name
+    let isActive: Bool
+    let activeColor: Color
+    let size: CGFloat
+    @State private var pop: CGFloat = 1
+
+    var body: some View {
+        ZStack {
+            LucideIcon(outline, size: size)
+                .foregroundStyle(Color.white.opacity(0.85))   // bright enough to read on the player bg
+                .opacity(isActive ? 0 : 1)
+            LucideIcon(filled, size: size)
+                .foregroundStyle(activeColor)
+                .opacity(isActive ? 1 : 0)
+        }
+        .scaleEffect(pop)
+        .animation(.easeInOut(duration: 0.18), value: isActive)
+        .onChange(of: isActive) { _, active in
+            guard active else { return } // pop only when filling in, not when clearing
+            withAnimation(.spring(response: 0.16, dampingFraction: 0.5)) { pop = 1.3 }
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.6).delay(0.12)) { pop = 1 }
+        }
+    }
+}
+
 #Preview {
     @Previewable @State var dependencies = Dependencies.stub
     @Previewable @State var playerController = PlayerController.stub
@@ -189,7 +417,9 @@ private extension RegularNowPlaying {
     RegularNowPlaying(
         expanded: true,
         size: UIScreen.size,
-        animationNamespace: Namespace().wrappedValue
+        animationNamespace: Namespace().wrappedValue,
+        selectedPanel: .constant(0),
+        commentsAtTop: .constant(true)
     )
     .onAppear {
         playerController.mediaState = dependencies.mediaState

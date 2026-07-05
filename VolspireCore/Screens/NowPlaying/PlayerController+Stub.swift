@@ -10,14 +10,10 @@ extension PlayerController {
     static var stub: PlayerController {
         let result = PlayerController()
         result.display = .init(
-            artwork: .radio(URL(
-                string: "https://raw.githubusercontent.com/tmp-acc/GTA-IV-Radio-Stations/main/gta_iv.png"
-            )),
-            albumArtwork: .radio(URL(
-                string: "https://raw.githubusercontent.com/tmp-acc/GTA-IV-Radio-Stations/main/gta_iv.png"
-            )),
-            title: "Los Santos Rock Radio",
-            subtitle: "Classic rock, soft rock, pop rock"
+            artwork: .placeholder(name: "Sample Track"),
+            albumArtwork: .placeholder(name: "Sample Track"),
+            title: "Sample Track",
+            subtitle: "Sample Artist"
         )
         return result
     }

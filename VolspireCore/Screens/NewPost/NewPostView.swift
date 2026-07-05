@@ -5,7 +5,6 @@
 //
 
 import DesignSystem
-import Services
 import SwiftUI
 
 struct NewPostView: View {
@@ -16,19 +15,20 @@ struct NewPostView: View {
     var body: some View {
         VStack(spacing: 0) {
             Capsule()
-                .fill(Color(.systemGray3))
+                .fill(Color.white.opacity(0.18))
                 .frame(width: 36, height: 5)
                 .padding(.top, 8)
                 .padding(.bottom, 20)
 
             Text("Upload New Content")
-                .font(.system(size: 20, weight: .bold))
+                .font(.appHeadline)
+                .foregroundStyle(.white)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
 
             NewPostRow(
-                icon: "music.note",
+                icon: .music,
                 title: "Track",
                 description: "Upload a finished track with audio with cover art or from a video"
             ) {
@@ -36,23 +36,16 @@ struct NewPostView: View {
                 onSelect("track")
             }
             NewPostRow(
-                icon: "square.grid.2x2.fill",
-                title: "Sample Pack",
-                description: "Share a collection of sounds, loops or presets"
+                icon: .handshake,
+                title: "Listing",
+                description: "Post to the collab board — find a vocalist, producer, or any collaborator"
             ) {
                 dismiss()
-                onSelect("sample_pack")
-            }
-            NewPostRow(
-                icon: "sparkles",
-                title: "Skill Highlight",
-                description: "Showcase your production skills or techniques"
-            ) {
-                dismiss()
-                onSelect("skill_highlight")
+                onSelect("listing")
             }
         }
         .padding(.bottom, 20)
+        .sheetBackground()
         .background(
             GeometryReader { geometry in
                 Color.clear.preference(key: ContentHeightKey.self, value: geometry.size.height)
@@ -73,42 +66,43 @@ private struct ContentHeightKey: PreferenceKey {
 }
 
 private struct NewPostRow: View {
-    let icon: String
+    let icon: LucideIcon.Name
     let title: String
     let description: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: icon)
-                    .font(.system(size: 22))
-                    .foregroundStyle(Color.brand)
-                    .frame(width: 36, height: 36)
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.06))
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Color.vBorder, lineWidth: 1)
+                    LucideIcon(icon, .lg)
+                        .foregroundStyle(Color.vText2)
+                }
+                .frame(width: 44, height: 44)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.appBodyMedium)
+                        .foregroundStyle(.white)
                     Text(description)
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
+                        .font(.appFootnote)
+                        .foregroundStyle(Color.vText2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer()
 
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.tertiary)
+                LucideIcon(.chevronRight, .sm)
+                    .foregroundStyle(Color.vText3)
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 18)
+            .padding(.vertical, 16)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
     }
-}
-
-#Preview {
-    NewPostView(onSelect: { _ in })
 }

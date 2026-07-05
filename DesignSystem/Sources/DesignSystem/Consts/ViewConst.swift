@@ -11,7 +11,15 @@ public enum ViewConst {}
 
 public extension ViewConst {
     static let playerCardPaddings: CGFloat = 24
-    static let screenPaddings: CGFloat = 20
+    /// App-wide horizontal screen margin for headers, text, lists and rails.
+    static let screenPaddings: CGFloat = 16
+    /// Tighter horizontal edge padding for card/listing grids, so 2-column grids
+    /// still fill a bit more of the screen than text content.
+    static let gridPaddings: CGFloat = 8
+    /// Header action-icon glyph size (bell / search / messages / "…"), used app-wide.
+    static let headerIconSize: CGFloat = 24
+    /// Back-chevron glyph size in pushed-screen nav bars.
+    static let backIconSize: CGFloat = 16
     static let itemPeekAmount: CGFloat = 36
     static let compactNowPlayingHeight: CGFloat = 56
 

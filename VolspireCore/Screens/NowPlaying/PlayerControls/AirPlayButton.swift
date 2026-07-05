@@ -5,10 +5,12 @@
 //
 
 import AVKit
+import DesignSystem
 import SwiftUI
 import UIKit
 
 struct AirPlayButton: View {
+    var size: CGFloat = 24
     @State private var presenter = AirPlayPresenter()
 
     var body: some View {
@@ -25,8 +27,7 @@ struct AirPlayButton: View {
                     presenter.presentAirPlayPicker()
                 },
                 label: {
-                    Image(systemName: "airplayaudio")
-                        .font(.system(size: 24))
+                    LucideIcon(.airplay, size: size)
                 }
             )
         }

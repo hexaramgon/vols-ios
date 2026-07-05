@@ -60,7 +60,7 @@ struct CreateServiceScreen: View {
                 Spacer()
 
                 Text(isEditing ? "Edit Service" : "New Service")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.appBodyLargeSemibold)
 
                 Spacer()
 
@@ -107,10 +107,10 @@ struct CreateServiceScreen: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Title")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.appFootnoteMedium)
                     .foregroundStyle(.secondary)
                 TextField("What do you offer?", text: $title)
-                    .font(.system(size: 16))
+                    .font(.appBody)
                     .padding(12)
                     .background(Color(.secondarySystemGroupedBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -118,10 +118,10 @@ struct CreateServiceScreen: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Description")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.appFootnoteMedium)
                     .foregroundStyle(.secondary)
                 TextField("Describe your service...", text: $description, axis: .vertical)
-                    .font(.system(size: 16))
+                    .font(.appBody)
                     .lineLimit(3...6)
                     .padding(12)
                     .background(Color(.secondarySystemGroupedBackground))
@@ -149,7 +149,7 @@ struct CreateServiceScreen: View {
                         }
                     } label: {
                         Text(type)
-                            .font(.system(size: 14, weight: .medium))
+                            .font(.appSubheadlineMedium)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 10)
                             .background(
@@ -178,7 +178,7 @@ struct CreateServiceScreen: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Currency")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.appFootnoteMedium)
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 8) {
@@ -189,7 +189,7 @@ struct CreateServiceScreen: View {
                             }
                         } label: {
                             Text(c)
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.appFootnoteSemibold)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 8)
                                 .background(
@@ -207,17 +207,17 @@ struct CreateServiceScreen: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Price")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.appFootnoteMedium)
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 0) {
                     Text(currencySymbol)
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.appBodyMedium)
                         .foregroundStyle(.secondary)
                         .padding(.leading, 12)
 
                     TextField("0.00", text: $priceText)
-                        .font(.system(size: 16))
+                        .font(.appBody)
                         .keyboardType(.decimalPad)
                         .padding(12)
                 }
@@ -235,17 +235,17 @@ struct CreateServiceScreen: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Delivery Time")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.appFootnoteMedium)
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 0) {
                     TextField("e.g. 3", text: $deliveryDaysText)
-                        .font(.system(size: 16))
+                        .font(.appBody)
                         .keyboardType(.numberPad)
                         .padding(12)
 
                     Text("days")
-                        .font(.system(size: 14))
+                        .font(.appSubheadline)
                         .foregroundStyle(.secondary)
                         .padding(.trailing, 12)
                 }
@@ -253,7 +253,7 @@ struct CreateServiceScreen: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 Text("Optional — leave blank if not applicable")
-                    .font(.system(size: 12))
+                    .font(.appCaption)
                     .foregroundStyle(.tertiary)
             }
         }
@@ -299,7 +299,7 @@ struct CreateServiceScreen: View {
                         ? (isEditing ? "Saving..." : "Creating...")
                         : (isEditing ? "Save Changes" : "Create Service")
                 )
-                .font(.system(size: 16, weight: .semibold))
+                .font(.appHeadline)
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
@@ -318,7 +318,7 @@ struct CreateServiceScreen: View {
                 .padding(.bottom, 20)
             HStack {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.appFootnoteSemibold)
                     .foregroundStyle(.secondary)
                     .textCase(.uppercase)
                     .tracking(0.5)

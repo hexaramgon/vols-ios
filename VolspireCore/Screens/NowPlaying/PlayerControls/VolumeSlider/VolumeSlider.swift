@@ -25,14 +25,12 @@ public struct VolumeSlider: View {
                 value: $viewModel.currentVolume,
                 in: range,
                 leadingLabel: {
-                    Image(systemName: "speaker.fill")
+                    LucideIcon(.volume1, .sm)
                         .padding(.trailing, 10)
-                        .symbolEffect(.bounce, value: minVolumeAnimationTrigger)
                 },
                 trailingLabel: {
-                    Image(systemName: "speaker.wave.3.fill")
+                    LucideIcon(.volume2, .sm)
                         .padding(.leading, 10)
-                        .symbolEffect(.bounce, value: maxVolumeAnimationTrigger)
                 },
                 onValueChanged: { [weak viewModel] in
                     viewModel?.setVolume($0)
@@ -42,7 +40,7 @@ public struct VolumeSlider: View {
                 }
             )
             .sliderStyle(.volume)
-            .font(.system(size: 14))
+            .font(.appSubheadline)
             .onChange(of: viewModel.currentVolume) {
                 if viewModel.currentVolume == range.lowerBound {
                     minVolumeAnimationTrigger.toggle()

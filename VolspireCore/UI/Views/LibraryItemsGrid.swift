@@ -23,7 +23,7 @@ struct LibraryItemsGrid: View {
     var body: some View {
         VStack(spacing: 7) {
             Text(title)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.appTitleSemibold)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, Self.itemPadding)
 
@@ -64,7 +64,7 @@ private struct LibraryItemView: View {
             ArtworkView(label.artwork)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label.title)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.appFootnoteMedium)
                     .lineLimit(1)
 
                 Text(label.subtitle ?? "")

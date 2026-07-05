@@ -20,6 +20,7 @@ enum WorkspaceLoadingState {
 final class WorkspaceScreenViewModel {
     var folders: [ApiUserFolder] = []
     var loadingState: WorkspaceLoadingState = .idle
+    var searchText = ""
     var showCreateFolder = false
     var newFolderName = ""
     var newFolderDescription = ""
@@ -33,6 +34,14 @@ final class WorkspaceScreenViewModel {
 
     init(supabaseService: SupabaseService = SupabaseService()) {
         self.supabaseService = supabaseService
+    }
+
+    var filtered: [ApiUserFolder] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return folders }
+        return folders.filter {
+            $0.name.lowercased().contains(q) || ($0.description?.lowercased().contains(q) ?? false)
+        }
     }
 
     func loadFolders() async {

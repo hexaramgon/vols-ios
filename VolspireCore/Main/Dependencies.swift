@@ -18,6 +18,10 @@ class Dependencies: Observable {
     let mediaState: MediaState
     let mediaPlayer: MediaPlayer
     let playerController: PlayerController
+    let analytics: AnalyticsService
+    /// Observes the player and emits the listen funnel (track_play → stream → track_ended).
+    /// Held here so its subscriptions live for the app's lifetime.
+    let listenAnalytics: ListenAnalyticsTracker
 
     init(
         apiService: APIService,
@@ -26,7 +30,9 @@ class Dependencies: Observable {
         dataController: DataController,
         mediaState: MediaState,
         mediaPlayer: MediaPlayer,
-        playerController: PlayerController
+        playerController: PlayerController,
+        analytics: AnalyticsService,
+        listenAnalytics: ListenAnalyticsTracker
     ) {
         self.apiService = apiService
         self.supabaseService = supabaseService
@@ -35,12 +41,19 @@ class Dependencies: Observable {
         self.mediaState = mediaState
         self.mediaPlayer = mediaPlayer
         self.playerController = playerController
+        self.analytics = analytics
+        self.listenAnalytics = listenAnalytics
     }
 }
 
 extension Dependencies {
     static var stub: Dependencies = {
         let mediaPlayer = MediaPlayer()
+        let analytics = AnalyticsService(sink: NoopAnalyticsSink())
+        AnalyticsService.shared = analytics
+        let listenAnalytics = ListenAnalyticsTracker(player: mediaPlayer, analytics: analytics)
+        let playerController = PlayerController()
+        playerController.analytics = analytics
         return Dependencies(
             apiService: APIService(baseURL: ""),
             supabaseService: SupabaseService(),
@@ -48,7 +61,9 @@ extension Dependencies {
             dataController: DataController(),
             mediaState: DefaultMediaState.stub,
             mediaPlayer: mediaPlayer,
-            playerController: PlayerController(),
+            playerController: playerController,
+            analytics: analytics,
+            listenAnalytics: listenAnalytics
         )
     }()
 
@@ -66,6 +81,13 @@ extension Dependencies {
         let supabaseService = SupabaseService()
         let authManager = AuthManager()
 
+        // Analytics: vendor-neutral facade over a Supabase sink. To migrate to a
+        // different events backend later, swap `SupabaseAnalyticsSink()` here.
+        let analytics = AnalyticsService(sink: SupabaseAnalyticsSink())
+        AnalyticsService.shared = analytics
+        playerController.analytics = analytics
+        let listenAnalytics = ListenAnalyticsTracker(player: mediaPlayer, analytics: analytics)
+
         return Dependencies(
             apiService: apiService,
             supabaseService: supabaseService,
@@ -73,7 +95,9 @@ extension Dependencies {
             dataController: dataController,
             mediaState: mediaState,
             mediaPlayer: mediaPlayer,
-            playerController: playerController
+            playerController: playerController,
+            analytics: analytics,
+            listenAnalytics: listenAnalytics
         )
     }
 }

@@ -20,9 +20,23 @@ struct NowPlayingBackground: View {
             Rectangle()
                 .fill(.thickMaterial)
             if canBeExpanded {
-                ColorfulBackground(colors: colors)
-                    .overlay(Color(UIColor(white: 0.4, alpha: 0.4)))
-                    .opacity(expanded ? 1 : 0)
+                // Cheap static SwiftUI gradient: album colours fading into the app's
+                // dark base. The old version's cost was the *animated* Metal shader,
+                // not the gradient — a LinearGradient rasterizes once, no per-frame work.
+                // Cross-fades to the new track's colours on switch (id + opacity
+                // transition, same pattern as the cover/title).
+                ZStack {
+                    LinearGradient(
+                        colors: backgroundGradientColors,
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .overlay(Color.black.opacity(0.2))
+                    .id(colors)
+                    .transition(.opacity)
+                }
+                .animation(.easeInOut(duration: 0.5), value: colors)
+                .opacity(expanded ? 1 : 0)
             }
         }
         .clipShape(.rect(cornerRadius: playerCornerRadius))
@@ -31,6 +45,14 @@ struct NowPlayingBackground: View {
 }
 
 private extension NowPlayingBackground {
+    /// Album-tinted gradient stops fading into the app's dark base. Falls back to a
+    /// neutral dark gradient when no album colours are available.
+    var backgroundGradientColors: [Color] {
+        let album = Array(colors.prefix(2))
+        let base = Color(red: 1.0 / 255.0, green: 1.0 / 255.0, blue: 2.0 / 255.0)
+        return album.isEmpty ? [Color(white: 0.22), base] : album + [base]
+    }
+
     var playerCornerRadius: CGFloat {
         expanded ? expandPlayerCornerRadius : collapsedPlayerCornerRadius
     }

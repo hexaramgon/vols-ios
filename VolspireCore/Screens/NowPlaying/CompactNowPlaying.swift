@@ -11,7 +11,9 @@ import SwiftUI
 struct CompactNowPlaying: View {
     @Environment(PlayerController.self) var model
     @Binding var expanded: Bool
-    var hideArtworkOnExpanded: Bool = true
+    /// When false (workspace file with no cover, or the comments panel is up) the
+    /// cover doesn't glide into the expanded player — it just fades with the mini bar.
+    var coverMatchEnabled: Bool = true
     var animationNamespace: Namespace.ID
     @State var forwardAnimationTrigger: PlayerButtonTrigger = .one(bouncing: false)
     @State var viewWidth: CGFloat = .zero
@@ -37,15 +39,27 @@ struct CompactNowPlaying: View {
 private extension CompactNowPlaying {
     @ViewBuilder
     func artwork(cornerRadius: CGFloat) -> some View {
-        if !hideArtworkOnExpanded || !expanded {
+        if coverMatchEnabled {
+            // Hidden once expanded so the matched-geometry source lives in the
+            // expanded player — the cover glides between the two on expand/collapse.
+            if !expanded {
+                ArtworkView(
+                    model.display.artwork,
+                    cornerRadius: cornerRadius,
+                    background: Color(.systemGray4)
+                )
+                .matchedGeometryEffect(
+                    id: PlayerMatchedGeometry.artwork,
+                    in: animationNamespace
+                )
+            }
+        } else {
+            // No expanded cover to glide to (file / comments panel) — keep it
+            // rendered and let it fade with the mini bar's opacity.
             ArtworkView(
                 model.display.artwork,
                 cornerRadius: cornerRadius,
                 background: Color(.systemGray4)
-            )
-            .matchedGeometryEffect(
-                id: PlayerMatchedGeometry.artwork,
-                in: animationNamespace
             )
         }
     }
@@ -68,11 +82,11 @@ private extension CompactNowPlaying {
 //                    MarqueeText(title, config: cfg)
                 Text(title)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.appFootnoteSemibold)
                     .id(model.display)
                 let subtitle = model.display.subtitle
                 Text(subtitle)
-                    .font(.system(size: 12, weight: .regular))
+                    .font(.appCaption)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .id(model.display)
             }
@@ -85,12 +99,22 @@ private extension CompactNowPlaying {
             HStack(spacing: 0) {
                 PlayerButton(
                     label: {
-                        PlayerButtonLabel(type: model.playPauseButton, size: 16)
+                        Group {
+                            switch model.playPauseButton {
+                            case .pause: Image(systemName: "pause.fill")
+                            default: Image(systemName: "play.fill")
+                            }
+                        }
+                        .font(.system(size: 21, weight: .medium))
+                        // Dimmed + non-interactive while the track loads.
+                        .foregroundStyle(model.isLoadingTrack ? Color.white.opacity(0.3) : .white)
                     },
                     onEnded: {
+                        guard !model.isLoadingTrack else { return }
                         model.onPlayPause()
                     }
                 )
+                .allowsHitTesting(!model.isLoadingTrack)
                 if !inlinedBottomAccessory {
                     PlayerButton(
                         label: {
@@ -121,7 +145,8 @@ extension PlayerButtonConfig {
     static var miniPlayer: Self {
         Self(
             size: 44,
-            tint: .init(Palette.PlayerCard.translucent.withAlphaComponent(0.3))
+            tint: .init(Palette.PlayerCard.translucent.withAlphaComponent(0.3)),
+            showsPressFeedback: false
         )
     }
 }

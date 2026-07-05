@@ -2,17 +2,26 @@
 //  NotificationsScreenViewModel.swift
 //  Volspire
 //
+//  Loads the signed-in user's notifications (`get_user_notifications`) and marks
+//  them read on view, mirroring the web app's `useNotifications` hook.
 //
 
 import Foundation
 import Observation
 import Services
 
-enum NotificationsLoadingState {
+enum NotificationsLoadingState: Equatable {
     case idle
     case loading
     case loaded
     case error(String)
+}
+
+/// A recency bucket (Today / This Week / Earlier) for the grouped feed.
+struct NotificationGroup: Identifiable {
+    let id: String
+    let title: String
+    let items: [ApiNotification]
 }
 
 @Observable @MainActor
@@ -20,99 +29,78 @@ final class NotificationsScreenViewModel {
     var notifications: [ApiNotification] = []
     var loadingState: NotificationsLoadingState = .idle
 
+    /// Ids that were unread when the screen opened. The UI highlights against
+    /// this snapshot so the unread treatment survives `markAllRead` (which flips
+    /// `is_read` server-side) — matching the web's open-time snapshot.
+    var unreadSnapshot: Set<String> = []
+
     private let supabaseService: SupabaseService
 
     init(supabaseService: SupabaseService = SupabaseService()) {
         self.supabaseService = supabaseService
     }
 
-    func loadNotifications() async {
-        guard case .idle = loadingState else { return }
-        loadingState = .loading
+    var unreadCount: Int { notifications.filter { !($0.isRead ?? false) }.count }
 
+    /// Notifications bucketed by recency for the grouped feed.
+    var groups: [NotificationGroup] {
+        let cal = Calendar.current
+        let now = Date()
+        var today: [ApiNotification] = []
+        var week: [ApiNotification] = []
+        var earlier: [ApiNotification] = []
+        for n in notifications {
+            let date = MessageTime.parse(n.createdAt) ?? now
+            if cal.isDateInToday(date) {
+                today.append(n)
+            } else if let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day, days < 7 {
+                week.append(n)
+            } else {
+                earlier.append(n)
+            }
+        }
+        var result: [NotificationGroup] = []
+        if !today.isEmpty { result.append(NotificationGroup(id: "today", title: "Today", items: today)) }
+        if !week.isEmpty { result.append(NotificationGroup(id: "week", title: "This Week", items: week)) }
+        if !earlier.isEmpty { result.append(NotificationGroup(id: "earlier", title: "Earlier", items: earlier)) }
+        return result
+    }
+
+    func load() async {
+        if notifications.isEmpty { loadingState = .loading }
         do {
-            notifications = try await supabaseService.getUserNotifications()
+            let items = try await supabaseService.getUserNotifications()
+            notifications = items
+            unreadSnapshot = Set(items.filter { !($0.isRead ?? false) }.map(\.id))
             loadingState = .loaded
+            await markAllRead()
         } catch {
-            print("[NotificationsVM] Failed to load notifications: \(error)")
-            loadingState = .error(error.localizedDescription)
+            print("[NotificationsVM] load: \(error)")
+            if notifications.isEmpty { loadingState = .error(error.localizedDescription) }
         }
     }
 
     func refresh() async {
-        loadingState = .idle
-        await loadNotifications()
+        await load()
     }
 
-    var unreadCount: Int {
-        notifications.filter { !$0.isRead }.count
+    /// Flips read state server-side (and locally), but leaves `unreadSnapshot`
+    /// intact so already-rendered highlights stay until the next reload.
+    func markAllRead() async {
+        guard !unreadSnapshot.isEmpty else { return }
+        try? await supabaseService.markNotificationsRead()
     }
 
-    // MARK: - Display Helpers
-
-    func icon(for notification: ApiNotification) -> String {
-        switch notification.action {
-        case "follow": return "person.fill.badge.plus"
-        case "like": return "heart.fill"
-        case "comment": return "bubble.left.fill"
-        case "download": return "arrow.down.circle.fill"
-        case "release": return "music.note"
-        case "feature": return "star.fill"
-        case "collab": return "person.2.fill"
-        default: return "bell.fill"
+    /// "just now" / "5m" / "3h" / "2d" / date — mirrors the web's notification timeAgo.
+    func timeAgo(_ iso: String) -> String {
+        guard let date = MessageTime.parse(iso) else { return "" }
+        let s = max(0, Int(Date().timeIntervalSince(date)))
+        switch s {
+        case ..<60: return "just now"
+        case ..<3600: return "\(s / 60)m"
+        case ..<86400: return "\(s / 3600)h"
+        case ..<2592000: return "\(s / 86400)d"
+        default: return date.formatted(date: .abbreviated, time: .omitted)
         }
-    }
-
-    func iconColor(for notification: ApiNotification) -> String {
-        switch notification.action {
-        case "follow": return "blue"
-        case "like": return "pink"
-        case "comment": return "green"
-        case "download": return "purple"
-        case "release": return "orange"
-        case "feature": return "yellow"
-        case "collab": return "blue"
-        default: return "gray"
-        }
-    }
-
-    func title(for notification: ApiNotification) -> String {
-        switch notification.action {
-        case "follow": return "New Follower"
-        case "like": return "Track Liked"
-        case "comment": return "New Comment"
-        case "download": return "Download Complete"
-        case "release": return "New Release"
-        case "feature": return "Featured"
-        case "collab": return "Collab Request"
-        default: return "Notification"
-        }
-    }
-
-    func subtitle(for notification: ApiNotification) -> String {
-        let actorName = notification.actor?.username ?? "Someone"
-        switch notification.action {
-        case "follow": return "\(actorName) started following you"
-        case "like": return "\(actorName) liked your track"
-        case "comment": return "\(actorName) commented on your track"
-        case "download": return "Your download is ready"
-        case "release": return "\(actorName) dropped a new track"
-        case "feature": return "Your track was featured"
-        case "collab": return "\(actorName) wants to collaborate"
-        default: return "\(actorName) interacted with your content"
-        }
-    }
-
-    func relativeTime(from dateString: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let date = formatter.date(from: dateString) ?? {
-            formatter.formatOptions = [.withInternetDateTime]
-            return formatter.date(from: dateString)
-        }()
-        guard let date else { return "" }
-        let relative = RelativeDateTimeFormatter()
-        relative.unitsStyle = .abbreviated
-        return relative.localizedString(for: date, relativeTo: .now)
     }
 }

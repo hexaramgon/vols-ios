@@ -2,28 +2,34 @@
 //  ProfileScreen.swift
 //  Volspire
 //
+//  Pure-dark artist profile (matches the web app), themed with the expanded
+//  player's dominant-colour treatment. This file is just the orchestration —
+//  each section lives in its own file under `Views/`.
 //
 
 import DesignSystem
-import Kingfisher
-import MediaLibrary
 import Services
 import SwiftUI
 
-enum ProfileSection: String, CaseIterable {
-    case tracks = "Tracks"
-    case services = "Services"
-}
-
 struct ProfileScreen: View {
-    @Environment(Router.self) var router
-    @Environment(Dependencies.self) var dependencies
+    @Environment(Router.self) private var router
+    @Environment(Dependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
+    @Environment(AvatarPreviewState.self) private var avatarPreview
+
     @State private var viewModel = ProfileScreenViewModel()
-    @State var scrollOffset: CGFloat = 0
-    @State private var selectedSection: ProfileSection = .tracks
+    @State private var scrollOffset: CGFloat = 0
+    @State private var selectedTab: ProfileTab = .tracks
+    /// Direction the next tab change should slide (true = new tab is to the right).
+    @State private var slideForward = true
     @State private var showEditProfile = false
     @State private var showShareSheet = false
+    /// The tapped avatar's on-screen frame — handed to the app-level preview so the
+    /// zoom (which lives above the tab bar / mini-player) grows from the right spot.
+    @State private var avatarFrame: CGRect = .zero
+    /// Flips true once the real profile is on screen, driving the staggered
+    /// fade-up reveal of the hero, tab bar, and tab content.
+    @State private var contentAppeared = false
 
     let userId: String?
 
@@ -31,89 +37,124 @@ struct ProfileScreen: View {
         self.userId = userId
     }
 
-    /// Resolved user ID — uses auth user ID when none is provided (own profile tab)
-    private var resolvedUserId: String {
-        userId ?? dependencies.authManager.currentUserId ?? ""
-    }
-
-    var navBarOpacity: Double {
-        let bannerHeight = UIScreen.size.width * 0.85
-        let threshold = bannerHeight - 100
-        if scrollOffset < threshold - 60 {
-            return 0
-        } else if scrollOffset >= threshold {
-            return 1
-        }
-        return (scrollOffset - (threshold - 60)) / 60
-    }
-
-    private var isOwnProfile: Bool {
-        userId == nil || userId == dependencies.authManager.currentUserId
-    }
-
     var body: some View {
-        Group {
-            if viewModel.loadingState == .idle || viewModel.loadingState == .loading {
-                ScrollView {
-                    profileSkeletonContent
-                }
-                .scrollDisabled(true)
+        // Crossfade the skeleton out as the real profile fades+rises in.
+        ZStack {
+            if isInitialLoading {
+                ScrollView { ProfileSkeleton() }
+                    .scrollDisabled(true)
+                    .transition(.opacity)
+            } else if isError {
+                // Couldn't load (e.g. no network) — show an error with a retry
+                // instead of an empty profile.
+                profileErrorState
+                    .transition(.opacity)
             } else {
                 ScrollView {
-                    scrollContent
+                    VStack(spacing: 0) {
+                        GeometryReader { geo in
+                            // Pull-down at the top → minY > 0; stretch the hero up
+                            // to cover the gap so the banner fills it (no black).
+                            // Always extend up by the top safe-area inset too, so
+                            // the banner bleeds under the status bar instead of
+                            // leaving a black band there. The GeometryReader's own
+                            // frame stays `heroHeight`, so content below is unmoved.
+                            let safeTop = ViewConst.safeAreaInsets.top
+                            let stretch = max(0, geo.frame(in: .global).minY)
+                            ProfileHeroView(
+                                viewModel: viewModel,
+                                isOwnProfile: isOwnProfile,
+                                userId: resolvedUserId,
+                                onEditProfile: { showEditProfile = true },
+                                onShareProfile: { showShareSheet = true },
+                                height: ProfileLayout.heroHeight + stretch + safeTop,
+                                avatarFrame: $avatarFrame,
+                                avatarHidden: avatarPreview.mounted,
+                                onAvatarTap: {
+                                    if let url = viewModel.profileImageURL {
+                                        avatarPreview.present(url: url, sourceFrame: avatarFrame)
+                                    }
+                                }
+                            )
+                            .offset(y: -stretch - safeTop)
+                        }
+                        .frame(height: ProfileLayout.heroHeight)
+                        // Fade only (distance 0) — the hero bleeds under the
+                        // status bar, so sliding it down would flash a gap.
+                        .entranceReveal(contentAppeared, index: 0, distance: 0)
+                        ProfileTabBar(tabs: visibleTabs, selected: selectedTab, onSelect: select)
+                            .entranceReveal(contentAppeared, index: 1)
+                        ProfileTabContent(
+                            viewModel: viewModel,
+                            selected: selectedTab,
+                            slideForward: slideForward,
+                            isOwnProfile: isOwnProfile
+                        )
+                        .entranceReveal(contentAppeared, index: 2)
+                    }
                 }
-                .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                    geometry.contentOffset.y
-                } action: { _, newValue in
+                .scrollIndicators(.hidden)
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, newValue in
                     scrollOffset = newValue
                 }
+                // Kick off the cascade once the real profile is mounted.
+                .onAppear { contentAppeared = true }
             }
         }
-        .contentMargins(.bottom, ViewConst.screenPaddings, for: .scrollContent)
-        .ignoresSafeArea(edges: [.top])
+        .animation(.easeInOut(duration: 0.35), value: isInitialLoading)
+        .animation(.easeInOut(duration: 0.35), value: isError)
+        .background(Color.vBase.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .ignoresSafeArea(edges: .top)
         .navigationBarBackButtonHidden(true)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             if !isOwnProfile {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        dismiss()
-                    } label: {
+                    Button { dismiss() } label: {
                         Image(systemName: "chevron.left")
-                            .font(.system(size: 17, weight: .semibold))
+                            .font(.system(size: ViewConst.backIconSize, weight: .semibold))
                             .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+                            .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
                     }
                 }
             }
+            // Centred title via the system principal item — same as See all/Settings,
+            // so it's guaranteed centred and aligned with the back button.
+            ToolbarItem(placement: .principal) {
+                Text(viewModel.username)
+                    .font(.appHeadline)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .opacity(miniHeaderOpacity)
+            }
         }
         .overlay(alignment: .top) {
-            ZStack {
-                Color(UIColor { traits in
-                    traits.userInterfaceStyle == .dark
-                        ? UIColor(white: 0.12, alpha: 1)
-                        : UIColor(white: 0.92, alpha: 1)
-                })
-                .opacity(navBarOpacity)
-
-                Text(viewModel.username)
-                    .font(.system(size: 17, weight: .semibold))
-                    .opacity(navBarOpacity)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, (UIApplication.shared.connectedScenes
-                        .compactMap { $0 as? UIWindowScene }
-                        .first?.windows.first?.safeAreaInsets.top ?? 59))
-            }
-            .frame(height: (UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first?.windows.first?.safeAreaInsets.top ?? 59) + 44)
-            .ignoresSafeArea(edges: .top)
-            .allowsHitTesting(false)
-            .animation(.easeInOut(duration: 0.2), value: navBarOpacity)
+            ProfileMiniHeader(opacity: miniHeaderOpacity)
         }
         .enableSwipeBack()
         .sheet(isPresented: $showEditProfile) {
             EditProfileScreen(viewModel: viewModel, userId: resolvedUserId)
+        }
+        .sheet(isPresented: $showShareSheet) {
+            // The web profile route is /profile/<username> (userId 404s), so share
+            // the username link plus a short caption.
+            let username = viewModel.username
+            if !username.isEmpty, let link = URL(string: "https://volspire.com/profile/\(username)") {
+                ActivityViewController(activityItems: [
+                    "Check out @\(username) on Volspire 🎵",
+                    link,
+                ])
+                .presentationDetents([.medium, .large])
+            }
+        }
+        .sheet(isPresented: $viewModel.showCollabSheet) {
+            CollabRequestSheet(
+                viewModel: viewModel,
+                userId: resolvedUserId,
+                username: viewModel.username,
+                currentUserId: dependencies.authManager.currentUserId ?? ""
+            )
         }
         .sheet(isPresented: $viewModel.showCreateService) {
             CreateServiceScreen(viewModel: viewModel)
@@ -121,607 +162,126 @@ struct ProfileScreen: View {
         .sheet(item: $viewModel.editingService) { service in
             CreateServiceScreen(viewModel: viewModel, editing: service)
         }
+        .sheet(item: $viewModel.trackOptionsTrack) { track in
+            TrackOptionsSheet(
+                artwork: track.coverURL.map { .webImage($0) } ?? .placeholder(name: track.title),
+                title: track.title,
+                artist: "@\(viewModel.username)",
+                meta: track.isPrivate ? "Private" : "Public",
+                actions: trackOptionsActions(for: track)
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
+        .fullScreenCover(item: $viewModel.editingTrackDetail) { detail in
+            EditTrackScreen(
+                viewModel: EditTrackViewModel(
+                    editing: detail,
+                    supabaseService: dependencies.supabaseService,
+                    storageService: StorageService(),
+                    userId: resolvedUserId
+                ),
+                onSaved: { Task { await viewModel.refreshTrack(trackId: detail.trackId) } }
+            )
+        }
+        .confirmationDialog("Delete this track?", isPresented: $viewModel.showDeleteTrackConfirm, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    if let id = viewModel.pendingDeleteTrackId {
+                        _ = await viewModel.deleteTrack(trackId: id)
+                    }
+                    viewModel.pendingDeleteTrackId = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { viewModel.pendingDeleteTrackId = nil }
+        } message: {
+            Text("This removes the track from your profile and library. This can't be undone.")
+        }
         .task {
             viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
-            await viewModel.loadProfile(userId: resolvedUserId)
+            await loadEverything()
         }
-    }
-
-    var profileBarOpacity: Double {
-        let imageHeight = UIScreen.size.width * 0.55
-        let topOffset = imageHeight - scrollOffset - ProfileBar.Const.height
-        let high: CGFloat = 140
-        let low: CGFloat = 25
-
-        if topOffset >= high {
-            return 1
-        } else if topOffset <= low {
-            return 0
-        }
-        return (topOffset - low) / (high - low)
     }
 }
 
+// MARK: - Derived state
+
 private extension ProfileScreen {
-    var scrollContent: some View {
-        VStack(spacing: -ProfileBar.Const.height) {
-            ParallaxHeaderView(height: UIScreen.size.width * 0.85) {
-                if let bannerURL = viewModel.bannerImageURL {
-                    KFImage(bannerURL)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    Color(.systemGray5)
-                }
-            }
-            VStack(spacing: 0) {
-                
-                VStack(spacing: 0) {
-                    // Avatar + name row, overlapping the banner
-                    HStack(alignment: .center, spacing: 14) {
-                        profileAvatar
-                            .offset(y: -60)
-                            .padding(.bottom, -60)
-                        Text(viewModel.username.isEmpty ? "Profile" : viewModel.username)
-                            .font(.system(size: 22, weight: .bold))
-                        Spacer()
-                    }
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                    .padding(.top, 6)
-
-                    VStack(alignment: .leading, spacing: 16) {
-                        if !viewModel.bio.isEmpty {
-                            Text(viewModel.bio)
-                                .font(.system(size: 14))
-                                .foregroundStyle(.secondary)
-                        }
-
-                        if !viewModel.location.isEmpty {
-                            HStack(spacing: 4) {
-                                Image(systemName: "mappin.and.ellipse")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
-                                Text(viewModel.location)
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                    .padding(.top, 20)
-
-                    profileInfo
-                        .padding(.horizontal, ViewConst.screenPaddings)
-                        .padding(.top, 16)
-
-                    actionButtons
-                        .padding(.horizontal, ViewConst.screenPaddings)
-                        .padding(.top, 24)
-
-                    sectionPicker
-                        .padding(.top, 20)
-
-                    TabView(selection: $selectedSection) {
-                        Group {
-                            if !viewModel.tracks.isEmpty {
-                                tracksList
-                            } else {
-                                emptyPlaceholder(
-                                    icon: "music.note",
-                                    title: "No tracks yet",
-                                    subtitle: "Tracks will appear here once uploaded"
-                                )
-                            }
-                        }
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .tag(ProfileSection.tracks)
-
-                        VStack(spacing: 0) {
-                            if isOwnProfile {
-                                HStack {
-                                    Spacer()
-                                    Button {
-                                        viewModel.showCreateService = true
-                                    } label: {
-                                        Image(systemName: "plus")
-                                            .font(.system(size: 15, weight: .semibold))
-                                            .foregroundStyle(Color.brand)
-                                    }
-                                }
-                                .padding(.horizontal, ViewConst.screenPaddings)
-                                .padding(.top, 8)
-                            }
-                            servicesContent
-                        }
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .tag(ProfileSection.services)
-                    }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
-                    .frame(minHeight: 600)
-                    .padding(.top, 12)
-
-                    if viewModel.loadingState == .loading {
-                        ProgressView()
-                            .padding(.top, 40)
-                    }
-
-                    if case let .error(message) = viewModel.loadingState {
-                        Text(message)
-                            .font(.system(size: 14))
-                            .foregroundStyle(.secondary)
-                            .padding(.top, 40)
-                    }
-                }
-                .gradientBackground()
-            }
-        }
+    /// Resolved user ID — uses the auth user ID when none is provided (own tab).
+    var resolvedUserId: String {
+        userId ?? dependencies.authManager.currentUserId ?? ""
     }
 
-    var profileAvatar: some View {
-        Group {
-            if let profileImageURL = viewModel.profileImageURL {
-                KFImage(profileImageURL)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                Image(systemName: "person.crop.circle.fill")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .foregroundStyle(Color(.palette.textSecondary))
-            }
-        }
-        .frame(width: 100, height: 100)
-        .clipShape(Circle())
-        // .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 3))
+    var isOwnProfile: Bool {
+        userId == nil || userId == dependencies.authManager.currentUserId
     }
 
-    var profileInfo: some View {
-        HStack {
-            Spacer()
-            statView(value: viewModel.trackCount, label: "Tracks")
-            Spacer()
-            statView(value: viewModel.followersCount, label: "Followers")
-            Spacer()
-            statView(value: viewModel.monthlyListenersCount, label: "Listeners")
-            Spacer()
-        }
+    var isInitialLoading: Bool {
+        viewModel.loadingState == .idle || viewModel.loadingState == .loading
     }
 
-    var actionButtons: some View {
-        HStack(spacing: 10) {
-            if isOwnProfile {
-                Button {
-                    showEditProfile = true
-                } label: {
-                    Text("Edit Profile")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 36)
-                        .background(Color.brand)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-
-                Button {
-                    showShareSheet = true
-                } label: {
-                    Text("Share Profile")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 36)
-                        .background(Color(.systemGray5))
-                        .foregroundStyle(.primary)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-            } else {
-                Button {
-                    Task {
-                        await viewModel.toggleFollow(userId: resolvedUserId)
-                    }
-                } label: {
-                    Group {
-                        if viewModel.isTogglingFollow {
-                            ProgressView()
-                                .tint(.white)
-                        } else {
-                            Text(viewModel.isFollowing ? "Following" : "Follow")
-                        }
-                    }
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 36)
-                    .background(viewModel.isFollowing ? Color(.systemGray5) : Color.brand)
-                    .foregroundStyle(viewModel.isFollowing ? Color.primary : Color.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-                .disabled(viewModel.isTogglingFollow)
-
-                Button {
-                    // Collab action
-                } label: {
-                    Text("Collab")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 36)
-                        .background(Color(.systemGray5))
-                        .foregroundStyle(.primary)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-            }
-
-            if isOwnProfile {
-                Button {
-                    router.navigateToSettings()
-                } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 36, height: 36)
-                        .background(Color(.systemGray5))
-                        .foregroundStyle(.primary)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-            } else {
-                Button {
-                    showShareSheet = true
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 36, height: 36)
-                        .background(Color(.systemGray5))
-                        .foregroundStyle(.primary)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-            }
-        }
-        .sheet(isPresented: $showShareSheet) {
-            let profileLink = URL(string: "https://volspire.com/profile/\(resolvedUserId)")!
-            ActivityViewController(activityItems: [profileLink])
-                .presentationDetents([.medium, .large])
-        }
+    /// True when the profile fetch failed (e.g. no network).
+    var isError: Bool {
+        if case .error = viewModel.loadingState { return true }
+        return false
     }
 
-    func statView(value: Int, label: String) -> some View {
-        HStack(spacing: 4) {
-            Text("\(value)")
-                .font(.system(size: 13, weight: .semibold))
-            Text(label)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-        }
+    /// The Edit/Hide-Unhide/Delete rows for a track's "…" options sheet.
+    func trackOptionsActions(for track: ProfileTrack) -> [TrackOptionsSheet.Action] {
+        [
+            .init(icon: .squarePen, title: "Edit Track") {
+                await viewModel.startEditingTrack(track.id)
+            },
+            .init(
+                icon: track.isPrivate ? .eye : .eyeOff,
+                title: track.isPrivate ? "Unhide Track" : "Hide Track",
+                awaitsCompletion: true
+            ) {
+                _ = await viewModel.hideTrack(trackId: track.id, hide: !track.isPrivate)
+            },
+            .init(icon: .trash2, title: "Delete Track", isDestructive: true) {
+                viewModel.pendingDeleteTrackId = track.id
+                viewModel.showDeleteTrackConfirm = true
+            },
+        ]
     }
 
-    var sectionPicker: some View {
-        HStack(spacing: 0) {
-            ForEach(ProfileSection.allCases, id: \.self) { section in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        selectedSection = section
-                    }
-                } label: {
-                    VStack(spacing: 8) {
-                        Text(section.rawValue)
-                            .font(.system(size: 15, weight: selectedSection == section ? .semibold : .regular))
-                            .foregroundStyle(selectedSection == section ? Color.primary.opacity(0.80) : .secondary)
-                        Rectangle()
-                            .fill(selectedSection == section ? Color.primary.opacity(0.80) : .clear)
-                            .frame(height: 2)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            Divider()
-        }
+    /// Loads the core profile, then the hero colours + secondary tabs concurrently.
+    /// Shared by `.task` and the error-state retry.
+    func loadEverything() async {
+        await viewModel.loadProfile(userId: resolvedUserId)
+        async let colors: Void = viewModel.loadHeroColors()
+        async let credited: Void = viewModel.loadCreditedTracks(userId: resolvedUserId)
+        async let packs: Void = viewModel.loadPacks(userId: resolvedUserId)
+        async let listings: Void = viewModel.loadUserListings(userId: resolvedUserId)
+        _ = await (colors, credited, packs, listings)
+        // Warm the cover cache for every tab so switching slides cached images.
+        viewModel.prefetchTabCovers()
     }
 
-    var servicesContent: some View {
-        Group {
-            if viewModel.services.isEmpty {
-                emptyPlaceholder(
-                    icon: "briefcase",
-                    title: "No services yet",
-                    subtitle: "Services will appear here once added"
-                )
-            } else {
-                VStack(spacing: 12) {
-                    ForEach(viewModel.services) { service in
-                        if isOwnProfile {
-                            serviceCard(
-                                title: service.title,
-                                description: service.description,
-                                type: service.serviceType,
-                                price: service.price
-                            )
-                            .onTapGesture {
-                                viewModel.editingService = service
-                            }
-                        } else {
-                            serviceCard(
-                                title: service.title,
-                                description: service.description,
-                                type: service.serviceType,
-                                price: service.price
-                            )
-                        }
-                    }
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 8)
-            }
-        }
+    /// Offline / load-failure state with a retry.
+    var profileErrorState: some View {
+        LoadErrorView(title: "Couldn't load profile") { Task { await loadEverything() } }
     }
 
-    func serviceCard(title: String, description: String, type: String, price: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(title)
-                    .font(.system(size: 16, weight: .semibold))
-                Spacer()
-                Text(price)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Color.brand)
-            }
-            Text(description)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            Text(type)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(Color(.systemGray5))
-                .clipShape(Capsule())
-        }
-        .padding(14)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+    /// Mini-header crossfades in as the hero scrolls past.
+    var miniHeaderOpacity: Double {
+        // Fade the bar in early — about a third of the way into the hero.
+        let start = ProfileLayout.heroHeight * 0.32
+        let end = ProfileLayout.heroHeight * 0.5
+        return Double(min(1, max(0, (scrollOffset - start) / (end - start))))
     }
 
-    func emptyPlaceholder(icon: String, title: String, subtitle: String) -> some View {
-        VStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 36))
-                .foregroundStyle(Color(.systemGray3))
-            Text(title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(subtitle)
-                .font(.system(size: 13))
-                .foregroundStyle(Color(.systemGray2))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 50)
+    var visibleTabs: [ProfileTab] {
+        [.tracks, .featuredOn, .market]
     }
 
-    var tracksList: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
-            // Latest Release
-            if let latest = viewModel.latestRelease {
-                Text("Latest Release")
-                    .font(.system(size: 16, weight: .semibold))
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                    .padding(.bottom, 12)
-
-                latestReleaseCard(latest)
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                    .padding(.bottom, 24)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        viewModel.play(latest)
-                    }
-            }
-
-            // Curated Tracks
-            if !viewModel.curatedTracks.isEmpty {
-                Text("Curated Tracks")
-                    .font(.system(size: 16, weight: .semibold))
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                    .padding(.bottom, 12)
-
-                ForEach(viewModel.curatedTracks) { track in
-                    trackRow(track)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            viewModel.play(track)
-                        }
-                }
-            }
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 20)
-    }
-
-    func latestReleaseCard(_ track: ProfileTrack) -> some View {
-        HStack(spacing: 14) {
-            if let coverURL = track.coverURL {
-                KFImage(coverURL)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 80, height: 80)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(.systemGray5))
-                    .frame(width: 80, height: 80)
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(track.title)
-                    .font(.system(size: 17, weight: .semibold))
-                    .lineLimit(1)
-                Text("\(track.streams) streams")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            if let activity = viewModel.mediaActivity(MediaID(track.id)) {
-                MediaActivityIndicator(state: activity)
-                    .foregroundStyle(Color.brand)
-            }
-        }
-    }
-
-    func trackRow(_ track: ProfileTrack) -> some View {
-        HStack(spacing: 12) {
-            if let coverURL = track.coverURL {
-                KFImage(coverURL)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 48, height: 48)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-            } else {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(.systemGray5))
-                    .frame(width: 48, height: 48)
-            }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(track.title)
-                    .font(.system(size: 16))
-                    .lineLimit(1)
-                Text("\(track.streams) streams")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            if let activity = viewModel.mediaActivity(MediaID(track.id)) {
-                MediaActivityIndicator(state: activity)
-                    .foregroundStyle(Color.brand)
-            }
-        }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.vertical, 8)
-    }
-
-    // MARK: - Skeleton Loading
-
-    var profileSkeletonContent: some View {
-        VStack(spacing: 0) {
-            // Banner skeleton
-            ShimmerView()
-                .frame(height: UIScreen.size.width * 0.55)
-
-            VStack(spacing: 0) {
-                // Avatar + name row skeleton
-                HStack(alignment: .center, spacing: 14) {
-                    Circle()
-                        .fill(Color(.systemGray5))
-                        .frame(width: 90, height: 90)
-                        .overlay(ShimmerView().clipShape(Circle()))
-                        .offset(y: -60)
-                        .padding(.bottom, -60)
-
-                    ShimmerView()
-                        .frame(width: 140, height: 20)
-                        .clipShape(Capsule())
-
-                    Spacer()
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 6)
-
-                // Bio skeleton
-                VStack(alignment: .leading, spacing: 8) {
-                    ShimmerView()
-                        .frame(height: 14)
-                        .clipShape(Capsule())
-                    ShimmerView()
-                        .frame(width: 200, height: 14)
-                        .clipShape(Capsule())
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 20)
-
-                // Location skeleton
-                HStack(spacing: 6) {
-                    ShimmerView()
-                        .frame(width: 16, height: 16)
-                        .clipShape(Circle())
-                    ShimmerView()
-                        .frame(width: 120, height: 14)
-                        .clipShape(Capsule())
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 12)
-
-                // Stats skeleton
-                HStack(spacing: 24) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        VStack(spacing: 4) {
-                            ShimmerView()
-                                .frame(width: 40, height: 18)
-                                .clipShape(Capsule())
-                            ShimmerView()
-                                .frame(width: 60, height: 12)
-                                .clipShape(Capsule())
-                        }
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 20)
-
-                // Action buttons skeleton
-                HStack(spacing: 12) {
-                    ShimmerView()
-                        .frame(height: 36)
-                        .clipShape(Capsule())
-                    ShimmerView()
-                        .frame(width: 36, height: 36)
-                        .clipShape(Circle())
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 24)
-
-                // Section picker skeleton
-                HStack(spacing: 0) {
-                    ForEach(0..<2, id: \.self) { _ in
-                        ShimmerView()
-                            .frame(height: 32)
-                            .clipShape(Capsule())
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 24)
-
-                // Track list skeleton
-                VStack(spacing: 0) {
-                    ForEach(0..<5, id: \.self) { _ in
-                        HStack(spacing: 12) {
-                            ShimmerView()
-                                .frame(width: 48, height: 48)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                            VStack(alignment: .leading, spacing: 6) {
-                                ShimmerView()
-                                    .frame(width: 160, height: 14)
-                                    .clipShape(Capsule())
-                                ShimmerView()
-                                    .frame(width: 80, height: 12)
-                                    .clipShape(Capsule())
-                            }
-                            Spacer()
-                        }
-                        .padding(.horizontal, ViewConst.screenPaddings)
-                        .padding(.vertical, 10)
-                    }
-                }
-                .padding(.top, 16)
-            }
-            .gradientBackground()
-        }
-        .ignoresSafeArea(edges: .top)
+    func select(_ tab: ProfileTab) {
+        let new = visibleTabs.firstIndex(of: tab) ?? 0
+        let old = visibleTabs.firstIndex(of: selectedTab) ?? 0
+        slideForward = new >= old
+        withAnimation(.smooth(duration: 0.3)) { selectedTab = tab }
     }
 }
 
@@ -732,4 +292,5 @@ private extension ProfileScreen {
         .withRouter()
         .environment(dependencies)
         .environment(playerController)
+        .environment(AvatarPreviewState())
 }

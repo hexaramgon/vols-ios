@@ -5,6 +5,15 @@
 //
 
 import SwiftUI
+import UIKit
+
+// TODO: Swipe-back UX — revisit "swipe from anywhere" (Telegram-style) back.
+// We use the native LEFT-EDGE pop here (the iOS standard, like Instagram). A
+// full-screen pan that forwards to the system pop's private `targets` was tried
+// and removed: it fought the scroll view and felt janky ("hold, then it goes
+// back"). Doing it properly means a custom interactive transition / custom
+// UINavigationController, not a gesture hack. Look out for this if we want
+// full-screen back app-wide.
 
 /// Re-enables the native iOS interactive pop (swipe-back) gesture
 /// even when the navigation bar back button is hidden.

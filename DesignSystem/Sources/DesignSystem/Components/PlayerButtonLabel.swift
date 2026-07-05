@@ -39,7 +39,8 @@ public struct PlayerButtonLabel: View {
             AnimatedForwardLabel(size: size, trigger: animationTrigger)
                 .scaleEffect(x: -1)
         default:
-            Image(systemName: type.systemImageName)
+            Image(lucide: type.lucideIcon)
+                .renderingMode(.template)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: size, height: size)
@@ -57,13 +58,13 @@ public extension PlayerButtonTrigger {
 }
 
 extension ButtonType {
-    var systemImageName: String {
+    var lucideIcon: LucideIcon.Name {
         switch self {
-        case .play: "play.fill"
-        case .stop: "stop.fill"
-        case .pause: "pause.fill"
-        case .backward: "backward.fill"
-        case .forward: "forward.fill"
+        case .play: .play
+        case .stop: .square
+        case .pause: .pause
+        case .backward: .play // forward/backward are drawn by AnimatedForwardLabel
+        case .forward: .play
         }
     }
 }
@@ -87,7 +88,8 @@ private struct Label: View {
     }
 
     var gliph: some View {
-        Image(systemName: "play.fill")
+        Image(lucide: .play)
+            .renderingMode(.template)
             .resizable()
             .aspectRatio(contentMode: .fit)
     }

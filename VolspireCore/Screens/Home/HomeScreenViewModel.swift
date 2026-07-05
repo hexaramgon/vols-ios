@@ -5,30 +5,16 @@
 //  Created by GitHub Copilot on 01.02.2026.
 //
 
+import DesignSystem
 import Foundation
+import Kingfisher
 import MediaLibrary
 import Player
 import Services
+import SharedUtilities
+import SwiftUI
 
 // MARK: - UI Models
-
-struct HomeFilter: Identifiable {
-    let id: String
-    let title: String
-    let hasModal: Bool
-
-    init(id: String, title: String, hasModal: Bool = false) {
-        self.id = id
-        self.title = title
-        self.hasModal = hasModal
-    }
-}
-
-struct FollowingUser: Identifiable {
-    let id: String
-    let username: String
-    let profileImageURL: URL?
-}
 
 struct HomeTrack: Identifiable {
     let id: String
@@ -36,14 +22,16 @@ struct HomeTrack: Identifiable {
     let artist: String
     let coverURL: URL?
     let audioURL: URL?
+    let streams: Int?
+    let durationMs: Int?
 }
 
-struct FeaturedItem: Identifiable {
+struct ExploreArtistItem: Identifiable {
     let id: String
-    let title: String
-    let subtitle: String
-    let label: String
-    let imageURL: URL?
+    let username: String
+    let avatarURL: URL?
+    let monthlyListeners: Int
+    var isFollowing: Bool
 }
 
 // MARK: - Loading State
@@ -60,395 +48,254 @@ enum HomeLoadingState: Equatable {
 @Observable
 @MainActor
 class HomeScreenViewModel {
-    var activeFilters: Set<String> = []
-    var following: [FollowingUser] = []
-    var filters: [HomeFilter] = []
     var loadingState: HomeLoadingState = .idle
     var errorMessage: String?
 
-    // Sections
-    var featuredItems: [FeaturedItem] = []
-    var recommendedTracks: [HomeTrack] = []
-    var trendingTracks: [HomeTrack] = []
-    var newReleases: [HomeTrack] = []
-    var recentlyPlayed: [HomeTrack] = []
-    var topProducers: [FollowingUser] = []
+    // Sections — mirror the web app's home buckets (`get_home_tracks`).
+    var popularTracks: [HomeTrack] = []
+    var demos: [HomeTrack] = []
+    var samples: [HomeTrack] = []
+
+    // Explore tab data (lazy-loaded the first time each tab is opened).
+    var feedTracks: [HomeTrack] = []
+    var followingTracks: [HomeTrack] = []
+    var artists: [ExploreArtistItem] = []
+    var feedLoaded = false
+    var followingLoaded = false
+    var artistsLoaded = false
+
+    // Collab listings (lazy-loaded the first time the Collab tab opens).
+    var collabListings: [ApiListing] = []
+    var listingsLoaded = false
+
+    /// Random shuffle seed for the explore feed (`get_home_feed`). Fresh per VM
+    /// (i.e. per app session) and re-rolled on pull-to-refresh, so the recs vary
+    /// instead of returning the same order every time — matching the web.
+    private var feedSeed = Int.random(in: 1 ... 1_000_000)
+
+    /// Top popular tracks shown in the Featured carousel.
+    var featuredTracks: [HomeTrack] { Array(popularTracks.prefix(5)) }
 
     weak var mediaState: MediaState?
     weak var player: MediaPlayer?
 
     private let supabaseService: SupabaseService
+    private let storageService: StorageService
 
-    init(supabaseService: SupabaseService = SupabaseService()) {
+    init(
+        supabaseService: SupabaseService = SupabaseService(),
+        storageService: StorageService = StorageService()
+    ) {
         self.supabaseService = supabaseService
-        loadFilters()
-    }
-
-    func toggleFilter(_ id: String) {
-        if activeFilters.contains(id) {
-            activeFilters.remove(id)
-        } else {
-            activeFilters.insert(id)
-        }
+        self.storageService = storageService
     }
 
     /// Play a track from the home screen by adding it to the media library and starting playback.
-    func playTrack(_ track: HomeTrack) async {
-        guard let audioURL = track.audioURL else { return }
+    /// Plays `track` and queues the rest of the section it came from (`context`)
+    /// in its natural order, so Next/Previous move through *that* section — not a
+    /// concatenation of every home rail (which is why Next used to jump to the
+    /// top "Popular" tracks).
+    func playTrack(_ track: HomeTrack, in context: [HomeTrack]) async {
+        guard track.audioURL != nil else { return }
 
-        let mediaID = MediaID(track.id)
-        let media = Media(
-            id: mediaID,
-            meta: MediaMeta(
-                artwork: track.coverURL,
-                title: track.title,
-                artist: track.artist,
-                audioURL: audioURL
-            )
-        )
+        // Queue = the section in order. The tapped track must be in it (it is,
+        // since it came from that list) or `MediaPlayer.play` rejects the queue.
+        var ordered = context
+        if !ordered.contains(where: { $0.id == track.id }) { ordered = [track] }
 
-        // Ensure the track is in the media state so the player can resolve it
-        await mediaState?.addTrack(media)
+        var seen = Set<String>()
+        let queue = ordered.filter { $0.audioURL != nil && seen.insert($0.id).inserted }
 
-        // Collect all tracks in the current section for queue context
-        let allSectionTracks = (recommendedTracks + trendingTracks + newReleases + recentlyPlayed)
-            .filter { $0.audioURL != nil }
-
-        // Add all section tracks to media state for queue navigation
-        for t in allSectionTracks where t.id != track.id {
-            let m = Media(
-                id: MediaID(t.id),
-                meta: MediaMeta(
-                    artwork: t.coverURL,
-                    title: t.title,
-                    artist: t.artist,
-                    audioURL: t.audioURL
+        for t in queue {
+            await mediaState?.addTrack(
+                Media(
+                    id: MediaID(t.id),
+                    meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL)
                 )
             )
-            await mediaState?.addTrack(m)
         }
 
-        let queueIDs = allSectionTracks.map { MediaID($0.id) }
-        player?.play(mediaID, of: queueIDs.isEmpty ? [mediaID] : queueIDs)
+        player?.play(MediaID(track.id), of: queue.map { MediaID($0.id) })
     }
 
     /// Load home data from Supabase
     func loadHomeData() async {
         guard loadingState != .loading else { return }
-        
+
         loadingState = .loading
         errorMessage = nil
-        
+
         do {
             let response = try await supabaseService.getHomeTracks()
-            
-            // Map API response to UI models
-            featuredItems = response.featuredItems?.map { item in
-                FeaturedItem(
-                    id: item.id,
-                    title: item.title,
-                    subtitle: item.subtitle ?? "",
-                    label: item.label ?? "",
-                    imageURL: item.imageUrl.flatMap { URL(string: $0) }
-                )
-            } ?? []
-            
-            recommendedTracks = mapTracks(response.recommendedTracks)
-            trendingTracks = mapTracks(response.trendingTracks)
-            newReleases = mapTracks(response.newReleases)
-            recentlyPlayed = mapTracks(response.recentlyPlayed)
-            
-            topProducers = response.topProducers?.map { producer in
-                FollowingUser(
-                    id: producer.id,
-                    username: producer.username,
-                    profileImageURL: producer.profileImageUrl.flatMap { URL(string: $0) }
-                )
-            } ?? []
-            
-            following = response.following?.map { user in
-                FollowingUser(
-                    id: user.id,
-                    username: user.username,
-                    profileImageURL: user.profileImageUrl.flatMap { URL(string: $0) }
-                )
-            } ?? []
-            
+            popularTracks = mapTracks(response.popularTracks)
+            demos = mapTracks(response.demos)
+            samples = mapTracks(response.samples)
             loadingState = .loaded
+            prefetchCovers(popularTracks + demos + samples)
         } catch {
+            // No network / RPC failure: surface the empty/error state rather than
+            // filling the screen with placeholder "seed" tracks.
             loadingState = .error(error.localizedDescription)
             errorMessage = error.localizedDescription
-            
-            // Fall back to mock data on error
-            loadMockData()
         }
     }
-    
-    /// Refresh home data
+
+    /// First load — every section fetches concurrently instead of waterfalling.
+    func loadInitial() async {
+        async let home: Void = loadHomeData()
+        async let artistRail: Void = loadArtists()
+        async let feed: Void = loadTracksFeed()
+        _ = await (home, artistRail, feed)
+    }
+
     func refresh() async {
-        await loadHomeData()
+        loadingState = .idle
+        feedLoaded = false
+        feedSeed = Int.random(in: 1 ... 1_000_000) // fresh shuffle on pull-to-refresh
+        async let home: Void = loadHomeData()
+        async let feed: Void = loadTracksFeed()
+        _ = await (home, feed)
+    }
+
+    // MARK: - Explore tabs
+
+    func loadTracksFeed() async {
+        guard !feedLoaded else { return }
+        feedLoaded = true
+        do { feedTracks = mapTracks(try await supabaseService.getExploreTracksFeed(seed: feedSeed)); prefetchCovers(feedTracks) }
+        catch { feedLoaded = false; print("[HomeVM] tracks feed: \(error)") }
+    }
+
+    func loadFollowing() async {
+        guard !followingLoaded else { return }
+        followingLoaded = true
+        do { followingTracks = mapTracks(try await supabaseService.getFollowingFeed()); prefetchCovers(followingTracks) }
+        catch { followingLoaded = false; print("[HomeVM] following: \(error)") }
+    }
+
+    func loadArtists() async {
+        guard !artistsLoaded else { return }
+        artistsLoaded = true
+        do {
+            artists = try await supabaseService.getExploreArtists().map {
+                ExploreArtistItem(
+                    id: $0.userId,
+                    username: $0.username ?? "unknown",
+                    avatarURL: $0.profileImageUrl.flatMap { URL(string: $0) },
+                    monthlyListeners: $0.monthlyListeners ?? 0,
+                    isFollowing: $0.isFollowing ?? false
+                )
+            }
+            prefetchArtistAvatars(artists)
+        } catch { artistsLoaded = false; print("[HomeVM] artists: \(error)") }
+    }
+
+    func loadListings() async {
+        guard !listingsLoaded else { return }
+        listingsLoaded = true
+        do { collabListings = try await supabaseService.getListings(category: nil) }
+        catch { listingsLoaded = false; print("[HomeVM] listings: \(error)") }
+    }
+
+    // MARK: - Cover prefetch
+
+    /// Warms the image cache for upcoming covers so they don't fetch+decode
+    /// on-demand mid-scroll (the rails/grid hitch). Kingfisher skips anything
+    /// already cached and decodes off the main thread.
+    private func prefetchCovers(_ tracks: [HomeTrack]) {
+        prefetch(tracks.compactMap(\.coverURL))
+    }
+
+    private func prefetchArtistAvatars(_ artists: [ExploreArtistItem]) {
+        prefetch(artists.compactMap(\.avatarURL))
+    }
+
+    private func prefetch(_ urls: [URL]) {
+        let unique = Array(Set(urls))
+        guard !unique.isEmpty else { return }
+        ImagePrefetcher(urls: unique).start()
+    }
+
+    func toggleFollow(_ item: ExploreArtistItem) async {
+        guard let idx = artists.firstIndex(where: { $0.id == item.id }) else { return }
+        artists[idx].isFollowing.toggle()
+        do { try await supabaseService.toggleFollow(targetUser: item.id) }
+        catch { artists[idx].isFollowing.toggle() }
+    }
+
+    // MARK: - Search typeahead (Home search overlay)
+
+    /// Live suggestions for the search overlay, from the `search_all` RPC.
+    var searchTracks: [HomeTrack] = []
+    var searchArtists: [ExploreArtistItem] = []
+    var isSearching = false
+    private var searchTask: Task<Void, Never>?
+
+    /// Debounced typeahead — runs `search_all` as the user types in the overlay.
+    func runSearch(_ query: String) {
+        searchTask?.cancel()
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { searchTracks = []; searchArtists = []; isSearching = false; return }
+
+        searchTask = Task { @MainActor in
+            isSearching = true
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            do {
+                let results = try await supabaseService.searchAll(query: q, limit: 8)
+                guard !Task.isCancelled else { return }
+                searchTracks = mapSearchTracks(results.tracks)
+                searchArtists = results.artists.map {
+                    ExploreArtistItem(
+                        id: $0.userId,
+                        username: $0.username ?? "unknown",
+                        avatarURL: $0.profileImageUrl.flatMap { URL(string: $0) },
+                        monthlyListeners: $0.monthlyListeners ?? 0,
+                        isFollowing: $0.isFollowing ?? false
+                    )
+                }
+                isSearching = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                isSearching = false
+            }
+        }
+    }
+
+    func clearSearch() {
+        searchTask?.cancel()
+        searchTracks = []
+        searchArtists = []
+        isSearching = false
+    }
+
+    private func mapSearchTracks(_ tracks: [ApiSearchTrack]) -> [HomeTrack] {
+        tracks.map { t in
+            HomeTrack(
+                id: t.id,
+                title: t.title,
+                artist: t.artist ?? "unknown",
+                coverURL: storageService.resolveTrackUrl(t.coverUrl).flatMap { URL(string: $0) },
+                audioURL: storageService.resolveTrackUrl(t.audioUrl).flatMap { URL(string: $0) },
+                streams: t.streams,
+                durationMs: t.durationMs
+            )
+        }
     }
 
     private func mapTracks(_ apiTracks: [ApiHomeTrack]?) -> [HomeTrack] {
+        // cover_url / audio_url come back as bare `post-uploads` paths — resolve them.
         apiTracks?.map { track in
             HomeTrack(
                 id: track.id,
                 title: track.title,
-                artist: track.artist ?? "Unknown Artist",
-                coverURL: track.coverUrl.flatMap { URL(string: $0) },
-                audioURL: track.audioUrl.flatMap { URL(string: $0) }
+                artist: track.artist ?? "unknown",
+                coverURL: storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) },
+                audioURL: storageService.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) },
+                streams: track.streams,
+                durationMs: track.durationMs
             )
         } ?? []
     }
 
-    private func loadFilters() {
-        // Filters are static UI elements
-        filters = [
-            HomeFilter(id: "location", title: "Location ▼", hasModal: true),
-            HomeFilter(id: "occupation", title: "Occupation ▼", hasModal: true),
-            HomeFilter(id: "genre", title: "Genre ▼", hasModal: true),
-            HomeFilter(id: "for-sale", title: "For Sale"),
-            HomeFilter(id: "trending", title: "Trending"),
-            HomeFilter(id: "recent", title: "Recent"),
-        ]
-    }
-
-    private func loadMockData() {
-        // Mock Following Users
-        following = [
-            FollowingUser(
-                id: "1",
-                username: "DJ Shadow",
-                profileImageURL: URL(string: "https://picsum.photos/seed/user1/100")
-            ),
-            FollowingUser(
-                id: "2",
-                username: "Producer X",
-                profileImageURL: URL(string: "https://picsum.photos/seed/user2/100")
-            ),
-            FollowingUser(
-                id: "3",
-                username: "BeatMaker",
-                profileImageURL: URL(string: "https://picsum.photos/seed/user3/100")
-            ),
-            FollowingUser(
-                id: "4",
-                username: "VocalQueen",
-                profileImageURL: URL(string: "https://picsum.photos/seed/user4/100")
-            ),
-            FollowingUser(
-                id: "5",
-                username: "SynthLord",
-                profileImageURL: URL(string: "https://picsum.photos/seed/user5/100")
-            ),
-            FollowingUser(
-                id: "6",
-                username: "DrumKing",
-                profileImageURL: URL(string: "https://picsum.photos/seed/user6/100")
-            ),
-        ]
-
-        // Featured Items (Hero Section)
-        featuredItems = [
-            FeaturedItem(
-                id: "f1",
-                title: "Summer Beats Collection",
-                subtitle: "The hottest tracks of the season",
-                label: "Playlist",
-                imageURL: URL(string: "https://picsum.photos/seed/hero1/600/340")
-            ),
-            FeaturedItem(
-                id: "f2",
-                title: "Rising Stars 2026",
-                subtitle: "Discover the next big artists",
-                label: "Featured",
-                imageURL: URL(string: "https://picsum.photos/seed/hero2/600/340")
-            ),
-            FeaturedItem(
-                id: "f3",
-                title: "Late Night Vibes",
-                subtitle: "Chill beats for the evening",
-                label: "Mood",
-                imageURL: URL(string: "https://picsum.photos/seed/hero3/600/340")
-            ),
-        ]
-
-        // Recommended Tracks
-        recommendedTracks = [
-            HomeTrack(
-                id: "r1",
-                title: "Midnight Drive",
-                artist: "DJ Shadow",
-                coverURL: URL(string: "https://picsum.photos/seed/rec1/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "r2",
-                title: "Summer Vibes",
-                artist: "Producer X",
-                coverURL: URL(string: "https://picsum.photos/seed/rec2/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "r3",
-                title: "City Lights",
-                artist: "BeatMaker",
-                coverURL: URL(string: "https://picsum.photos/seed/rec3/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "r4",
-                title: "Ocean Waves",
-                artist: "VocalQueen",
-                coverURL: URL(string: "https://picsum.photos/seed/rec4/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "r5",
-                title: "Neon Dreams",
-                artist: "SynthLord",
-                coverURL: URL(string: "https://picsum.photos/seed/rec5/400"),
-                audioURL: nil
-            ),
-        ]
-
-        // Trending Tracks
-        trendingTracks = [
-            HomeTrack(
-                id: "t1",
-                title: "Fire Starter",
-                artist: "HotBeats",
-                coverURL: URL(string: "https://picsum.photos/seed/trend1/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "t2",
-                title: "Viral Wave",
-                artist: "TikTok King",
-                coverURL: URL(string: "https://picsum.photos/seed/trend2/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "t3",
-                title: "Chart Topper",
-                artist: "PopStar",
-                coverURL: URL(string: "https://picsum.photos/seed/trend3/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "t4",
-                title: "Bass Drop",
-                artist: "EDM Master",
-                coverURL: URL(string: "https://picsum.photos/seed/trend4/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "t5",
-                title: "Golden Hour",
-                artist: "Sunset Crew",
-                coverURL: URL(string: "https://picsum.photos/seed/trend5/400"),
-                audioURL: nil
-            ),
-        ]
-
-        // New Releases
-        newReleases = [
-            HomeTrack(
-                id: "n1",
-                title: "Fresh Start",
-                artist: "NewArtist",
-                coverURL: URL(string: "https://picsum.photos/seed/new1/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "n2",
-                title: "Debut Single",
-                artist: "Rising Star",
-                coverURL: URL(string: "https://picsum.photos/seed/new2/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "n3",
-                title: "First Light",
-                artist: "Dawn",
-                coverURL: URL(string: "https://picsum.photos/seed/new3/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "n4",
-                title: "Genesis",
-                artist: "Origin",
-                coverURL: URL(string: "https://picsum.photos/seed/new4/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "n5",
-                title: "Day One",
-                artist: "Premiere",
-                coverURL: URL(string: "https://picsum.photos/seed/new5/400"),
-                audioURL: nil
-            ),
-        ]
-
-        // Recently Played
-        recentlyPlayed = [
-            HomeTrack(
-                id: "p1",
-                title: "Yesterday's Jam",
-                artist: "Nostalgia",
-                coverURL: URL(string: "https://picsum.photos/seed/played1/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "p2",
-                title: "On Repeat",
-                artist: "LoopMaster",
-                coverURL: URL(string: "https://picsum.photos/seed/played2/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "p3",
-                title: "Favorite Song",
-                artist: "Classic",
-                coverURL: URL(string: "https://picsum.photos/seed/played3/400"),
-                audioURL: nil
-            ),
-            HomeTrack(
-                id: "p4",
-                title: "Throwback",
-                artist: "Retro",
-                coverURL: URL(string: "https://picsum.photos/seed/played4/400"),
-                audioURL: nil
-            ),
-        ]
-
-        // Top Producers
-        topProducers = [
-            FollowingUser(
-                id: "tp1",
-                username: "Metro Boomin",
-                profileImageURL: URL(string: "https://picsum.photos/seed/prod1/200")
-            ),
-            FollowingUser(
-                id: "tp2",
-                username: "Pharrell",
-                profileImageURL: URL(string: "https://picsum.photos/seed/prod2/200")
-            ),
-            FollowingUser(
-                id: "tp3",
-                username: "Hit-Boy",
-                profileImageURL: URL(string: "https://picsum.photos/seed/prod3/200")
-            ),
-            FollowingUser(
-                id: "tp4",
-                username: "Mustard",
-                profileImageURL: URL(string: "https://picsum.photos/seed/prod4/200")
-            ),
-            FollowingUser(
-                id: "tp5",
-                username: "London",
-                profileImageURL: URL(string: "https://picsum.photos/seed/prod5/200")
-            ),
-        ]
-    }
 }

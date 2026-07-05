@@ -27,7 +27,13 @@ class SystemMediaInterface {
     }
 
     func setNowPlayingInfo(_ info: NowPlayingInfo) {
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info.mpNowPlayingInfo
+        let center = MPNowPlayingInfoCenter.default()
+        center.nowPlayingInfo = info.mpNowPlayingInfo
+        // Drive the lock-screen play/pause icon from our intent, not the actual
+        // audio output. While a freshly-skipped track is still loading there's no
+        // audio yet, and iOS would otherwise flicker the icon to "paused" until
+        // playback starts — set the state explicitly so it stays "playing".
+        center.playbackState = info.isPlaying ? .playing : .paused
     }
 }
 
@@ -103,7 +109,7 @@ extension NowPlayingInfo {
             info[MPMediaItemPropertyPlaybackDuration] = progress.duration
             info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = progress.elapsedTime
         }
-        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
+        info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? playbackRate : 0.0
         return info
     }
 }

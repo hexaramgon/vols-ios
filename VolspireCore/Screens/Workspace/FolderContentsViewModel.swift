@@ -26,14 +26,44 @@ final class FolderContentsViewModel {
     var uploadError: String?
 
     let folderId: String
-    let folderName: String
+    var folderName: String
+    var folderDescription = ""
+    private var folderRole: String?
+    var isOwner: Bool { folderRole == "owner" }
+
+    /// Rename / delete menu state.
+    var showOptions = false
+    var showEdit = false
+    var editName = ""
+    var editDescription = ""
+    var isSaving = false
+    var showDeleteConfirm = false
+
+    /// Manage Members (collaboration) sheet state.
+    var showMembers = false
+    var members: [ApiFolderMember] = []
+    var isLoadingMembers = false
+    var memberSearch = ""
+    var searchResults: [ApiUserSearchResult] = []
+    var isSearchingUsers = false
+    /// Your collaborators, loaded once — the add field filters this list locally.
+    var allCollaborators: [ApiUserSearchResult] = []
+    /// The user id of a member currently being added/removed/updated.
+    var memberActionId: String?
 
     private let supabaseService: SupabaseService
+    private let storageService: StorageService
 
-    init(folderId: String, folderName: String, supabaseService: SupabaseService = SupabaseService()) {
+    init(
+        folderId: String,
+        folderName: String,
+        supabaseService: SupabaseService = SupabaseService(),
+        storageService: StorageService = StorageService()
+    ) {
         self.folderId = folderId
         self.folderName = folderName
         self.supabaseService = supabaseService
+        self.storageService = storageService
     }
 
     func loadFiles() async {
@@ -41,7 +71,10 @@ final class FolderContentsViewModel {
         loadingState = .loading
 
         do {
-            files = try await supabaseService.getFolderFiles(folderId: folderId)
+            let rawFiles = try await supabaseService.getFolderFiles(folderId: folderId)
+            // Resolve raw storage paths into usable URLs: private `files` get signed
+            // URLs, track references get public `post-uploads` URLs.
+            files = await storageService.signFolderFileUrls(files: rawFiles)
             loadingState = .loaded
         } catch {
             print("[FolderContentsVM] Failed to load files: \(error)")
@@ -52,6 +85,120 @@ final class FolderContentsViewModel {
     func refresh() async {
         loadingState = .idle
         await loadFiles()
+    }
+
+    /// Loads this folder's name/description/role from the user's folders, so the
+    /// rename sheet pre-fills and the menu can gate on ownership.
+    func loadFolderMeta() async {
+        let folders = (try? await supabaseService.getUserFolders()) ?? []
+        guard let folder = folders.first(where: { $0.folderId == folderId }) else { return }
+        folderName = folder.name
+        folderDescription = folder.description ?? ""
+        folderRole = folder.role
+    }
+
+    func startEditing() {
+        editName = folderName
+        editDescription = folderDescription
+        showEdit = true
+    }
+
+    /// Saves a rename/description change via `update_folder`.
+    func saveEdit() async {
+        let name = editName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !isSaving else { return }
+        isSaving = true
+        do {
+            let desc = editDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            try await supabaseService.updateFolder(folderId: folderId, name: name, description: desc.isEmpty ? nil : desc)
+            folderName = name
+            folderDescription = desc
+            showEdit = false
+        } catch {
+            uploadError = error.localizedDescription
+        }
+        isSaving = false
+    }
+
+    /// Deletes the folder via `delete_folder`. Returns true on success.
+    func deleteFolder() async -> Bool {
+        do {
+            try await supabaseService.deleteFolder(folderId: folderId)
+            return true
+        } catch {
+            uploadError = error.localizedDescription
+            return false
+        }
+    }
+
+    // MARK: - Members (collaboration)
+
+    func loadMembers() async {
+        isLoadingMembers = true
+        members = (try? await supabaseService.getFolderMembers(folderId: folderId)) ?? []
+        isLoadingMembers = false
+        filterCollaborators()
+    }
+
+    /// Your collaborators — the only people who can be added to a folder (mirrors
+    /// the web). Loaded once when the sheet opens; the add field filters locally.
+    func loadCollaborators() async {
+        allCollaborators = (try? await supabaseService.getMyCollaborators()) ?? []
+        filterCollaborators()
+    }
+
+    /// Called on every keystroke in the add field — filters the loaded
+    /// collaborators (no network round-trip).
+    func searchUsers() async {
+        filterCollaborators()
+    }
+
+    /// Collaborators matching the search text, excluding people already in the
+    /// folder. Empty query shows all of them so you can pick from the list.
+    private func filterCollaborators() {
+        let q = memberSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        let memberIds = Set(members.map(\.userId))
+        let base = allCollaborators.filter { !memberIds.contains($0.userId) }
+        searchResults = q.isEmpty ? base : base.filter { ($0.username ?? "").lowercased().contains(q) }
+    }
+
+    func addMember(_ user: ApiUserSearchResult, role: String = "editor") async {
+        guard let username = user.username else { return }
+        memberActionId = user.userId
+        do {
+            try await supabaseService.addFolderMember(folderId: folderId, username: username, role: role)
+            memberSearch = ""
+            searchResults = []
+            await loadMembers()
+        } catch {
+            uploadError = error.localizedDescription
+        }
+        memberActionId = nil
+    }
+
+    func removeMember(_ member: ApiFolderMember) async {
+        memberActionId = member.userId
+        do {
+            try await supabaseService.removeFolderMember(folderId: folderId, targetUserId: member.userId)
+            members.removeAll { $0.userId == member.userId }
+        } catch {
+            uploadError = error.localizedDescription
+        }
+        memberActionId = nil
+    }
+
+    func updateMemberRole(_ member: ApiFolderMember, role: String) async {
+        guard member.role != role else { return }
+        do {
+            try await supabaseService.updateFolderMemberRole(folderId: folderId, targetUserId: member.userId, role: role)
+            await loadMembers()
+        } catch {
+            uploadError = error.localizedDescription
+        }
+    }
+
+    func avatarURL(_ path: String?) -> URL? {
+        storageService.avatarUrl(pathOrUrl: path).flatMap { URL(string: $0) }
     }
 
     func deleteFile(_ file: ApiFolderFile) async {
@@ -112,13 +259,11 @@ final class FolderContentsViewModel {
         }
     }
 
+    /// Neutral, monochrome tint so file icons match the app's black/white theme
+    /// (was per-type purple/green/red). Track references render their real cover
+    /// instead of an icon, so colour isn't needed to tell content apart.
     func iconColor(for file: ApiFolderFile) -> Color {
-        guard let type = file.fileType?.lowercased() else { return .secondary }
-        if type.contains("audio") { return .purple }
-        if type.contains("image") || type.contains("png") || type.contains("jpg") { return .green }
-        if type.contains("video") || type.contains("mp4") { return .red }
-        if type.contains("pdf") { return .orange }
-        return .blue
+        .white.opacity(0.85)
     }
 
     func formattedSize(for file: ApiFolderFile) -> String? {

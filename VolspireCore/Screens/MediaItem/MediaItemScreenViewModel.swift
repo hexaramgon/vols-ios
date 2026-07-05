@@ -22,7 +22,6 @@ class MediaItemScreenViewModel {
     }
 
     var playerState: MediaPlayerState = .paused(media: .none)
-    var playIndicatorSpectrum: [Float] = .init(repeating: 0, count: MediaPlayer.Const.frequencyBands)
     var cancellables = Set<AnyCancellable>()
 
     init(item: Media) {

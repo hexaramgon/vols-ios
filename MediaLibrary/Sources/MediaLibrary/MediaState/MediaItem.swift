@@ -44,7 +44,7 @@ public extension MediaItem {
             .init(
                 title: media.meta.title,
                 subtitle: media.meta.subtitle,
-                artwork: media.meta.artwork.map { .webImage($0) } ?? .radio(name: media.meta.title)
+                artwork: media.meta.artwork.map { .webImage($0) } ?? .placeholder(name: media.meta.title)
             )
         }
     }

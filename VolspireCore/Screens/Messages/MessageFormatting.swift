@@ -1,0 +1,59 @@
+//
+//  MessageFormatting.swift
+//  Volspire
+//
+//  Date/time helpers for the messages UI, mirroring the web app's
+//  `timeAgo` / `dividerLabel` formatting.
+//
+
+import Foundation
+
+enum MessageTime {
+    /// Parse a Postgres/ISO timestamp that may lack a timezone (treated as UTC,
+    /// matching the web's `parseUtc`).
+    static func parse(_ iso: String?) -> Date? {
+        guard let iso, !iso.isEmpty else { return nil }
+        let hasTZ = iso.contains("Z") || iso.contains("z")
+            || iso.range(of: #"[+-]\d\d:?\d\d$"#, options: .regularExpression) != nil
+        let normalized = hasTZ ? iso : iso + "Z"
+
+        let withFraction = ISO8601DateFormatter()
+        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = withFraction.date(from: normalized) { return d }
+
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: normalized)
+    }
+
+    /// "now", "5m", "3h", "2d", "1w", "3mo", "2y" — mirrors the web's `timeAgo`.
+    static func ago(_ date: Date?) -> String {
+        guard let date else { return "" }
+        let s = max(0, Int(Date().timeIntervalSince(date)))
+        switch s {
+        case ..<60: return "now"
+        case ..<3600: return "\(s / 60)m"
+        case ..<86400: return "\(s / 3600)h"
+        case ..<604800: return "\(s / 86400)d"
+        case ..<2592000: return "\(s / 604800)w"
+        case ..<31536000: return "\(s / 2592000)mo"
+        default: return "\(s / 31536000)y"
+        }
+    }
+
+    /// Centered divider label between message groups: time today, "Yesterday HH:MM",
+    /// weekday + time within a week, otherwise "Mon D · HH:MM" (mirrors `dividerLabel`).
+    static func divider(_ date: Date) -> String {
+        let cal = Calendar.current
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if cal.isDateInToday(date) { return time }
+        if cal.isDateInYesterday(date) { return "Yesterday \(time)" }
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: Date())).day ?? 0
+        if days < 7 {
+            let weekday = date.formatted(.dateTime.weekday(.abbreviated))
+            return "\(weekday) \(time)"
+        }
+        let monthDay = date.formatted(.dateTime.month(.abbreviated).day())
+        return "\(monthDay) · \(time)"
+    }
+}
