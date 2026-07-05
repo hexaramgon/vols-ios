@@ -13,6 +13,12 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// A picked image awaiting crop in the full-screen cropper.
+private struct CropTarget: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
 struct UploadTrackScreen: View {
     @State var viewModel: UploadTrackViewModel
     @Environment(\.dismiss) private var dismiss
@@ -24,6 +30,8 @@ struct UploadTrackScreen: View {
     @State private var pickingAssetKind: String?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedVideo: PhotosPickerItem?
+    /// A freshly-picked cover awaiting crop in the full-screen cropper.
+    @State private var coverCropTarget: CropTarget?
     @FocusState private var priceFieldFocused: Bool
 
     private let tagSuggestions = [
@@ -123,9 +131,19 @@ struct UploadTrackScreen: View {
                    let data = try? await newValue.loadTransferable(type: Data.self),
                    let image = UIImage(data: data)
                 {
-                    viewModel.handleCoverImage(image)
+                    coverCropTarget = CropTarget(image: image.normalizedUp())
                 }
             }
+        }
+        .fullScreenCover(item: $coverCropTarget) { target in
+            ImageCropperView(
+                image: target.image,
+                onCrop: { data in
+                    if let cropped = UIImage(data: data) { viewModel.handleCoverImage(cropped) }
+                    coverCropTarget = nil
+                },
+                onCancel: { coverCropTarget = nil }
+            )
         }
         .onChange(of: viewModel.uploadState) { _, newValue in
             if newValue == .success {

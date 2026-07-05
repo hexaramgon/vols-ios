@@ -12,6 +12,12 @@ import DesignSystem
 import PhotosUI
 import SwiftUI
 
+/// A picked image awaiting crop in the full-screen cropper.
+private struct CropTarget: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
 struct EditTrackScreen: View {
     @State var viewModel: EditTrackViewModel
     /// Fired once the save RPC succeeds, before the screen dismisses — lets the
@@ -21,6 +27,8 @@ struct EditTrackScreen: View {
     @State private var showCoverPicker = false
     @State private var showGenrePicker = false
     @State private var selectedPhoto: PhotosPickerItem?
+    /// A freshly-picked cover awaiting crop in the full-screen cropper.
+    @State private var coverCropTarget: CropTarget?
 
     private let tagSuggestions = [
         "808", "trap", "melodic", "dark", "drill", "r&b", "lo-fi",
@@ -62,9 +70,19 @@ struct EditTrackScreen: View {
                    let data = try? await newValue.loadTransferable(type: Data.self),
                    let image = UIImage(data: data)
                 {
-                    viewModel.handleCoverImage(image)
+                    coverCropTarget = CropTarget(image: image.normalizedUp())
                 }
             }
+        }
+        .fullScreenCover(item: $coverCropTarget) { target in
+            ImageCropperView(
+                image: target.image,
+                onCrop: { data in
+                    if let cropped = UIImage(data: data) { viewModel.handleCoverImage(cropped) }
+                    coverCropTarget = nil
+                },
+                onCancel: { coverCropTarget = nil }
+            )
         }
         .onChange(of: viewModel.uploadState) { _, newValue in
             if newValue == .success {

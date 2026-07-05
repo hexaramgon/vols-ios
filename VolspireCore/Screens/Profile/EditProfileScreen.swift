@@ -31,10 +31,10 @@ struct EditProfileScreen: View {
     @State private var errorMessage: String? = nil
     @State private var avatarItem: PhotosPickerItem? = nil
     @State private var selectedAvatarData: Data? = nil
-    @State private var isUploadingAvatar = false
+    /// A freshly-picked avatar awaiting crop in the full-screen cropper.
+    @State private var avatarCropTarget: CropTarget? = nil
     @State private var bannerItem: PhotosPickerItem? = nil
     @State private var selectedBannerData: Data? = nil
-    @State private var isUploadingBanner = false
     @State private var locationCompleter = LocationCompleter()
     @FocusState private var locationFocused: Bool
 
@@ -125,7 +125,6 @@ private extension EditProfileScreen {
         // read main-actor view state directly — capture plain values instead.
         let bannerData = selectedBannerData
         let bannerURL = viewModel.bannerImageURL
-        let uploading = isUploadingBanner
         return PhotosPicker(selection: $bannerItem, matching: .images) {
             BannerImageView(data: bannerData, url: bannerURL)
                 .frame(height: 150)
@@ -134,7 +133,7 @@ private extension EditProfileScreen {
                 .overlay(alignment: .bottomTrailing) {
                     HStack(spacing: 5) {
                         Image(systemName: "camera.fill").font(.system(size: 11))
-                        Text(uploading ? "Uploading…" : "Edit cover").font(.appFootnoteSemibold)
+                        Text("Edit cover").font(.appFootnoteSemibold)
                     }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12)
@@ -144,16 +143,12 @@ private extension EditProfileScreen {
                     .padding(12)
                 }
         }
-        .disabled(isUploadingBanner)
+        // Deferred: just stash the picked banner — it uploads on Save, not now.
         .onChange(of: bannerItem) { _, newItem in
             guard let newItem else { return }
             Task {
                 if let data = try? await newItem.loadTransferable(type: Data.self) {
                     selectedBannerData = data
-                    isUploadingBanner = true
-                    let ok = await viewModel.uploadBanner(userId: userId, imageData: data)
-                    isUploadingBanner = false
-                    if !ok { errorMessage = "Failed to upload banner"; selectedBannerData = nil }
                 }
             }
         }
@@ -163,7 +158,6 @@ private extension EditProfileScreen {
         // Hoisted for the same reason as `cover` — the label closure is `@Sendable`.
         let avatarData = selectedAvatarData
         let avatarURL = viewModel.profileImageURL
-        let uploading = isUploadingAvatar
         return VStack(spacing: 10) {
             PhotosPicker(selection: $avatarItem, matching: .images) {
                 AvatarImageView(data: avatarData, url: avatarURL)
@@ -171,16 +165,10 @@ private extension EditProfileScreen {
                     .clipShape(Circle())
                     .overlay(Circle().stroke(Color.vBase, lineWidth: 4))
                     .overlay(alignment: .bottomTrailing) {
-                        ZStack {
-                            if uploading {
-                                ProgressView().tint(.black).scaleEffect(0.6)
-                            } else {
-                                Image(systemName: "camera.fill").font(.system(size: 12)).foregroundStyle(.black)
-                            }
-                        }
-                        .frame(width: 30, height: 30)
-                        .background(.white, in: Circle())
-                        .overlay(Circle().stroke(Color.vBase, lineWidth: 3))
+                        Image(systemName: "camera.fill").font(.system(size: 12)).foregroundStyle(.black)
+                            .frame(width: 30, height: 30)
+                            .background(.white, in: Circle())
+                            .overlay(Circle().stroke(Color.vBase, lineWidth: 3))
                     }
             }
 
@@ -189,18 +177,22 @@ private extension EditProfileScreen {
             }
         }
         .frame(maxWidth: .infinity)
-        .disabled(isUploadingAvatar)
+        // Pick → crop (blur-fill/square) → stash. Nothing uploads until Save.
         .onChange(of: avatarItem) { _, newItem in
             guard let newItem else { return }
             Task {
-                if let data = try? await newItem.loadTransferable(type: Data.self) {
-                    selectedAvatarData = data
-                    isUploadingAvatar = true
-                    let ok = await viewModel.uploadAvatar(userId: userId, imageData: data)
-                    isUploadingAvatar = false
-                    if !ok { errorMessage = "Failed to upload avatar"; selectedAvatarData = nil }
+                if let data = try? await newItem.loadTransferable(type: Data.self),
+                   let ui = UIImage(data: data) {
+                    avatarCropTarget = CropTarget(image: ui.normalizedUp())
                 }
             }
+        }
+        .fullScreenCover(item: $avatarCropTarget) { target in
+            ImageCropperView(
+                image: target.image,
+                onCrop: { data in selectedAvatarData = data; avatarCropTarget = nil },
+                onCancel: { avatarCropTarget = nil }
+            )
         }
     }
 }
@@ -412,6 +404,23 @@ private extension EditProfileScreen {
     func save() {
         isSaving = true
         Task {
+            // Deferred image uploads run now, on Save — the avatar/banner aren't
+            // committed until the user taps Save. `saveProfile` then writes the
+            // resulting URLs, so upload must happen first.
+            if let data = selectedAvatarData {
+                guard await viewModel.uploadAvatar(userId: userId, imageData: data) else {
+                    isSaving = false
+                    errorMessage = "Failed to upload avatar"
+                    return
+                }
+            }
+            if let data = selectedBannerData {
+                guard await viewModel.uploadBanner(userId: userId, imageData: data) else {
+                    isSaving = false
+                    errorMessage = "Failed to upload banner"
+                    return
+                }
+            }
             let success = await viewModel.saveProfile(
                 userId: userId,
                 username: editUsername.trimmingCharacters(in: .whitespaces).lowercased(),
@@ -430,6 +439,12 @@ private extension EditProfileScreen {
 }
 
 // MARK: - Media subviews (structs so they're usable inside PhotosPicker labels)
+
+/// A picked image awaiting crop in the full-screen cropper.
+private struct CropTarget: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
 
 private struct AvatarImageView: View {
     let data: Data?
