@@ -76,7 +76,7 @@ struct ImageCropperView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 12)
         }
-        .padding(.top, max(insets.top, 12))
+        .padding(.top, insets.top)
         .padding(.bottom, max(insets.bottom, 8))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
@@ -100,9 +100,9 @@ struct ImageCropperView: View {
 
             HStack {
                 Button(action: onCancel) {
-                    LucideIcon(.x, .lg)
+                    LucideIcon(.x, .xxl)
                         .foregroundStyle(.white.opacity(0.7))
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -121,7 +121,6 @@ struct ImageCropperView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 12)
         .padding(.bottom, 12)
     }
 
