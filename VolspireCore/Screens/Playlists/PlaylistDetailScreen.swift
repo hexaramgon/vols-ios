@@ -15,25 +15,10 @@ import Services
 import SharedUtilities
 import SwiftUI
 
-/// Actions offered by the playlist's "…" options sheet. Captured on tap and run
-/// in the sheet's `onDismiss` so the follow-up sheet/dialog presents cleanly.
-private enum PlaylistMenuAction { case edit, delete }
-
 /// A picked image awaiting crop — drives the full-screen cropper presentation.
 private struct CropTarget: Identifiable {
     let id = UUID()
     let image: UIImage
-}
-
-/// Subtle press highlight for the flat options-menu rows.
-private struct OptionRowStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.08 : 0))
-            )
-    }
 }
 
 struct PlaylistDetailScreen: View {
@@ -43,7 +28,6 @@ struct PlaylistDetailScreen: View {
     @State private var viewModel: PlaylistDetailViewModel
     @State private var showDeleteConfirm = false
     @State private var showOptions = false
-    @State private var pendingAction: PlaylistMenuAction?
     let title: String
 
     init(playlistId: String, title: String) {
@@ -72,7 +56,7 @@ struct PlaylistDetailScreen: View {
                 viewModel.currentUserId = dependencies.authManager.currentUserId
                 await viewModel.load()
             }
-            .sheet(isPresented: $showOptions, onDismiss: runPendingAction) { optionsSheet }
+            .sheet(isPresented: $showOptions) { optionsSheet }
             .sheet(isPresented: $viewModel.showEdit) { editSheet }
             .confirmationDialog("Delete this playlist?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
                 Button("Delete", role: .destructive) {
@@ -181,80 +165,26 @@ struct PlaylistDetailScreen: View {
 // MARK: - Options sheet (slide-up actions)
 
 private extension PlaylistDetailScreen {
+    /// The playlist "…" menu — built from the shared `TrackOptionsSheet` so it's
+    /// pixel-identical to the track options sheet (same header, rows, and metrics).
     var optionsSheet: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SheetHeader(title: displayTitle, subtitle: footer) {
-                showOptions = false
-            } leading: {
-                optionsCover
-                    .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-            }
-
-            optionsList
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
+        TrackOptionsSheet(
+            artwork: viewModel.cover(viewModel.detail?.coverUrl).map { .webImage($0) }
+                ?? .placeholder(name: displayTitle),
+            title: displayTitle,
+            meta: footer,
+            actions: [
+                .init(icon: .squarePen, title: "Edit playlist") {
+                    viewModel.startEditing()
+                },
+                .init(icon: .trash2, title: "Delete playlist", isDestructive: true) {
+                    showDeleteConfirm = true
+                },
+            ]
+        )
         .presentationDetents([.height(240)])
         .presentationDragIndicator(.visible)
         .sheetBackground()
-    }
-
-    @ViewBuilder
-    var optionsCover: some View {
-        if let url = viewModel.cover(viewModel.detail?.coverUrl) {
-            ArtworkView(.webImage(url), cornerRadius: 11)
-        } else {
-            ZStack {
-                Color.vSurface
-                LucideIcon(.listMusic, .md).foregroundStyle(Color.vText2)
-            }
-        }
-    }
-
-    var optionsList: some View {
-        VStack(spacing: 2) {
-            optionRow(icon: .squarePen, title: "Edit playlist") {
-                pendingAction = .edit; showOptions = false
-            }
-            optionRow(icon: .trash2, title: "Delete playlist", tint: Color(red: 1, green: 0.37, blue: 0.37)) {
-                pendingAction = .delete; showOptions = false
-            }
-        }
-    }
-
-    func optionRow(icon: LucideIcon.Name, title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 16) {
-                LucideIcon(icon, .lg)
-                    .foregroundStyle(tint)
-                    .frame(width: 26, alignment: .center)
-                Text(title)
-                    .font(.appBodyLargeMedium)
-                    .foregroundStyle(tint)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 15)
-            .contentShape(.rect)
-        }
-        .buttonStyle(OptionRowStyle())
-    }
-
-    /// Runs the action chosen in the options sheet — fired from the sheet's
-    /// `onDismiss`, so the follow-up sheet/dialog presents over a clean stack.
-    func runPendingAction() {
-        let action = pendingAction
-        pendingAction = nil
-        switch action {
-        case .edit: viewModel.startEditing()
-        case .delete: showDeleteConfirm = true
-        case .none: break
-        }
     }
 }
 
