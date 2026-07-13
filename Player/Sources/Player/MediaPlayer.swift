@@ -27,11 +27,31 @@ public final class MediaPlayer {
     @Published public private(set) var nowPlayingMeta: MediaMeta?
     @Published public private(set) var avPlayer: AVPlayer?
     @Published public var audioEffects: AudioEffects = .default
+    /// When true, the current track replays itself indefinitely when it ends
+    /// (repeat-one); when false the queue advances normally. Driven by the repeat button.
+    public var repeatEnabled = false
+    /// Shuffle mode. On: `items` becomes a shuffled reordering of the queue with
+    /// the current track pinned first; off restores the order the queue was
+    /// started with. Persists across queue swaps — a queue started while shuffle
+    /// is on gets shuffled too.
+    @Published public private(set) var shuffleEnabled = false
+    /// The queue in the order it was handed to `play(_:of:)`, so turning shuffle
+    /// off can restore it.
+    private var originalItems: [MediaID] = []
 
     private var audioSession: AudioSession
     private var systemMediaInterface: SystemMediaInterface
     private var urlPlayer: URLAudioPlayer
+
+    /// Post-effects audio node the visualizer taps — see `URLAudioPlayer`.
+    public var visualizerAudioNode: AVAudioNode { urlPlayer.visualizerAudioNode }
     private var interruptedMediaID: MediaID?
+    /// Where playback was when the interruption hit — restored on resume.
+    private var interruptedElapsedTime: TimeInterval = 0
+    /// A position to restore after a track had to be RELOADED (interruption
+    /// teardown, engine loss): applied on the first progress tick once the
+    /// duration is known, and only if the track is still the current one.
+    private var pendingResumeSeek: (mediaID: MediaID, time: TimeInterval)?
     /// Decoded now-playing artwork, resolved once per track rather than on every
     /// system-info push (the per-tick re-decode was a real CPU cost).
     private var cachedArtwork: UIImage?
@@ -63,15 +83,53 @@ public final class MediaPlayer {
     }
 
     public func play(_ mediaID: MediaID, of items: [MediaID]) {
-        guard let index = items.firstIndex(of: mediaID) else {
+        guard items.contains(mediaID) else {
             print("MediaPlayer Error: there is no mediaID \(mediaID) in items.")
             return
         }
-        self.items = items
+        originalItems = items
+        self.items = shuffleEnabled ? Self.shuffledOrder(items, pinnedFirst: mediaID) : items
+        guard let index = self.items.firstIndex(of: mediaID) else { return }
         playItem(at: index)
     }
 
+    /// Turns shuffle on/off, reordering the live queue in place. The current
+    /// track keeps playing: on shuffle it's pinned to the front with the rest
+    /// shuffled behind it; off restores the original queue order at whatever
+    /// position the track sits there.
+    public func setShuffle(_ enabled: Bool) {
+        guard enabled != shuffleEnabled else { return }
+        shuffleEnabled = enabled
+        guard !items.isEmpty else { return }
+        if enabled {
+            if let current = state.currentMediaID {
+                items = Self.shuffledOrder(items, pinnedFirst: current)
+            } else {
+                items.shuffle()
+            }
+        } else if !originalItems.isEmpty {
+            items = originalItems
+        }
+        // The upcoming track changed: re-point the gapless read-ahead and re-push
+        // the lock-screen queue position.
+        if let current = state.currentMediaID, let index = items.firstIndex(of: current) {
+            prefetchNextTrack(after: index)
+            updateSystemNowPlaying()
+        }
+    }
+
     public func forward() {
+        // Repeat-one locks playback to the current track — skipping just restarts it.
+        if repeatEnabled {
+            seek(to: 0)
+            return
+        }
+        // A single-track queue wraps to itself: restart instead of a dead button
+        // (e.g. playing the only track on someone's profile).
+        if items.count == 1 {
+            seek(to: 0)
+            return
+        }
         guard items.count > 1,
               let mediaID = state.currentMediaID,
               let index = items.firstIndex(of: mediaID)
@@ -95,7 +153,43 @@ public final class MediaPlayer {
         updateSystemNowPlaying()
     }
 
+    /// Full teardown for sign-out: stops the audio engine (dropping the
+    /// prefetched next track), clears the queue and every piece of published
+    /// state, wipes the lock-screen entry, and deactivates the audio session.
+    public func reset() {
+        urlPlayer.stop()
+        items = []
+        originalItems = []
+        shuffleEnabled = false
+        repeatEnabled = false
+        state = .paused(media: .none)
+        progress = nil
+        isBuffering = false
+        nowPlayingMeta = nil
+        avPlayer = nil
+        cachedArtwork = nil
+        cachedArtworkID = nil
+        pushedDurationForCurrentTrack = false
+        interruptedMediaID = nil
+        interruptedElapsedTime = 0
+        pendingResumeSeek = nil
+        audioEffects = .default
+        updateCommandProfile()
+        systemMediaInterface.clearNowPlayingInfo()
+        audioSession.setActive(false)
+    }
+
     public func backward() {
+        // Repeat-one locks playback to the current track — skipping just restarts it.
+        if repeatEnabled {
+            seek(to: 0)
+            return
+        }
+        // Single-track queue: previous always means "start over".
+        if items.count == 1 {
+            seek(to: 0)
+            return
+        }
         // If more than 3 seconds in, restart the current track. Route through
         // `seek` (not `urlPlayer` directly) so the lock-screen scrubber is pushed
         // back to 0 too — otherwise it keeps showing the old position.
@@ -131,6 +225,11 @@ private extension MediaPlayer {
             updateSystemNowPlaying()
         } else {
             if let index = items.firstIndex(of: mediaID) {
+                // The engine lost the file (interruption teardown) — reload,
+                // then restore the position we were at instead of starting over.
+                if let elapsed = progress?.elapsedTime, elapsed > 1 {
+                    pendingResumeSeek = (mediaID, elapsed)
+                }
                 playItem(at: index)
             }
         }
@@ -179,6 +278,12 @@ private extension MediaPlayer {
         prefetchNextTrack(after: index)
     }
 
+    /// A shuffled queue order with `pinned` first — so enabling shuffle (or
+    /// starting a queue with shuffle on) never interrupts the chosen track.
+    static func shuffledOrder(_ items: [MediaID], pinnedFirst pinned: MediaID) -> [MediaID] {
+        [pinned] + items.filter { $0 != pinned }.shuffled()
+    }
+
     /// Download the next track ahead of time so skipping to it is gapless (no
     /// buffer gap, so the lock-screen controls don't flip to paused on skip).
     func prefetchNextTrack(after index: Int) {
@@ -195,8 +300,15 @@ private extension MediaPlayer {
     func updateCommandProfile() {
         let profile = CommandProfile(
             isLiveStream: false,
-            isSwitchTrackEnabled: items.count > 1
+            // Enabled for a single-track queue too — forward/backward restart
+            // the track (see forward()/backward()) instead of going dead.
+            isSwitchTrackEnabled: !items.isEmpty
         )
+        // Only reconfigure when the profile actually changed. Re-registering
+        // every MPRemoteCommandCenter handler on each resume/track switch can
+        // wedge the system now-playing session — the lock screen then keeps
+        // showing metadata but stops honoring play-state/rate updates.
+        guard profile != commandProfile else { return }
         systemMediaInterface.setRemoteCommandProfile(profile)
         commandProfile = profile
     }
@@ -275,9 +387,12 @@ public extension MediaPlayerState {
 
 extension MediaPlayer: AudioSessionDelegate {
     func audioSessionInterruptionBegan() {
-        audioSession.setActive(false)
+        // Apple's guidance: by the time `.began` arrives the system has ALREADY
+        // interrupted our session — do not deactivate it again; just bring our
+        // own state in line. (We reactivate on resume.)
         guard case let .playing(mediaID) = state else { return }
         interruptedMediaID = mediaID
+        interruptedElapsedTime = urlPlayer.elapsedTime
         pause()
     }
 
@@ -285,7 +400,16 @@ extension MediaPlayer: AudioSessionDelegate {
         audioSession.setActive(true)
         guard let mediaToResume = interruptedMediaID else { return }
         interruptedMediaID = nil
-        if shouldResume, let index = items.firstIndex(of: mediaToResume) {
+        guard shouldResume else { return }
+        if state.currentMediaID == mediaToResume, urlPlayer.currentURL != nil {
+            // The track is still loaded, paused right where the interruption
+            // hit — continue in place. (Reloading via playItem restarted it
+            // from 0:00 every time another app briefly took the audio.)
+            resume()
+        } else if let index = items.firstIndex(of: mediaToResume) {
+            // The player genuinely lost the track — reload, then restore the
+            // interrupted position once it's ready.
+            pendingResumeSeek = (mediaToResume, interruptedElapsedTime)
             playItem(at: index)
         }
     }
@@ -325,6 +449,18 @@ extension MediaPlayer: URLAudioPlayerDelegate {
         // elapsed time + rate we set on state changes. The one exception: push
         // once when a remote track's duration first becomes known.
         progress = prog
+        // Restore the pre-interruption position after a forced reload, once the
+        // track is actually ready (seeking before the file loads is a no-op).
+        if let pending = pendingResumeSeek {
+            if state.currentMediaID != pending.mediaID {
+                pendingResumeSeek = nil // user moved on — stale
+            } else if prog.duration > 0 {
+                pendingResumeSeek = nil
+                if pending.time > 1, pending.time < prog.duration - 1 {
+                    seek(to: pending.time)
+                }
+            }
+        }
         if !pushedDurationForCurrentTrack, prog.duration > 0 {
             updateSystemNowPlaying()
         }
@@ -336,9 +472,23 @@ extension MediaPlayer: URLAudioPlayerDelegate {
 
     public func urlAudioPlayer(_: URLAudioPlayer, didChangeBuffering isBuffering: Bool) {
         self.isBuffering = isBuffering
+        // Re-assert the lock-screen snapshot once audio actually flows after a
+        // switch: if any earlier push was dropped mid-flight (rapid skipping),
+        // this self-heals the play state + elapsed instead of staying stuck.
+        if !isBuffering {
+            updateSystemNowPlaying()
+        }
     }
 
     public func urlAudioPlayerDidFinishPlaying(_: URLAudioPlayer) {
+        // Repeat-one → restart the current track from the top. `seek(to: 0)` reloads
+        // the file, replays it and re-arms the finish handler, so it keeps looping.
+        // (playItem no-ops when the target is already the current track, so it can't
+        // be used to replay the same one.)
+        if repeatEnabled, state.currentMediaID != nil {
+            seek(to: 0)
+            return
+        }
         if items.count > 1,
            let mediaID = state.currentMediaID,
            let index = items.firstIndex(of: mediaID)

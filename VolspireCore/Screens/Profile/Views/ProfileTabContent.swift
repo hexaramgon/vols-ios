@@ -12,7 +12,6 @@ struct ProfileTabContent: View {
     @Environment(PlayerController.self) private var playerController
     let viewModel: ProfileScreenViewModel
     let selected: ProfileTab
-    let slideForward: Bool
     let isOwnProfile: Bool
 
     /// Base tab-bar clearance plus the floating mini-player when a track is playing.
@@ -35,14 +34,13 @@ struct ProfileTabContent: View {
         .frame(maxWidth: .infinity, alignment: .top)
         .padding(.top, 14)
         .padding(.bottom, bottomInset)
-        // Flatten the tab's layout into one geometric unit so the whole subtree
-        // slides together during the push. Without this, image-backed rows
-        // (ArtworkView composites in its own layer) resolve their frames
-        // independently and visibly lag/drift behind the text mid-transition.
-        .geometryGroup()
+        // Plain crossfade — same as the Home tab switch, which has never had a
+        // hit-testing or image-lag complaint. Anything that MOVES this content
+        // during the swap (`.push`, offset transitions, geometryGroup) has
+        // repeatedly produced either drifted tap targets or covers visibly
+        // trailing the motion (async images mounting mid-animation don't
+        // animate). No movement → nothing to lag, nothing to drift.
         .id(selected)
-        // Slide left/right with the tab order — covers are prefetched on profile
-        // load so they're cached and slide with the page (no mid-slide pop).
-        .transition(.push(from: slideForward ? .trailing : .leading))
+        .transition(.opacity)
     }
 }

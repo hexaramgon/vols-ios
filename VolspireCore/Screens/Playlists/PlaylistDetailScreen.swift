@@ -40,8 +40,7 @@ struct PlaylistDetailScreen: View {
     /// The owner-only "…" button handed to MediaCollectionScreen's trailing slot.
     private var optionsButton: some View {
         Button { showOptions = true } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 16, weight: .semibold))
+            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
         }
@@ -182,7 +181,7 @@ private extension PlaylistDetailScreen {
                 },
             ]
         )
-        .presentationDetents([.height(240)])
+        // Detents come from TrackOptionsSheet itself (sized to its rows).
         .presentationDragIndicator(.visible)
         .sheetBackground()
     }
@@ -225,13 +224,6 @@ private struct EditCoverPreview: View {
                     Color.white.opacity(0.07)
                     LucideIcon(.listMusic, .xxl).foregroundStyle(.white.opacity(0.55))
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(
-                            .white.opacity(0.35),
-                            style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])
-                        )
-                )
             }
         }
         .frame(width: 104, height: 104)

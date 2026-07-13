@@ -35,6 +35,13 @@ class SystemMediaInterface {
         // playback starts — set the state explicitly so it stays "playing".
         center.playbackState = info.isPlaying ? .playing : .paused
     }
+
+    /// Removes the lock-screen now-playing entry entirely (sign-out teardown).
+    func clearNowPlayingInfo() {
+        let center = MPNowPlayingInfoCenter.default()
+        center.nowPlayingInfo = nil
+        center.playbackState = .stopped
+    }
 }
 
 private extension SystemMediaInterface {
@@ -100,7 +107,12 @@ extension NowPlayingInfo {
         info[MPNowPlayingInfoPropertyIsLiveStream] = false
         info[MPMediaItemPropertyTitle] = meta.title
         info[MPMediaItemPropertyArtist] = meta.artist
-        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: artwork.size) { _ in artwork }
+        // Never publish a zero-sized artwork (the pre-cover placeholder) —
+        // iOS can silently discard the whole info dictionary for it, dropping
+        // the play-state update that came with it.
+        if artwork.size.width > 0, artwork.size.height > 0 {
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: artwork.size) { _ in artwork }
+        }
         if let queue {
             info[MPNowPlayingInfoPropertyPlaybackQueueIndex] = queue.index
             info[MPNowPlayingInfoPropertyPlaybackQueueCount] = queue.count

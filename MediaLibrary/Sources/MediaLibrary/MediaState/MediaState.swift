@@ -28,6 +28,9 @@ public protocol MediaState: AnyObject {
 
     /// Remove a media list from the library.
     func removeMediaList(_ mediaListID: MediaListID) async
+
+    /// Wipe everything (sign-out teardown).
+    func removeAll() async
 }
 
 public extension MediaState {

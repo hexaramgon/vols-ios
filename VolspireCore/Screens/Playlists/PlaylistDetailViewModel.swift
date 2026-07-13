@@ -82,8 +82,12 @@ final class PlaylistDetailViewModel {
 
     func shuffle() {
         guard let player, !tracks.isEmpty else { return }
-        let order = tracks.map { MediaID($0.trackId) }.shuffled()
-        if let first = order.first { player.play(first, of: order) }
+        // Random starting track + player-level shuffle: the queue keeps its real
+        // order underneath, so toggling shuffle off in the player restores it.
+        let ids = tracks.map { MediaID($0.trackId) }
+        guard let start = ids.randomElement() else { return }
+        player.setShuffle(true)
+        player.play(start, of: ids)
     }
 
     /// Removes a track from this playlist, then reloads so the list reflects it.

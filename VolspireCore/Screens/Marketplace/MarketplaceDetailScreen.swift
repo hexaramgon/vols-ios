@@ -173,8 +173,7 @@ private extension MarketplaceDetailScreen {
     /// stays legible over the cover, then sits on the solid bar once scrolled.
     var optionsButton: some View {
         Button { showOptions = true } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 16, weight: .semibold))
+            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
         }

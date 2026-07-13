@@ -11,6 +11,7 @@ import Player
 import Services
 import SwiftUI
 import UIKit
+import Visualizer
 
 @Observable @MainActor
 final class PlayerController {
@@ -43,6 +44,12 @@ final class PlayerController {
     var isScrubbing: Bool = false
     var nowPlayingMeta: MediaMeta?
     var audioEffects: AudioEffects = .default
+    /// Repeat toggle — replay the current track indefinitely when it ends. Mirrored
+    /// to the player, which owns the auto-advance.
+    var isRepeatOn = false
+    /// Shuffle toggle — mirrored FROM the player (which owns the queue reorder),
+    /// so shuffle-all entry points like a playlist's Shuffle button light it up too.
+    var isShuffleOn = false
     /// When false (default), audio edits reset on track change; when true they
     /// carry to every track. Mirrors the web's "Carry to next track".
     var persistAudioEdits: Bool = false
@@ -75,9 +82,33 @@ final class PlayerController {
         let coverURL: URL?
     }
 
+    /// Feeds the expanded player's visualizer. Installed on the player's
+    /// post-effects node when the player is attached; passive until then.
+    let visualizerTap = VisualizerAudioTap()
+
+    /// Fullscreen visualizer in the expanded player, rendered full-bleed
+    /// behind the controls like portrait video. Toggled by the sparkles
+    /// button on the artwork slot.
+    var showVisualizer = false
+
+    /// Visualizer applies to real audio tracks only — video already owns the
+    /// full-bleed layer, and workspace files aren't tracks.
+    var visualizerAvailable: Bool {
+        guard FeatureFlags.visualizer, currentFileId == nil, !display.isVideoTrack else { return false }
+        if case .videoPlayer = display.artwork { return false }
+        return true
+    }
+
     weak var player: MediaPlayer? {
         didSet {
             observeMediaPlayerState()
+            // Tap only when the feature is on — otherwise "off" still pays for
+            // sample conversion on every audio buffer.
+            if let player, FeatureFlags.visualizer {
+                visualizerTap.install(on: player.visualizerAudioNode)
+            } else {
+                visualizerTap.remove()
+            }
         }
     }
 
@@ -148,12 +179,57 @@ final class PlayerController {
         }
     }
 
+    /// Plays a single track outside any list context (e.g. a shared-track card in a
+    /// DM). Registers it, then plays a one-item queue as a normal (non-workspace)
+    /// track.
+    func playSingle(_ media: Media) {
+        guard media.meta.audioURL != nil else { return }
+        fileIdByMediaId = [:]
+        currentFileId = nil
+        Task {
+            await mediaState?.addTrack(media)
+            player?.play(media.id, of: [media.id])
+        }
+    }
+
     func onForward() {
         player?.forward()
     }
 
     func onBackward() {
         player?.backward()
+    }
+
+    /// Toggle repeating the current track (the repeat button).
+    func toggleRepeat() {
+        isRepeatOn.toggle()
+        player?.repeatEnabled = isRepeatOn
+    }
+
+    /// Toggle queue shuffle (the shuffle button). State flows back via the
+    /// player's `shuffleEnabled` publisher.
+    func toggleShuffle() {
+        player?.setShuffle(!isShuffleOn)
+    }
+
+    /// Sign-out teardown for the controller's own per-user state — the player
+    /// itself is cleared by `MediaPlayer.reset()`, whose publishers then reset
+    /// the mirrored display/progress/state here.
+    func resetForSignOut() {
+        trackDetail = nil
+        lastFetchedTrackId = nil
+        isLiked = false
+        isSaved = false
+        likeCount = 0
+        saveCount = 0
+        fileIdByMediaId = [:]
+        currentFileId = nil
+        isRepeatOn = false
+        persistAudioEdits = false
+        audioEffects = .default
+        showVisualizer = false
+        pendingProfileNavigation = nil
+        pendingExpand = false
     }
 
     func seek(to time: TimeInterval) {
@@ -249,6 +325,10 @@ private extension PlayerController {
 
         player.$isBuffering
             .sink { [weak self] buffering in self?.isBuffering = buffering }
+            .store(in: &cancellables)
+
+        player.$shuffleEnabled
+            .sink { [weak self] enabled in self?.isShuffleOn = enabled }
             .store(in: &cancellables)
     }
 

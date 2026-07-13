@@ -20,8 +20,6 @@ struct ProfileScreen: View {
     @State private var viewModel = ProfileScreenViewModel()
     @State private var scrollOffset: CGFloat = 0
     @State private var selectedTab: ProfileTab = .tracks
-    /// Direction the next tab change should slide (true = new tab is to the right).
-    @State private var slideForward = true
     @State private var showEditProfile = false
     @State private var showShareSheet = false
     /// The tapped avatar's on-screen frame — handed to the app-level preview so the
@@ -30,6 +28,13 @@ struct ProfileScreen: View {
     /// Flips true once the real profile is on screen, driving the staggered
     /// fade-up reveal of the hero, tab bar, and tab content.
     @State private var contentAppeared = false
+    /// Guards the initial load: `.task` re-fires on every pop-return (a push
+    /// covers this view and cancels it), and re-running `loadProfile` flips
+    /// `loadingState` back to `.loading` — which crossfades the whole page
+    /// toward the dark skeleton and back (a visible dim on the way back from
+    /// Edit Profile). Edits mutate the shared view model directly, so
+    /// returning needs no refetch.
+    @State private var didLoad = false
 
     let userId: String?
 
@@ -87,10 +92,15 @@ struct ProfileScreen: View {
                         ProfileTabContent(
                             viewModel: viewModel,
                             selected: selectedTab,
-                            slideForward: slideForward,
                             isOwnProfile: isOwnProfile
                         )
-                        .entranceReveal(contentAppeared, index: 2)
+                        // Fade only (distance 0): a slide would leave the async cover
+                        // images sitting at their final spot while the text rises to
+                        // meet them (they render in their own layer). Fixing that with
+                        // `.geometryGroup()` reintroduced the stale-hit-testing bug, so
+                        // the whole tab just cross-fades in instead — nothing moves, so
+                        // nothing can lag, and taps stay aligned.
+                        .entranceReveal(contentAppeared, index: 2, distance: 0)
                     }
                 }
                 .scrollIndicators(.hidden)
@@ -109,7 +119,10 @@ struct ProfileScreen: View {
         .navigationBarBackButtonHidden(true)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
-            if !isOwnProfile {
+            // Show the back chevron whenever this profile was pushed (has an explicit
+            // userId) — including your *own* profile opened from elsewhere (e.g. a
+            // shared-track card). Only the Profile tab root (userId == nil) omits it.
+            if userId != nil {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button { dismiss() } label: {
                         Image(systemName: "chevron.left")
@@ -133,17 +146,16 @@ struct ProfileScreen: View {
             ProfileMiniHeader(opacity: miniHeaderOpacity)
         }
         .enableSwipeBack()
-        .sheet(isPresented: $showEditProfile) {
+        .navigationDestination(isPresented: $showEditProfile) {
             EditProfileScreen(viewModel: viewModel, userId: resolvedUserId)
         }
         .sheet(isPresented: $showShareSheet) {
-            // The web profile route is /profile/<username> (userId 404s), so share
-            // the username link plus a short caption.
+            // One preloaded caption with the profile link inline — same format as the
+            // track share. (Web profile route is /profile/<username>; userId 404s.)
             let username = viewModel.username
-            if !username.isEmpty, let link = URL(string: "https://volspire.com/profile/\(username)") {
+            if !username.isEmpty {
                 ActivityViewController(activityItems: [
-                    "Check out @\(username) on Volspire 🎵",
-                    link,
+                    "Check out @\(username) on Volspire! https://volspire.com/profile/\(username)"
                 ])
                 .presentationDetents([.medium, .large])
             }
@@ -170,7 +182,7 @@ struct ProfileScreen: View {
                 meta: track.isPrivate ? "Private" : "Public",
                 actions: trackOptionsActions(for: track)
             )
-            .presentationDetents([.medium])
+            // Detents come from TrackOptionsSheet itself (sized to its rows).
             .presentationDragIndicator(.visible)
         }
         .fullScreenCover(item: $viewModel.editingTrackDetail) { detail in
@@ -200,6 +212,8 @@ struct ProfileScreen: View {
         .task {
             viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
+            guard !didLoad else { return }
+            didLoad = true
             await loadEverything()
         }
     }
@@ -278,10 +292,7 @@ private extension ProfileScreen {
     }
 
     func select(_ tab: ProfileTab) {
-        let new = visibleTabs.firstIndex(of: tab) ?? 0
-        let old = visibleTabs.firstIndex(of: selectedTab) ?? 0
-        slideForward = new >= old
-        withAnimation(.smooth(duration: 0.3)) { selectedTab = tab }
+        withAnimation(.easeInOut(duration: 0.2)) { selectedTab = tab }
     }
 }
 

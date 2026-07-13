@@ -8,6 +8,7 @@
 //  select pills.
 //
 
+import AVFoundation
 import DesignSystem
 import SwiftUI
 
@@ -29,40 +30,23 @@ enum UploadTheme {
     static let warningText = Color.vWarning.opacity(0.85)
 }
 
-// MARK: - Flow header (centered title, close button top-right)
+// MARK: - Flow header
 
+/// The upload-flow header — the shared `SheetHeader` (icon tile + title + subtitle
+/// + close + divider), so every create/upload page reads like the workspace and
+/// playlist sheets.
 struct UploadFlowHeader: View {
+    var icon: LucideIcon.Name
     let title: String
+    var subtitle: String?
     let onClose: () -> Void
 
     var body: some View {
-        ZStack {
-            Text(title)
-                .font(.appHeadline)
-                .foregroundStyle(.white)
-
-            HStack {
-                Spacer()
-                Button(action: onClose) {
-                    LucideIcon(.x, .md)
-                        .foregroundStyle(Color.vText2)
-                        .frame(width: 36, height: 36)
-                        .background(Color.white.opacity(0.06), in: Circle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.vBorder)
-                .frame(height: 1)
-        }
+        SheetHeader(icon: icon, title: title, subtitle: subtitle, onClose: onClose)
     }
 }
 
-// MARK: - Section divider (tiny uppercase label + hairline)
+// MARK: - Section heading (quiet auth-style label)
 
 struct UploadSectionDivider: View {
     let label: String
@@ -72,17 +56,12 @@ struct UploadSectionDivider: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Text(label)
-                .font(.appLabel)
-                .textCase(.uppercase)
-                .tracking(1.2)
-                .foregroundStyle(Color.vText3)
-                .fixedSize()
-            Rectangle()
-                .fill(Color.vBorder)
-                .frame(height: 1)
-        }
+        // Matches the sign-in/register section headings (was an uppercase
+        // micro-label + hairline).
+        Text(label)
+            .font(.appCalloutSemibold)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -96,24 +75,25 @@ struct UploadFieldLabel: View {
     }
 
     var body: some View {
+        // Soft sentence-case label, like the auth fields.
         Text(text)
-            .font(.appLabel)
-            .textCase(.uppercase)
-            .tracking(1.0)
-            .foregroundStyle(Color.vText3)
+            .font(.appFootnoteSemibold)
+            .foregroundStyle(Color.vText2)
     }
 }
 
 // MARK: - Input shell (dark fill + hairline border, rounded-xl)
 
 extension View {
-    func uploadFieldShell(cornerRadius: CGFloat = 12) -> some View {
+    /// Matches the workspace / playlist sheet input fields: a soft translucent
+    /// fill, continuous corners, and no hard border (`vBorder` is clear).
+    func uploadFieldShell(cornerRadius: CGFloat = 16) -> some View {
+        // Same card as the auth field groups: white 5% fill, continuous 16pt.
         self
-            .background(UploadTheme.fieldFill)
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .strokeBorder(UploadTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.vBorder)
             )
     }
 }
@@ -427,14 +407,13 @@ struct UploadTagInput: View {
                                 HStack(spacing: 6) {
                                     Text("#\(tag)")
                                         .font(.appFootnote)
-                                        .foregroundStyle(Color.vText2)
+                                        .foregroundStyle(.white)
                                     LucideIcon(.x, .xs)
                                         .foregroundStyle(Color.vText3)
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 7)
-                                .background(Capsule().fill(Color.white.opacity(0.06)))
-                                .overlay(Capsule().strokeBorder(Color.vBorder, lineWidth: 1))
+                                .background(Capsule().fill(Color.white.opacity(0.1)))
                                 .contentShape(.rect)
                             }
                             .buttonStyle(.plain)
@@ -445,7 +424,7 @@ struct UploadTagInput: View {
                 TextField(
                     "",
                     text: $input,
-                    prompt: Text("Type and press return…").foregroundStyle(Color.vText3)
+                    prompt: Text("Add your own custom tags…").foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
                 .foregroundStyle(.white)
@@ -463,20 +442,25 @@ struct UploadTagInput: View {
 
             let remaining = suggestions.filter { !tags.contains($0) }
             if !remaining.isEmpty {
-                ChipFlowLayout(spacing: 8, lineSpacing: 8) {
-                    ForEach(remaining, id: \.self) { tag in
-                        Button {
-                            add(tag)
-                        } label: {
-                            Text("+ \(tag)")
-                                .font(.appFootnote)
-                                .foregroundStyle(Color.vText3)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .overlay(Capsule().strokeBorder(Color.vBorder, lineWidth: 1))
-                                .contentShape(.rect)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Suggested")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
+                    ChipFlowLayout(spacing: 8, lineSpacing: 8) {
+                        ForEach(remaining, id: \.self) { tag in
+                            Button {
+                                add(tag)
+                            } label: {
+                                Text("+ \(tag)")
+                                    .font(.appFootnote)
+                                    .foregroundStyle(Color.vText3)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(Capsule().fill(Color.white.opacity(0.05)))
+                                    .contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -615,5 +599,248 @@ struct UploadPill: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Attached-media preview (audio + video)
+
+/// Inline preview for a just-picked upload, styled like the app's player:
+/// a white play circle (Lucide glyphs) + scrubber transport row. Audio mode
+/// is the bare row in a form card; video mode lays the same row over the
+/// picture with a legibility scrim. The picked `Data` is staged to a temp
+/// file so AVPlayer can stream it, and cleaned up when the preview goes away.
+struct UploadPreviewPlayer: View {
+    let data: Data
+    let fileName: String?
+    /// False for audio files AND for videos being uploaded as audio-only.
+    let isVideo: Bool
+    /// Fired when preview playback starts (used to pause the app's music).
+    var onStartPlaying: () -> Void = {}
+
+    @State private var player: AVPlayer?
+    @State private var tempURL: URL?
+    @State private var isPlaying = false
+    @State private var current: Double = 0
+    @State private var duration: Double = 0
+    @State private var isSeeking = false
+    @State private var timeObserver: Any?
+    @State private var endObserver: (any NSObjectProtocol)?
+    /// Set when the preview is dismissed before staging finishes, so the late
+    /// staging task cleans up after itself instead of leaking a player + file.
+    @State private var tornDown = false
+    /// The video's native width/height ratio (transform-corrected), loaded from
+    /// the asset — the card's height follows it instead of a fixed widescreen box.
+    @State private var videoAspect: CGFloat?
+    /// Measured card width, for turning the ratio into a concrete height.
+    @State private var cardWidth: CGFloat = 0
+
+    /// Full width over the native ratio, capped so portrait videos stay a card.
+    private var videoCardHeight: CGFloat {
+        guard cardWidth > 0 else { return 220 }
+        return min(cardWidth / (videoAspect ?? 16 / 9), 420)
+    }
+
+    var body: some View {
+        // The container always renders (a loading state until the player is
+        // staged) — an empty conditional here would never fire `onAppear`.
+        Group {
+            if isVideo {
+                ZStack(alignment: .bottom) {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(UploadTheme.fieldFill)
+
+                    if let player {
+                        PlayerVideoView(player: player, gravity: .resizeAspect)
+                            .contentShape(.rect)
+                            .onTapGesture { toggle() }
+                    } else {
+                        ProgressView()
+                            .tint(.white.opacity(0.6))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+
+                    // Legibility scrim under the transport, like the player.
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.6)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                    .frame(height: 84)
+                    .allowsHitTesting(false)
+
+                    transportRow
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 10)
+                }
+                // Full-width card whose height follows the video's native ratio
+                // (16:9 until the asset reports its size), capped so portrait
+                // videos don't swallow the form — they pillarbox inside while
+                // the transport row keeps the card's full width.
+                .frame(height: videoCardHeight)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { cardWidth = $0 })
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(UploadTheme.border, lineWidth: 1)
+                )
+                .animation(.smooth(duration: 0.25), value: videoAspect)
+            } else {
+                transportRow
+                    .padding(12)
+                    .background(UploadTheme.fieldFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(UploadTheme.border, lineWidth: 1)
+                    )
+            }
+        }
+        .onAppear(perform: setup)
+        .onDisappear(perform: teardown)
+    }
+
+    /// The shared transport: white play circle (player-style) + scrubber + time.
+    private var transportRow: some View {
+        HStack(spacing: 11) {
+            Button { toggle() } label: {
+                ZStack {
+                    Circle()
+                        .fill(.white)
+                        .frame(width: 34, height: 34)
+                    LucideIcon(isPlaying ? .pauseFill : .playFill, .sm)
+                        .foregroundStyle(.black)
+                        .offset(x: isPlaying ? 0 : 1) // optical centre for the triangle
+                        .contentTransition(.identity)
+                        .animation(nil, value: isPlaying)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(player == nil)
+            .opacity(player == nil ? 0.5 : 1)
+
+            Slider(
+                value: Binding(get: { current }, set: { current = $0 }),
+                in: 0 ... max(duration, 0.1),
+                onEditingChanged: { editing in
+                    if editing {
+                        isSeeking = true
+                    } else {
+                        seek(to: current)
+                    }
+                }
+            )
+            .tint(.white)
+            .disabled(player == nil)
+
+            Text("\(format(current)) / \(format(duration))")
+                .font(.appCaption2)
+                .foregroundStyle(isVideo ? Color.white.opacity(0.85) : Color.vText3)
+                .monospacedDigit()
+        }
+    }
+
+    private func setup() {
+        // Stage to a temp file with the right extension so AVPlayer can sniff
+        // the container format.
+        let ext = (fileName as NSString?)?.pathExtension.lowercased() ?? ""
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("upload-preview-\(UUID().uuidString)")
+            .appendingPathExtension(ext.isEmpty ? (isVideo ? "mov" : "mp3") : ext)
+        let bytes = data
+        Task {
+            // Write OFF the main thread — a video's Data is tens of MB, and a
+            // synchronous write here froze the UI right after compression.
+            let staged = await Task.detached(priority: .userInitiated) {
+                do { try bytes.write(to: url, options: .atomic); return true }
+                catch { return false }
+            }.value
+            guard staged else { return }
+            guard !tornDown else {
+                try? FileManager.default.removeItem(at: url)
+                return
+            }
+            attachPlayer(url: url)
+        }
+    }
+
+    private func attachPlayer(url: URL) {
+        tempURL = url
+
+        let p = AVPlayer(url: url)
+        player = p
+
+        // Both callbacks are delivered on the main queue (`queue: .main`), so
+        // hopping onto the main actor is assumption, not a thread switch.
+        timeObserver = p.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main
+        ) { time in
+            MainActor.assumeIsolated {
+                if !isSeeking { current = time.seconds }
+            }
+        }
+        Task {
+            guard let item = p.currentItem else { return }
+            if let d = try? await item.asset.load(.duration), d.seconds.isFinite {
+                duration = d.seconds
+            }
+            // Phone footage is often stored rotated with a correcting transform,
+            // so the display ratio comes from the transformed natural size.
+            if isVideo,
+               let track = try? await item.asset.loadTracks(withMediaType: .video).first,
+               let (size, transform) = try? await track.load(.naturalSize, .preferredTransform) {
+                let rect = CGRect(origin: .zero, size: size).applying(transform)
+                if rect.width != 0, rect.height != 0 {
+                    videoAspect = abs(rect.width / rect.height)
+                }
+            }
+        }
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                isPlaying = false
+                current = 0
+                p.seek(to: .zero)
+            }
+        }
+    }
+
+    private func teardown() {
+        tornDown = true
+        player?.pause()
+        if let timeObserver { player?.removeTimeObserver(timeObserver) }
+        timeObserver = nil
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = nil
+        player = nil
+        if let tempURL { try? FileManager.default.removeItem(at: tempURL) }
+        tempURL = nil
+    }
+
+    private func toggle() {
+        guard let player else { return }
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        } else {
+            if duration > 0, current >= duration - 0.1 { player.seek(to: .zero); current = 0 }
+            onStartPlaying()
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    private func seek(to seconds: Double) {
+        guard let player else { isSeeking = false; return }
+        player.seek(
+            to: CMTime(seconds: seconds, preferredTimescale: 600),
+            toleranceBefore: .zero, toleranceAfter: .zero
+        ) { _ in
+            Task { @MainActor in isSeeking = false }
+        }
+    }
+
+    private func format(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let s = Int(seconds.rounded())
+        return "\(s / 60):" + String(format: "%02d", s % 60)
     }
 }

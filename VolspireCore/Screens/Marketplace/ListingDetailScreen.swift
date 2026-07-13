@@ -11,6 +11,7 @@ import DesignSystem
 import Kingfisher
 import Services
 import SwiftUI
+import UIKit
 
 struct ListingDetailScreen: View {
     @Environment(Router.self) private var router
@@ -25,6 +26,8 @@ struct ListingDetailScreen: View {
     @State private var pendingAdminDelete = false
     @State private var pendingEdit = false
     @State private var showEdit = false
+    /// The comment whose options sheet is open (matches the track comments UX).
+    @State private var commentOptions: ApiListingComment?
     @FocusState private var commentFocused: Bool
 
     init(listing: ApiListing) {
@@ -54,12 +57,10 @@ struct ListingDetailScreen: View {
         .appNavBar(
             title: "\(categoryLabel) Listing",
             subtitle: "@\(listing.author.username)",
-            collapsing: true
-        ) { dismiss() }
-        .toolbar {
-            if viewModel.isAuthor {
-                ToolbarItem(placement: .topBarTrailing) { adminButton }
-            }
+            collapsing: true,
+            onBack: { dismiss() }
+        ) {
+            if viewModel.isAuthor { adminButton }
         }
         .task { await viewModel.load() }
         .onDisappear { viewModel.stopClip() }
@@ -68,6 +69,13 @@ struct ListingDetailScreen: View {
             if pendingAdminDelete { pendingAdminDelete = false; showDeleteConfirm = true }
             if pendingEdit { pendingEdit = false; showEdit = true }
         }) { adminOptionsSheet }
+        .sheet(item: $commentOptions) { comment in
+            ListingCommentOptionsSheet(
+                comment: comment,
+                isOwn: viewModel.isOwnComment(comment),
+                onDelete: { Task { await viewModel.deleteComment(comment) } }
+            )
+        }
         .fullScreenCover(isPresented: $showEdit, onDismiss: { Task { await viewModel.load() } }) {
             CreateListingScreen(viewModel: CreateListingViewModel(
                 editing: listing,
@@ -88,7 +96,7 @@ struct ListingDetailScreen: View {
     /// Author-only "…" — opens a slide-up sheet to open/close or delete.
     private var adminButton: some View {
         Button { showAdminOptions = true } label: {
-            LucideIcon(.ellipsis, .xl)
+            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
                 .frame(width: 40, height: 40)
@@ -97,62 +105,51 @@ struct ListingDetailScreen: View {
         .buttonStyle(.plain)
     }
 
-    /// Author options as a slide-up sheet (matches the workspace file sheet).
+    /// Author options as a slide-up sheet — the shared `SheetHeader` + Lucide rows,
+    /// matching the folder / playlist / track option sheets.
     private var adminOptionsSheet: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 13) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.white.opacity(0.08))
-                    LucideIcon(categoryIcon, .lg).foregroundStyle(.white)
-                }
-                .frame(width: 52, height: 52)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(listing.title).font(.appTitle3Bold).foregroundStyle(.white).lineLimit(1)
-                    Text(viewModel.isClosed ? "Closed" : "Open").font(.appFootnote).foregroundStyle(.white.opacity(0.5))
-                }
-                Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(icon: categoryIcon, title: listing.title, subtitle: viewModel.isClosed ? "Closed" : "Open") {
+                showAdminOptions = false
             }
-            .padding(.horizontal, 6)
-            .padding(.bottom, 2)
 
-            VStack(spacing: 2) {
-                adminRow(systemImage: "pencil", title: "Edit listing") {
+            VStack(spacing: 0) {
+                adminRow(icon: .squarePen, title: "Edit listing") {
                     pendingEdit = true
                     showAdminOptions = false
                 }
-                adminRow(systemImage: viewModel.isClosed ? "lock.open" : "lock",
+                adminRow(icon: viewModel.isClosed ? .circleCheck : .lock,
                          title: viewModel.isClosed ? "Reopen listing" : "Close listing") {
                     showAdminOptions = false
                     Task { await viewModel.toggleStatus() }
                 }
-                adminRow(systemImage: "trash", title: "Delete listing",
+                adminRow(icon: .trash2, title: "Delete listing",
                          tint: Color(red: 1, green: 0.37, blue: 0.37)) {
                     pendingAdminDelete = true
                     showAdminOptions = false
                 }
             }
+            .padding(.top, 6)
+
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 22)
-        .padding(.bottom, 14)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(316)])
+        .presentationDetents([.height(272)])
         .presentationDragIndicator(.visible)
         .sheetBackground()
     }
 
-    private func adminRow(systemImage: String, title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
+    private func adminRow(icon: LucideIcon.Name, title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 18)).foregroundStyle(tint)
-                    .frame(width: 26, alignment: .center)
-                Text(title).font(.appBodyLargeMedium).foregroundStyle(tint)
+            HStack(spacing: 14) {
+                LucideIcon(icon, .lg)
+                    .foregroundStyle(tint)
+                    .frame(width: 26)
+                Text(title).font(.appBody).foregroundStyle(tint)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 6).padding(.vertical, 15)
+            .padding(.horizontal, 20).padding(.vertical, 15)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -173,7 +170,7 @@ private extension ListingDetailScreen {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(listing.title)
-                        .font(.appTitle2).foregroundStyle(.white)
+                        .font(.appTitle3Bold).foregroundStyle(.white)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 6) {
                         Text("@\(listing.author.username)").font(.appFootnoteMedium).foregroundStyle(Color.vText2)
@@ -259,7 +256,7 @@ private extension ListingDetailScreen {
                 Button { viewModel.toggleClip(clip) } label: {
                     HStack(spacing: 12) {
                         ZStack {
-                            Circle().fill(playing ? Color.brand : Color.white.opacity(0.08))
+                            Circle().fill(playing ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(Color.white.opacity(0.08)))
                             LucideIcon(playing ? .pause : .playFill, .sm).foregroundStyle(.white)
                         }
                         .frame(width: 36, height: 36)
@@ -347,7 +344,8 @@ private extension ListingDetailScreen {
         .shimmering()
     }
 
-    /// Placeholder rows shown while comments load.
+    /// Placeholder rows shown while comments load — they resolve in the same
+    /// concurrent pass as the responses skeleton, so both fill in together.
     var commentsSkeleton: some View {
         VStack(alignment: .leading, spacing: 18) {
             ForEach(0 ..< 3, id: \.self) { _ in
@@ -379,9 +377,9 @@ private extension ListingDetailScreen {
     }
 
     var commentComposer: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .bottom, spacing: 10) {
             TextField("", text: $viewModel.commentText, prompt: Text("Add a comment…").foregroundColor(Color.vText3), axis: .vertical)
-                .font(.appSubheadline)
+                .font(.appCalloutRegular)
                 .foregroundStyle(.white)
                 .tint(.white)
                 .lineLimit(1 ... 4)
@@ -390,23 +388,30 @@ private extension ListingDetailScreen {
                 .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.vBorder, lineWidth: 1))
 
-            Button {
-                commentFocused = false
-                Task { await viewModel.postComment() }
-            } label: {
-                Group {
-                    if viewModel.isPostingComment {
-                        ProgressView().tint(.black).controlSize(.small)
-                    } else {
-                        LucideIcon(.arrowUpRight, .lg).foregroundStyle(.black)
+            // Same send button as chat / track comments: accent-gradient circle with
+            // an up-arrow that scale-fades in once there's something to post.
+            if canPostComment || viewModel.isPostingComment {
+                Button {
+                    commentFocused = false
+                    Task { await viewModel.postComment() }
+                } label: {
+                    Group {
+                        if viewModel.isPostingComment {
+                            ProgressView().tint(.white).controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundStyle(.white)
+                        }
                     }
+                    .frame(width: 38, height: 38)
+                    .background(LinearGradient.sendAccent, in: Circle())
                 }
-                .frame(width: 38, height: 38)
-                .background(canPostComment ? Color.white : Color.white.opacity(0.3), in: Circle())
+                .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
             }
-            .buttonStyle(.plain)
-            .disabled(!canPostComment)
         }
+        .animation(.spring(response: 0.32, dampingFraction: 0.72), value: canPostComment)
     }
 
     var canPostComment: Bool {
@@ -414,29 +419,42 @@ private extension ListingDetailScreen {
     }
 
     func commentRow(_ comment: ApiListingComment) -> some View {
-        HStack(alignment: .top, spacing: 11) {
-            avatar(comment.user, size: 34)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 7) {
-                    Text("@\(comment.user.username)").font(.appFootnoteSemibold).foregroundStyle(.white)
-                    Text(timeAgo(comment.createdAt)).font(.appCaption2).foregroundStyle(Color.vText3)
-                    Spacer(minLength: 0)
-                    if viewModel.isOwnComment(comment) {
-                        Menu {
-                            Button(role: .destructive) {
-                                Task { await viewModel.deleteComment(comment) }
-                            } label: { Label("Delete", systemImage: "trash") }
-                        } label: {
-                            LucideIcon(.ellipsis, .lg)
-                                .foregroundStyle(Color.vText2)
-                                .frame(width: 32, height: 28).contentShape(.rect)
-                        }
+        HStack(alignment: .top, spacing: 12) {
+            Button { router.navigateToProfile(userId: comment.user.userId) } label: {
+                avatar(comment.user, size: 30)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Button { router.navigateToProfile(userId: comment.user.userId) } label: {
+                        Text("@\(comment.user.username)")
+                            .font(.appLabel).foregroundStyle(.white.opacity(0.7))
                     }
+                    .buttonStyle(.plain)
+                    Text(timeAgo(comment.createdAt))
+                        .font(.appCaption2).foregroundStyle(.white.opacity(0.3))
                 }
                 Text(comment.content)
-                    .font(.appSubheadline).foregroundStyle(Color.white.opacity(0.9))
+                    .font(.appCalloutRegular).foregroundStyle(.white.opacity(0.9))
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            Spacer(minLength: 0)
+        }
+        .contentShape(.rect)
+        // Lift the held comment while its options sheet is open (matches track comments).
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(.white.opacity(commentOptions?.id == comment.id ? 0.09 : 0))
+                .padding(.horizontal, -10)
+                .padding(.vertical, -8)
+        )
+        .animation(.easeOut(duration: 0.05), value: commentOptions?.id)
+        // Long-press to open options (report / delete your own) — same as track.
+        .onLongPressGesture(minimumDuration: 0.35) {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            commentOptions = comment
         }
     }
 
@@ -597,7 +615,7 @@ private extension ListingDetailScreen {
 
     func bodyText(_ text: String) -> some View {
         Text(text)
-            .font(.appBody).foregroundStyle(Color.white.opacity(0.92))
+            .font(.appCalloutRegular).foregroundStyle(Color.white.opacity(0.92))
             .lineSpacing(2)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -640,5 +658,75 @@ private extension ListingDetailScreen {
         if let d = f.date(from: s) { return d }
         f.formatOptions = [.withInternetDateTime]
         return f.date(from: s)
+    }
+}
+
+// MARK: - Comment options sheet
+
+/// Options for a listing comment — the same `SheetHeader` + rows as the track
+/// comment sheet (`CommentOptionsSheet`), so both read identically. Listing
+/// comments are flat, so there's no Reply.
+private struct ListingCommentOptionsSheet: View {
+    let comment: ApiListingComment
+    let isOwn: Bool
+    let onDelete: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    // Copy + (Delete or Report) — matches the track sheet's row math.
+    private var detentHeight: CGFloat { 130 + 2 * 56 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(
+                icon: .messageCircle,
+                title: comment.user.username,
+                subtitle: comment.content
+            ) { dismiss() }
+
+            VStack(spacing: 0) {
+                optionRow(icon: .copy, title: "Copy", destructive: false) {
+                    UIPasteboard.general.string = comment.content
+                    dismiss()
+                }
+                if isOwn {
+                    optionRow(icon: .trash2, title: "Delete comment", destructive: true) {
+                        dismiss()
+                        onDelete()
+                    }
+                } else {
+                    // Placeholder — no report backend yet (same as track comments).
+                    optionRow(icon: .triangleAlert, title: "Report", destructive: false) {
+                        dismiss()
+                    }
+                }
+            }
+            .padding(.top, 6)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .environment(\.colorScheme, .dark)
+        .presentationDetents([.height(detentHeight)])
+        .presentationDragIndicator(.visible)
+        .sheetBackground()
+    }
+
+    private func optionRow(icon: LucideIcon.Name, title: String, destructive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                LucideIcon(icon, .lg)
+                    .foregroundStyle(destructive ? Color.vError : .white)
+                    .frame(width: 26)
+                Text(title)
+                    .font(.appBody)
+                    .foregroundStyle(destructive ? Color.vError : .white)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 15)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 }

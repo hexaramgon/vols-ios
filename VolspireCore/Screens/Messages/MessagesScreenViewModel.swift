@@ -24,6 +24,9 @@ struct ConversationItem: Identifiable, Hashable {
     let lastMessageType: String?
     let requestStatus: String?
     let archived: Bool
+    /// The latest message is mine — in a pending request thread only the
+    /// requester can speak, so this doubles as "I sent the request".
+    let lastMessageFromMe: Bool
 
     var hasUnread: Bool { unreadCount > 0 }
 
@@ -35,9 +38,16 @@ struct ConversationItem: Identifiable, Hashable {
     private var isCollabRequest: Bool { lastMessageType == "collab_request" }
     /// A collab request the other side declined.
     var isDeclinedRequest: Bool { isCollabRequest && requestStatus == "rejected" && !isOrder }
-    /// A collab request still awaiting accept/decline.
+    /// A collab request still awaiting accept/decline. Surfaces under Requests
+    /// whether the request is the latest message *or* got buried under later
+    /// replies — an unanswered request shouldn't get lost in the main list just
+    /// because the two of you kept chatting past it.
     var isPendingRequest: Bool {
-        isCollabRequest && requestStatus != "accepted" && requestStatus != "rejected" && !isOrder
+        guard !isOrder, !isInquiry, !isListing else { return false }
+        // Latest message is the request itself, still unresolved…
+        if isCollabRequest && requestStatus != "accepted" && requestStatus != "rejected" { return true }
+        // …or the request is still pending, just no longer the last message.
+        return requestStatus == "pending"
     }
     /// Declined requests + manually archived threads collapse into Archived.
     var isArchivedRow: Bool { isDeclinedRequest || archived }
@@ -52,6 +62,8 @@ final class MessagesScreenViewModel {
     var conversations: [ConversationItem] = []
     var loadingState: LoadState = .idle
     var searchText = ""
+    /// Set by the screen before `load()` — drives request-direction wording.
+    var currentUserId: String?
 
     private let service: SupabaseService
 
@@ -88,8 +100,9 @@ final class MessagesScreenViewModel {
         if conversations.isEmpty { loadingState = .loading }
         do {
             let rows = try await service.getUserConversations(limit: 40, offset: 0)
+            let me = currentUserId
             conversations = rows
-                .map(Self.map)
+                .map { Self.map($0, me: me) }
                 .sorted { ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast) }
             loadingState = .loaded
         } catch {
@@ -98,25 +111,28 @@ final class MessagesScreenViewModel {
         }
     }
 
-    private static func map(_ c: ApiConversation) -> ConversationItem {
-        ConversationItem(
+    private static func map(_ c: ApiConversation, me: String?) -> ConversationItem {
+        // Case-insensitive: Postgres UUIDs are lowercase, some SDK paths uppercase.
+        let fromMe = me != nil && c.lastMessageUserId?.lowercased() == me?.lowercased()
+        return ConversationItem(
             id: c.convoId,
             otherUserId: c.otherUserId,
             username: c.otherUsername ?? "Unknown",
             title: c.title,
             avatarURL: c.otherProfileImageUrl.flatMap { URL(string: $0) },
-            preview: preview(for: c),
+            preview: preview(for: c, fromMe: fromMe),
             lastMessageAt: MessageTime.parse(c.lastMessageAt),
             unreadCount: c.unreadCount ?? 0,
             type: c.type ?? "direct",
             lastMessageType: c.lastMessageType,
             requestStatus: c.requestStatus,
-            archived: c.archivedAt != nil
+            archived: c.archivedAt != nil,
+            lastMessageFromMe: fromMe
         )
     }
 
     /// Last-message preview text, with fallbacks that match the web's ConvoRow.
-    private static func preview(for c: ApiConversation) -> String {
+    private static func preview(for c: ApiConversation, fromMe: Bool) -> String {
         if let content = c.lastMessageContent, !content.isEmpty {
             // Strip a leading track-embed marker so previews read cleanly.
             if let range = content.range(of: "🎵") {
@@ -128,7 +144,7 @@ final class MessagesScreenViewModel {
             return content
         }
         switch c.lastMessageType {
-        case "collab_request": return "Collab request"
+        case "collab_request": return fromMe ? "Collab request sent" : "Collab request"
         case "message": return "Attachment"
         default: return "No messages yet"
         }

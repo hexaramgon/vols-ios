@@ -9,20 +9,31 @@
 import Foundation
 
 enum MessageTime {
+    // Cached: parse() runs for every row of every message batch (50 per load /
+    // poll), and allocating formatters + compiling the regex per call is real
+    // main-thread cost. Both types are documented thread-safe once configured.
+    nonisolated(unsafe) private static let withFraction: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    nonisolated(unsafe) private static let plain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+    private static let tzSuffix =
+        try! NSRegularExpression(pattern: #"[+-]\d\d:?\d\d$"#)
+
     /// Parse a Postgres/ISO timestamp that may lack a timezone (treated as UTC,
     /// matching the web's `parseUtc`).
     static func parse(_ iso: String?) -> Date? {
         guard let iso, !iso.isEmpty else { return nil }
         let hasTZ = iso.contains("Z") || iso.contains("z")
-            || iso.range(of: #"[+-]\d\d:?\d\d$"#, options: .regularExpression) != nil
+            || tzSuffix.firstMatch(in: iso, range: NSRange(iso.startIndex..., in: iso)) != nil
         let normalized = hasTZ ? iso : iso + "Z"
 
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let d = withFraction.date(from: normalized) { return d }
-
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
         return plain.date(from: normalized)
     }
 

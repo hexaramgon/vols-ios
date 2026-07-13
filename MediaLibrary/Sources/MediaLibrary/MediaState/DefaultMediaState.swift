@@ -47,4 +47,9 @@ public final class DefaultMediaState: MediaState {
     public func removeMediaList(_ mediaListID: MediaListID) async {
         lists.removeValue(forKey: mediaListID)
     }
+
+    public func removeAll() async {
+        tracks.removeAll()
+        lists.removeAll()
+    }
 }

@@ -141,12 +141,12 @@ final class RegisterViewModel {
             return
         }
         slideForward = true
-        withAnimation(.easeOut(duration: 0.22)) { step += 1 }
+        withAnimation(.smooth(duration: 0.35)) { step += 1 }
     }
 
     func goBack() {
         slideForward = false
-        withAnimation(.easeOut(duration: 0.22)) { step -= 1 }
+        withAnimation(.smooth(duration: 0.35)) { step -= 1 }
     }
 
     func resetToStart() {
@@ -155,7 +155,7 @@ final class RegisterViewModel {
         verifyError = nil
         resendStatus = .idle
         slideForward = false
-        withAnimation(.easeOut(duration: 0.22)) { step = 0 }
+        withAnimation(.smooth(duration: 0.35)) { step = 0 }
     }
 
     // MARK: - Sign up + verification
@@ -179,10 +179,10 @@ final class RegisterViewModel {
             existingAccount = true
         case .needsVerification:
             slideForward = true
-            withAnimation(.easeOut(duration: 0.22)) { step = 3 }
+            withAnimation(.smooth(duration: 0.35)) { step = 3 }
         case .session:
             slideForward = true
-            withAnimation(.easeOut(duration: 0.22)) { step = 4 }
+            withAnimation(.smooth(duration: 0.35)) { step = 4 }
         case nil:
             error = authManager.errorMessage ?? "Registration failed. Please check your details and try again."
         }
@@ -197,7 +197,7 @@ final class RegisterViewModel {
         loading = false
         if verified {
             slideForward = true
-            withAnimation(.easeOut(duration: 0.22)) { step = 4 }
+            withAnimation(.smooth(duration: 0.35)) { step = 4 }
             return
         }
         // Expired codes auto-resend so the user isn't left to figure out the
@@ -258,7 +258,7 @@ final class RegisterViewModel {
             )
             loading = false
             slideForward = true
-            withAnimation(.easeOut(duration: 0.22)) { step = 5 }
+            withAnimation(.smooth(duration: 0.35)) { step = 5 }
         } catch {
             loading = false
             self.error = "Failed to create profile. Please try again."

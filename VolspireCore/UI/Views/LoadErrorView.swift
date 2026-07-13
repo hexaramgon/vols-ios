@@ -19,13 +19,13 @@ struct LoadErrorView: View {
     var body: some View {
         VStack(spacing: 12) {
             LucideIcon(icon, .hero).foregroundStyle(Color.vText3).padding(.bottom, 2)
-            Text(title).font(.appTitle3).foregroundStyle(.white)
+            Text(title).font(.appHeadline).foregroundStyle(.white)
             Text(message)
                 .font(.appCalloutRegular).foregroundStyle(Color.vText2).multilineTextAlignment(.center)
             Button(action: retry) {
                 Text("Try Again")
-                    .font(.appCalloutSemibold).foregroundStyle(.black)
-                    .padding(.horizontal, 22).padding(.vertical, 11)
+                    .font(.appFootnoteSemibold).foregroundStyle(.black)
+                    .padding(.horizontal, 20).padding(.vertical, 10)
                     .background(Color.white, in: Capsule())
             }
             .buttonStyle(.plain)

@@ -32,6 +32,10 @@ extension Color {
     /// Error / failure text — web `text-red-400`. The single app error red; pair
     /// with `ErrorBanner` for inline errors. Replaces the ~5 ad-hoc reds.
     static let vError = Color(red: 0.97, green: 0.44, blue: 0.44)
+    /// Unread / notification dot — web `bg-red-500` (#EF4444). The one color for
+    /// every unread indicator: tab-bar badge, header bell, notification and
+    /// conversation rows. Distinct from `vError` (red-400), which is for errors.
+    static let vUnread = Color(red: 0.937, green: 0.267, blue: 0.267)
     /// Warning / caution — web `text-amber-500`.
     static let vWarning = Color(red: 0.96, green: 0.62, blue: 0.04)
 }

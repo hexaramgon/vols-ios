@@ -128,21 +128,85 @@ private extension NowPlayingInfoStrip {
     }
 
     // Panel 2: Credits — the people on the track, capped to one compact line.
+    // Every name (and the avatar) is tappable and opens that person's profile.
     var creditsPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
             panelHeader("Credits")
 
             HStack(spacing: 8) {
-                creditAvatar
-                Text(creditsSummary)
-                    .font(.appFootnote)
-                    .lineLimit(1)
-                    .foregroundStyle(Theme.body)
-                    .infoTextShadow()
+                let people = creditPeople
+                if let first = people.first {
+                    Button {
+                        openProfile(first)
+                    } label: {
+                        creditAvatar
+                    }
+                    .buttonStyle(.plain)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 0) {
+                            ForEach(Array(people.enumerated()), id: \.element.id) { index, person in
+                                if index > 0 {
+                                    Text("  ·  ")
+                                        .font(.appFootnote)
+                                        .foregroundStyle(Theme.muted)
+                                        .infoTextShadow()
+                                }
+                                Button {
+                                    openProfile(person)
+                                } label: {
+                                    Text("@\(person.username)")
+                                        .font(.appFootnote)
+                                        .foregroundStyle(Theme.body)
+                                        .infoTextShadow()
+                                        .contentShape(.rect)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                } else {
+                    creditAvatar
+                    Text("No credits listed.")
+                        .font(.appFootnote)
+                        .lineLimit(1)
+                        .foregroundStyle(Theme.muted)
+                        .infoTextShadow()
+                }
             }
         }
         .padding(.trailing, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A credited person the panel can link to.
+    struct CreditPerson: Identifiable {
+        let id: String
+        let username: String
+        let userId: String?
+    }
+
+    /// The artist first, then the track's credited collaborators.
+    var creditPeople: [CreditPerson] {
+        var people: [CreditPerson] = []
+        if let artist = controller.trackDetail?.artist, let name = artist.username {
+            people.append(CreditPerson(id: "artist-\(artist.userId)", username: name, userId: artist.userId))
+        } else if let name = controller.nowPlayingMeta?.artist, !name.isEmpty {
+            people.append(CreditPerson(id: "artist-\(name)", username: name, userId: nil))
+        }
+        for credit in controller.trackDetail?.credits ?? [] {
+            if let name = credit.username {
+                people.append(CreditPerson(id: "credit-\(credit.id)", username: name, userId: credit.userId))
+            }
+        }
+        return people
+    }
+
+    /// Collapses the player and navigates to the person's profile — the same
+    /// path as tapping the artist name or a commenter avatar.
+    func openProfile(_ person: CreditPerson) {
+        guard let userId = person.userId else { return }
+        controller.pendingProfileNavigation = userId
     }
 
     /// The primary (artist) avatar shown beside the credits line.
@@ -161,18 +225,6 @@ private extension NowPlayingInfoStrip {
         .frame(width: 26, height: 26)
         .background(Color(white: 0.15))
         .clipShape(Circle())
-    }
-
-    /// Artist + collaborators as a single "·"-joined line.
-    var creditsSummary: String {
-        var people: [String] = []
-        if let artist = controller.trackDetail?.artist?.username ?? controller.nowPlayingMeta?.artist {
-            people.append("@\(artist)")
-        }
-        if let credits = controller.trackDetail?.credits {
-            people.append(contentsOf: credits.compactMap { $0.username.map { "@\($0)" } })
-        }
-        return people.isEmpty ? "No credits listed." : people.joined(separator: "  ·  ")
     }
 
     func tagChip(_ tag: String) -> some View {

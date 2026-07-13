@@ -2,8 +2,9 @@
 //  LibraryScreen.swift
 //  Volspire
 //
-//  Your stuff in one place: a Workspace folder rail up top + your Saved tracks
-//  below. Both are visible at a glance — no toggle — so each is always reachable.
+//  Your stuff in one place: a Playlists rail up top + your Saved tracks below.
+//  Both are visible at a glance — no toggle — so each is always reachable.
+//  (Workspace folders live on the Home tab's Workspace section, not here.)
 //
 
 import DesignSystem
@@ -18,11 +19,14 @@ struct LibraryScreen: View {
     @Environment(PlayerController.self) private var playerController
 
     @State private var viewModel = LibraryScreenViewModel()
-    @State private var workspaceVM = WorkspaceScreenViewModel()
     @State private var playlistsVM = PlaylistsViewModel()
     @State private var selectedTrack: ApiUserLike? = nil
     @State private var addToPlaylistTrack: ApiUserLike? = nil
-    @State private var showSearch = false
+    /// Header reveal-search (same pattern as Messages/Marketplace): hidden by
+    /// default, revealed + focused by the header search icon, filters inline.
+    @State private var showSearchField = false
+    @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
     /// Flips true once all three sections' first load resolves — until then the
     /// whole page shows one skeleton, then the real content cascades in together
     /// (mirrors the Marketplace skeleton → grid pattern).
@@ -51,12 +55,6 @@ struct LibraryScreen: View {
         }
     }
 
-    /// True while the workspace rail should still show its skeleton.
-    private var workspaceLoading: Bool {
-        if case .loading = workspaceVM.loadingState { return workspaceVM.folders.isEmpty }
-        return false
-    }
-
     /// True while the playlists rail should still show its skeleton.
     private var playlistsLoading: Bool {
         playlistsVM.isLoading && playlistsVM.playlists.isEmpty
@@ -67,16 +65,15 @@ struct LibraryScreen: View {
     private var showLibraryError: Bool {
         viewModel.loadFailed
             && viewModel.savedTracks.isEmpty && viewModel.uploadedTracks.isEmpty
-            && workspaceVM.folders.isEmpty && playlistsVM.playlists.isEmpty
+            && playlistsVM.playlists.isEmpty
     }
 
     /// Retry every section (mirrors the pull-to-refresh).
     private func reloadAll() {
         Task {
             async let a: () = viewModel.refresh(currentUserId: dependencies.authManager.currentUserId)
-            async let b: () = workspaceVM.refresh()
-            async let c: () = playlistsVM.load()
-            _ = await (a, b, c)
+            async let b: () = playlistsVM.load()
+            _ = await (a, b)
         }
     }
 
@@ -94,13 +91,22 @@ struct LibraryScreen: View {
                         LoadErrorView { reloadAll() }
                             .frame(minHeight: UIScreen.size.height * 0.6)
                             .transition(.opacity)
+                    } else if isSearching {
+                        // A query is typed — swap the sections for matching saved
+                        // tracks (crossfade, same as the Messages inline filter).
+                        searchResults
+                            .transition(.opacity)
                     } else {
                         VStack(alignment: .leading, spacing: 24) {
                             // First section fades in place (anchored) while the rest
                             // cascade up — matches Profile's hero-then-cascade feel.
-                            workspaceSection.entranceReveal(contentAppeared, index: 0, distance: 0)
-                            playlistsSection.entranceReveal(contentAppeared, index: 1)
-                            savedSection.entranceReveal(contentAppeared, index: 2)
+                            // Fade only (distance 0): these sections hold async cover
+                            // images (ArtworkView), which render in their own layer and
+                            // would sit at their final spot while the row slides up to
+                            // meet them. A fade has no positional move, so nothing lags
+                            // (same fix as the profile tabs).
+                            playlistsSection.entranceReveal(contentAppeared, index: 0, distance: 0)
+                            savedSection.entranceReveal(contentAppeared, index: 1, distance: 0)
                         }
                         .transition(.opacity)
                         .onAppear { contentAppeared = true }
@@ -110,27 +116,27 @@ struct LibraryScreen: View {
                 .padding(.bottom, bottomInset)
                 .animation(.easeInOut(duration: 0.35), value: didLoad)
                 .animation(.easeInOut(duration: 0.35), value: showLibraryError)
+                .animation(.easeInOut(duration: 0.2), value: isSearching)
             }
             .scrollIndicators(.hidden)
             .refreshable {
                 async let a: () = viewModel.refresh(currentUserId: dependencies.authManager.currentUserId)
-                async let b: () = workspaceVM.refresh()
-                async let c: () = playlistsVM.load()
-                _ = await (a, b, c)
+                async let b: () = playlistsVM.load()
+                _ = await (a, b)
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: showSearchField)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationBarHidden(true)
         .gradientBackground()
         .task {
             viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
-            // Load all three sections concurrently so they resolve together
+            // Load both sections concurrently so they resolve together
             // instead of popping in one after another.
             async let a: () = viewModel.load(currentUserId: dependencies.authManager.currentUserId)
-            async let b: () = workspaceVM.loadFolders()
-            async let c: () = playlistsVM.load()
-            _ = await (a, b, c)
+            async let b: () = playlistsVM.load()
+            _ = await (a, b)
             didLoad = true
         }
         .sheet(item: $selectedTrack) { track in
@@ -141,19 +147,17 @@ struct LibraryScreen: View {
                 onDismiss: { selectedTrack = nil },
                 onAddToPlaylist: { addToPlaylistTrack = track }
             )
-            .presentationDetents([.medium])
+            // Detents come from TrackOptionsSheet itself (sized to its rows).
             .presentationDragIndicator(.visible)
             .sheetBackground()
         }
         .sheet(item: $addToPlaylistTrack) { track in
             AddToPlaylistSheet(trackId: track.trackId)
-                .presentationDetents([.medium])
+                // Detents come from the sheet itself (.medium/.large so long
+                // playlist lists can expand).
                 .presentationDragIndicator(.visible)
                 .sheetBackground()
         }
-        .sheet(isPresented: $showSearch) { searchSheet }
-        .sheet(isPresented: $workspaceVM.showCreateFolder) { createSheet }
-        .sheet(item: $workspaceVM.editingFolder) { _ in editSheet }
         .sheet(isPresented: $playlistsVM.showCreate) { playlistCreateSheet }
     }
 }
@@ -163,8 +167,61 @@ struct LibraryScreen: View {
 private extension LibraryScreen {
     var header: some View {
         ScreenHeader("Library") {
-            HeaderIconButton(icon: .search) { showSearch = true }
+            HeaderIconButton(icon: .search) {
+                withAnimation(.easeInOut(duration: 0.2)) { showSearchField = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { searchFocused = true }
+            }
+        } expansion: {
+            // Inside the header chrome so the bar background sits behind the
+            // field and the shadow falls below it — not bleeding onto the page.
+            if showSearchField {
+                searchRow
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
+    }
+
+    /// Search field revealed by the header search icon. Cancel hides it + clears.
+    var searchRow: some View {
+        HStack(spacing: 12) {
+            searchField
+            Button("Cancel") {
+                searchFocused = false
+                withAnimation(.easeInOut(duration: 0.2)) { showSearchField = false }
+                searchText = ""
+            }
+            .font(.appCallout)
+            .foregroundStyle(.white)
+        }
+        .padding(.horizontal, ViewConst.screenPaddings)
+        .padding(.bottom, 12)
+    }
+
+    var searchField: some View {
+        HStack(spacing: 10) {
+            LucideIcon(.search, .md).foregroundStyle(Color.vText3)
+            TextField("", text: $searchText, prompt: Text("Search saved tracks…").foregroundColor(Color.vText3))
+                .font(.appCallout)
+                .foregroundStyle(.white)
+                .tint(.white)
+                .focused($searchFocused)
+                .autocorrectionDisabled()
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    LucideIcon(.circleX, .md)
+                        .foregroundStyle(Color.vText3)
+                        .frame(width: 28, height: 28)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        // Fixed height — the clear button (28pt) appearing once you type must
+        // not grow the field.
+        .frame(height: 42)
+        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.vBorder, lineWidth: 1))
     }
 
     /// A consistent, modern section header: a bold title with an optional
@@ -179,7 +236,7 @@ private extension LibraryScreen {
                         Text("See all").font(.appFootnoteMedium)
                         LucideIcon(.chevronRight, .xs)
                     }
-                    .foregroundStyle(Color.vText2)
+                    .foregroundStyle(.white)
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -196,13 +253,6 @@ private extension LibraryScreen {
     /// the real content reveals together (mirrors the Marketplace skeleton → grid).
     var librarySkeleton: some View {
         VStack(alignment: .leading, spacing: 24) {
-            skeletonSection(spacing: 12) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) { ForEach(0 ..< 3, id: \.self) { _ in folderSkeleton } }
-                        .padding(.horizontal, ViewConst.screenPaddings)
-                }
-                .scrollDisabled(true)
-            }
             skeletonSection(spacing: 16) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 16) { ForEach(0 ..< 3, id: \.self) { _ in playlistSkeleton } }
@@ -245,108 +295,6 @@ private extension LibraryScreen {
     }
 }
 
-// MARK: - Workspace section (horizontal folder rail)
-
-private extension LibraryScreen {
-    var workspaceSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            sectionHead("Recent Activity") { router.navigateToWorkspace() }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
-                    if workspaceLoading {
-                        ForEach(0 ..< 2, id: \.self) { _ in folderSkeleton }
-                            .transition(.opacity)
-                    } else if workspaceVM.folders.isEmpty {
-                        emptyFolderCard
-                            .transition(.opacity)
-                    } else {
-                        ForEach(workspaceVM.folders) { folderCard($0) }
-                            .transition(.opacity)
-                    }
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .animation(.easeInOut(duration: 0.3), value: workspaceLoading)
-                // One shimmer sweep across the whole rail while loading (matches
-                // the saved list + the rest of the app), not per-card.
-                .shimmering(active: workspaceLoading)
-            }
-        }
-    }
-
-    func folderCard(_ folder: ApiUserFolder) -> some View {
-        Button {
-            router.navigateToFolder(folderId: folder.folderId, folderName: folder.name)
-        } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top) {
-                    LucideIcon(.folder, .lg)
-                        .foregroundStyle(.white.opacity(0.85))
-                        .frame(width: 44, height: 44)
-                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    Spacer(minLength: 0)
-                    FolderRolePill(role: folder.role)
-                }
-
-                Spacer(minLength: 0)
-
-                Text(folder.name)
-                    .font(.appCalloutSemibold)
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Spacer(minLength: 4)
-
-                Text(workspaceVM.relativeTime(from: folder.createdAt))
-                    .font(.appCaption2)
-                    .foregroundStyle(Color.vText3)
-            }
-            .padding(14)
-            .frame(width: 168, height: 132, alignment: .topLeading)
-            .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-        .buttonStyle(LibraryPress())
-        .contextMenu {
-            if folder.role == "owner" {
-                Button { workspaceVM.startEditing(folder) } label: { Label("Edit folder", systemImage: "pencil") }
-            }
-        }
-    }
-
-    var emptyFolderCard: some View {
-        Button { workspaceVM.showCreateFolder = true } label: {
-            VStack(spacing: 9) {
-                LucideIcon(.plus, .lg).foregroundStyle(Color.vText2)
-                Text("Create a folder").font(.appFootnoteMedium).foregroundStyle(Color.vText2)
-            }
-            .frame(width: 168, height: 132)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.03)))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.16), style: StrokeStyle(lineWidth: 1.2, dash: [6, 5]))
-            )
-        }
-        .buttonStyle(LibraryPress())
-    }
-
-    var folderSkeleton: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.07))
-                .frame(width: 44, height: 44)
-            Spacer(minLength: 0)
-            Capsule().fill(Color.white.opacity(0.07)).frame(width: 96, height: 13)
-            Spacer(minLength: 4).frame(maxHeight: 12)
-            Capsule().fill(Color.white.opacity(0.07)).frame(width: 52, height: 9)
-        }
-        .padding(14)
-        .frame(width: 168, height: 132, alignment: .topLeading)
-        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-}
-
 // MARK: - Playlists section
 
 private extension LibraryScreen {
@@ -354,30 +302,39 @@ private extension LibraryScreen {
         VStack(alignment: .leading, spacing: 16) {
             sectionHead("Playlists", seeAll: playlistsVM.playlists.isEmpty ? nil : { router.navigateToPlaylists() })
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 16) {
-                    if playlistsLoading {
-                        ForEach(0 ..< 2, id: \.self) { _ in playlistSkeleton }
-                            .transition(.opacity)
-                    } else if playlistsVM.playlists.isEmpty {
-                        emptyPlaylistCard
-                            .transition(.opacity)
-                    } else {
-                        ForEach(playlistsVM.playlists) { playlistCard($0) }
-                            .transition(.opacity)
+            if !playlistsLoading, playlistsVM.playlists.isEmpty {
+                // Empty: a slim full-width card with a real CTA instead of a
+                // rail-sized dashed tile.
+                emptyPlaylistsRow
+                    .transition(.opacity)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 16) {
+                        if playlistsLoading {
+                            ForEach(0 ..< 2, id: \.self) { _ in playlistSkeleton }
+                                .transition(.opacity)
+                        } else {
+                            ForEach(playlistsVM.playlists) { playlistCard($0) }
+                                .transition(.opacity)
+                            createPlaylistTile
+                                .transition(.opacity)
+                        }
                     }
+                    .padding(.horizontal, ViewConst.screenPaddings)
+                    .animation(.easeInOut(duration: 0.3), value: playlistsLoading)
+                    // One shimmer sweep across the whole rail while loading, not per-card.
+                    .shimmering(active: playlistsLoading)
                 }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .animation(.easeInOut(duration: 0.3), value: playlistsLoading)
-                // One shimmer sweep across the whole rail while loading, not per-card.
-                .shimmering(active: playlistsLoading)
+                .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.3), value: playlistsLoading)
     }
 
-    /// Empty-state card for the Playlists rail — a dashed "Create a playlist" tile
-    /// (mirrors the Workspace `emptyFolderCard`) so users can make one from here.
-    var emptyPlaylistCard: some View {
+    /// Trailing tile in the rail — the create entry point once playlists
+    /// exist (the empty state has its own CTA row). The original dashed
+    /// "create" tile, mirroring the Workspace create-folder tile.
+    var createPlaylistTile: some View {
         Button { playlistsVM.showCreate = true } label: {
             VStack(spacing: 9) {
                 LucideIcon(.plus, .lg).foregroundStyle(Color.vText2)
@@ -389,8 +346,41 @@ private extension LibraryScreen {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.16), style: StrokeStyle(lineWidth: 1.2, dash: [6, 5]))
             )
+            .contentShape(.rect(cornerRadius: 16))
         }
         .buttonStyle(LibraryPress())
+    }
+
+    /// Compact empty state: one line of copy + a prominent Create button.
+    var emptyPlaylistsRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("No playlists yet")
+                    .font(.appSubheadlineSemibold)
+                    .foregroundStyle(.white)
+                Text("Collect tracks you love in one place.")
+                    .font(.appFootnote)
+                    .foregroundStyle(Color.vText3)
+            }
+            Spacer(minLength: 8)
+            Button { playlistsVM.showCreate = true } label: {
+                HStack(spacing: 5) {
+                    LucideIcon(.plus, .sm)
+                    Text("Create")
+                }
+                .font(.appFootnoteMedium)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(LinearGradient.sendAccent, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .contentShape(.rect(cornerRadius: 11))
+            }
+            .buttonStyle(LibraryPress())
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.04)))
+        .padding(.horizontal, ViewConst.screenPaddings)
     }
 
     var playlistSkeleton: some View {
@@ -533,6 +523,7 @@ private extension LibraryScreen {
             Spacer(minLength: 8)
 
             Button {
+                searchFocused = false
                 if let track = viewModel.savedTracks.first(where: { $0.trackId == row.id }) { selectedTrack = track }
             } label: {
                 LucideIcon(.ellipsis, .xl)
@@ -550,6 +541,7 @@ private extension LibraryScreen {
         }
         .contentShape(.rect)
         .onTapGesture {
+            searchFocused = false
             if let track = viewModel.savedTracks.first(where: { $0.trackId == row.id }) { viewModel.play(track) }
         }
     }
@@ -568,116 +560,41 @@ private extension LibraryScreen {
     }
 }
 
-// MARK: - Create / Edit folder sheets
-
-private extension LibraryScreen {
-    var createSheet: some View {
-        FolderFormSheet(
-            icon: .folder,
-            title: "New Folder",
-            subtitle: "Organize your tracks and files",
-            name: $workspaceVM.newFolderName,
-            description: $workspaceVM.newFolderDescription,
-            actionTitle: "Create Folder",
-            busy: workspaceVM.isCreatingFolder,
-            onSubmit: { await workspaceVM.createFolder() }
-        )
-    }
-
-    var editSheet: some View {
-        FolderFormSheet(
-            icon: .squarePen,
-            title: "Edit Folder",
-            subtitle: "Update its name or description",
-            name: $workspaceVM.editFolderName,
-            description: $workspaceVM.editFolderDescription,
-            actionTitle: "Save Changes",
-            busy: workspaceVM.isEditingFolder,
-            onSubmit: { await workspaceVM.editFolder() }
-        )
-    }
-}
-
 // MARK: - Search
 
 private extension LibraryScreen {
-    var searchSheet: some View {
-        LibrarySearchSheet(rows: rows.map { ($0.id, $0.title, $0.artist, $0.coverURL) }) { id in
-            if let track = viewModel.savedTracks.first(where: { $0.trackId == id }) { viewModel.play(track) }
-            showSearch = false
-        }
+    /// A query is typed — the page swaps to matching saved tracks.
+    var isSearching: Bool {
+        showSearchField && !searchText.trimmingCharacters(in: .whitespaces).isEmpty
     }
-}
 
-// MARK: - Library Search Sheet
-
-private struct LibrarySearchSheet: View {
-    typealias RowTuple = (id: String, title: String, artist: String?, cover: URL?)
-    let rows: [RowTuple]
-    let onPlay: (String) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
-    @FocusState private var focused: Bool
-
-    private var results: [RowTuple] {
-        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return rows }
+    /// Saved tracks matching the query (title or artist), all rows when empty.
+    var searchMatches: [Row] {
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return rows }
         return rows.filter {
             $0.title.localizedCaseInsensitiveContains(query)
                 || ($0.artist?.localizedCaseInsensitiveContains(query) ?? false)
         }
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                HStack(spacing: 8) {
-                    LucideIcon(.search, .md).foregroundStyle(.secondary)
-                    TextField("Search saved tracks…", text: $query)
-                        .font(.appBody)
-                        .focused($focused)
-                        .autocorrectionDisabled()
+    /// Inline results — the same saved-track rows (play on tap, "…" options),
+    /// just filtered. Quiet "No matches" while typing past the last hit.
+    var searchResults: some View {
+        LazyVStack(spacing: 0) {
+            if searchMatches.isEmpty {
+                Text("No matches")
+                    .font(.appSubheadline)
+                    .foregroundStyle(Color.vText3)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 60)
+            } else {
+                ForEach(Array(searchMatches.enumerated()), id: \.element.id) { index, row in
+                    trackRow(row, isLast: index == searchMatches.count - 1)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-
-                Button("Cancel") { dismiss() }.font(.appCalloutRegular)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .padding(.bottom, 8)
-
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(results, id: \.id) { row in
-                        Button {
-                            onPlay(row.id)
-                        } label: {
-                            HStack(spacing: 12) {
-                                ArtworkView(row.cover.map { .webImage($0) } ?? .placeholder(name: row.title), cornerRadius: 8)
-                                    .frame(width: 46, height: 46)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(row.title).font(.appCallout).lineLimit(1)
-                                    if let artist = row.artist {
-                                        Text(artist).font(.appFootnote).foregroundStyle(.secondary).lineLimit(1)
-                                    }
-                                }
-                                Spacer()
-                            }
-                            .padding(.vertical, 7)
-                            .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
             }
         }
-        .presentationDetents([.large])
-        .sheetBackground()
-        .onAppear { focused = true }
+        .padding(.horizontal, ViewConst.screenPaddings)
     }
 }
 

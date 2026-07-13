@@ -495,24 +495,16 @@ final class ProfileScreenViewModel {
         let trimmed = collabMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         let trackIds = Array(selectedCollabTrackIds)
 
-        // Append the selected track links so they read inline in the conversation,
-        // exactly like the web composer.
-        var fullMessage = trimmed
-        if !trackIds.isEmpty {
-            let links = myCollabTracks
-                .filter { selectedCollabTrackIds.contains($0.id) }
-                .map { "🎵 \($0.title) — https://volspire.com/track/\($0.id)" }
-                .joined(separator: "\n")
-            fullMessage = fullMessage.isEmpty ? links : "\(fullMessage)\n\n\(links)"
-        }
-
+        // The message is just the pitch — the attached tracks are sent as
+        // structured references (`p_track_ids` → requests.metadata.track_ids) and
+        // rendered as cards on the client. No inline URLs.
         isSendingCollab = true
         collabError = nil
         defer { isSendingCollab = false }
         do {
             try await supabaseService.sendCollabRequest(
                 targetId: userId,
-                message: fullMessage,
+                message: trimmed,
                 trackIds: trackIds.isEmpty ? nil : trackIds
             )
             collaboratorStatus = "pending"

@@ -47,6 +47,18 @@ class Dependencies: Observable {
 }
 
 extension Dependencies {
+    /// Auth-boundary teardown (sign-out): silence and fully clear the player,
+    /// wipe the in-memory media registry, and reset per-user controller state.
+    /// Server-response caches are cleared by `AuthManager.signOut` itself;
+    /// Kingfisher's image cache stays (covers, avatars — public content).
+    func resetForSignOut() {
+        mediaPlayer.reset()
+        playerController.resetForSignOut()
+        Task { await mediaState.removeAll() }
+    }
+}
+
+extension Dependencies {
     static var stub: Dependencies = {
         let mediaPlayer = MediaPlayer()
         let analytics = AnalyticsService(sink: NoopAnalyticsSink())

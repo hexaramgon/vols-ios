@@ -22,7 +22,9 @@ struct ProfileTracksTab: View {
             )
         } else {
             VStack(alignment: .leading, spacing: 24) {
-                if let latest = viewModel.latestRelease {
+                // Other artists' profiles spotlight their newest drop up top; on your
+                // own profile skip that and just list every track (latest included).
+                if !isOwnProfile, let latest = viewModel.latestRelease {
                     VStack(alignment: .leading, spacing: 12) {
                         sectionHeader("Recently Released")
                         latestReleaseCard(latest)
@@ -30,12 +32,18 @@ struct ProfileTracksTab: View {
                     .padding(.horizontal, ViewConst.screenPaddings)
                 }
 
-                if !viewModel.curatedTracks.isEmpty {
+                // Own profile lists the full set (nothing hidden behind the spotlight);
+                // others list everything after that featured latest release.
+                let listedTracks = isOwnProfile ? viewModel.tracks : viewModel.curatedTracks
+                if !listedTracks.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        sectionHeader("All Tracks")
-                            .padding(.horizontal, ViewConst.screenPaddings)
+                        // Your own profile is just the list — no section header.
+                        if !isOwnProfile {
+                            sectionHeader("All Tracks")
+                                .padding(.horizontal, ViewConst.screenPaddings)
+                        }
                         LazyVStack(spacing: 4) {
-                            ForEach(viewModel.curatedTracks) { track in
+                            ForEach(listedTracks) { track in
                                 ProfileMediaRow(
                                     viewModel: viewModel,
                                     id: track.id,

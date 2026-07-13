@@ -138,6 +138,20 @@ public struct ApiConvoMessage: Codable, Sendable, Identifiable {
     public let username: String?
     public let profileImageUrl: String?
     public let messageType: String?
+    /// Structured request payload (collab requests): `{ "track_ids": [...] }`.
+    /// The referenced tracks are resolved separately via `getTracksByIds` and
+    /// rendered as cards — the message `content` stays a plain caption.
+    public let requestType: String?
+    public let requestMetadata: RequestMetadata?
+    /// Collab-request lifecycle — drives the inline Accept/Decline UI.
+    public let requestId: String?
+    public let requestStatus: String?     // "pending" | "accepted" | "rejected"
+    public let requestFromUserId: String?
+
+    public struct RequestMetadata: Codable, Sendable {
+        public let trackIds: [String]?
+        enum CodingKeys: String, CodingKey { case trackIds = "track_ids" }
+    }
 
     enum CodingKeys: String, CodingKey {
         case messageId = "message_id"
@@ -152,6 +166,34 @@ public struct ApiConvoMessage: Codable, Sendable, Identifiable {
         case username
         case profileImageUrl = "profile_image_url"
         case messageType = "message_type"
+        case requestType = "request_type"
+        case requestMetadata = "request_metadata"
+        case requestId = "request_id"
+        case requestStatus = "request_status"
+        case requestFromUserId = "request_from_user_id"
+    }
+}
+
+/// Compact, render-ready track for share cards (`get_tracks_by_ids`). Cover/audio
+/// come back as bare storage paths — resolve via `StorageService` before use.
+public struct ApiSharedTrack: Codable, Sendable, Identifiable {
+    public var id: String { trackId }
+    public let trackId: String
+    public let title: String?
+    public let coverUrl: String?
+    public let audioUrl: String?
+    public let artistUserId: String?
+    public let artistUsername: String?
+    public let artistImageUrl: String?
+
+    enum CodingKeys: String, CodingKey {
+        case trackId = "track_id"
+        case title
+        case coverUrl = "cover_url"
+        case audioUrl = "audio_url"
+        case artistUserId = "artist_user_id"
+        case artistUsername = "artist_username"
+        case artistImageUrl = "artist_image_url"
     }
 }
 
@@ -393,6 +435,36 @@ public struct ApiUserFolder: Codable, Sendable, Identifiable {
     }
 }
 
+/// One row from `get_workspace_activity` — a collaborator's recent action
+/// (file upload / file comment / joining a folder) across the caller's
+/// workspace folders.
+public struct ApiWorkspaceActivity: Codable, Sendable, Identifiable {
+    /// "upload" | "comment" | "join"
+    public let activityType: String
+    public let actorId: String
+    public let actorUsername: String?
+    /// Bare storage path or full URL — resolve via `StorageService.avatarUrl`.
+    public let actorAvatar: String?
+    public let folderId: String
+    public let folderName: String?
+    public let fileName: String?
+    public let createdAt: String?
+
+    /// No event PK comes back from the RPC — synthesize a stable identity.
+    public var id: String { "\(activityType)-\(actorId)-\(createdAt ?? "")-\(fileName ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case activityType = "activity_type"
+        case actorId = "actor_id"
+        case actorUsername = "actor_username"
+        case actorAvatar = "actor_avatar"
+        case folderId = "folder_id"
+        case folderName = "folder_name"
+        case fileName = "file_name"
+        case createdAt = "created_at"
+    }
+}
+
 public struct ApiFolderMember: Codable, Sendable, Identifiable {
     public var id: String { userId }
     public let userId: String
@@ -549,6 +621,45 @@ public struct ApiTrackAnalytics: Codable, Sendable, Identifiable {
         case avgSeekCount = "avg_seek_count"
         case dailyPlays = "daily_plays"
         case createdAt = "created_at"
+    }
+}
+
+/// Unread indicator counts (`get_unread_counts`): bell (activity), Inbox
+/// (DMs), and pending seller actions.
+public struct ApiUnreadCounts: Codable, Sendable {
+    public let notifications: Int
+    public let messages: Int
+    public let serviceActions: Int
+
+    enum CodingKeys: String, CodingKey {
+        case notifications, messages
+        case serviceActions = "service_actions"
+    }
+}
+
+/// Creator engagement aggregates (`get_my_engagement_stats`): audience counts
+/// with last-30-day deltas.
+public struct ApiEngagementStats: Codable, Sendable {
+    public let followersTotal: Int
+    public let followers30d: Int
+    public let likesTotal: Int
+    public let likes30d: Int
+    public let savesTotal: Int
+    public let saves30d: Int
+    public let commentsTotal: Int
+    public let comments30d: Int
+    public let shares30d: Int
+
+    enum CodingKeys: String, CodingKey {
+        case followersTotal = "followers_total"
+        case followers30d = "followers_30d"
+        case likesTotal = "likes_total"
+        case likes30d = "likes_30d"
+        case savesTotal = "saves_total"
+        case saves30d = "saves_30d"
+        case commentsTotal = "comments_total"
+        case comments30d = "comments_30d"
+        case shares30d = "shares_30d"
     }
 }
 
@@ -1098,7 +1209,8 @@ public protocol SupabaseServiceProtocol: Sendable {
     func markConvoRead(convoId: String) async throws
     func toggleFollow(targetUser: String) async throws
     func sendCollabRequest(targetId: String, message: String, trackIds: [String]?) async throws
-    func createFolder(name: String, description: String?) async throws
+    @discardableResult
+    func createFolder(name: String, description: String?) async throws -> String
     func editFolder(folderId: String, name: String, description: String?) async throws
     func uploadFile(folderId: String, fileName: String, fileData: Data, fileType: String, fileSize: Int) async throws
     func deleteFile(fileId: String, folderId: String) async throws
@@ -1127,8 +1239,10 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     }
 
     /// The signed-in user's id from the in-memory session (nil if signed out).
+    /// Lowercased to match Postgres UUID text (Swift's `uuidString` is uppercase),
+    /// so it compares equal to DB-sourced user ids.
     public var currentUserId: String? {
-        client.auth.currentUser?.id.uuidString
+        client.auth.currentUser?.id.uuidString.lowercased()
     }
 
     // MARK: - Public Methods
@@ -1169,6 +1283,25 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         return try await performRpc("get_convo_messages", params: ["p_convo_id": convoId, "p_limit": limit, "p_offset": offset])
     }
 
+    /// Resolves shared track ids (e.g. from a collab request's `request_metadata`)
+    /// into render-ready cards. Order-preserving; private tracks resolve only for
+    /// their owner.
+    public func getTracksByIds(_ ids: [String]) async throws -> [ApiSharedTrack] {
+        guard !ids.isEmpty else { return [] }
+        return try await performRpc("get_tracks_by_ids", params: ["p_track_ids": ids])
+    }
+
+    /// Accepts a pending request (collab request). Only the recipient may; sets
+    /// `requests.status = 'accepted'` and syncs the collaborator relationship.
+    public func acceptRequest(requestId: String) async throws {
+        try await executeRpc("accept_request", params: ["p_request_id": requestId])
+    }
+
+    /// Declines a pending request (collab request) — recipient only.
+    public func rejectRequest(requestId: String) async throws {
+        try await executeRpc("reject_request", params: ["p_request_id": requestId])
+    }
+
     /// Sends a text message; returns the new message id.
     public func sendMessage(convoId: String, content: String) async throws -> String {
         return try await performRpc("send_message", params: ["p_convo_id": convoId, "p_content": content])
@@ -1201,12 +1334,24 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Marks every message in a conversation as read for the calling user.
     public func markConvoRead(convoId: String) async throws {
-        let _: AnyJSON = try await performRpc("mark_convo_read", params: ["p_convo_id": convoId])
+        // Void-returning RPC — empty body, must not be decoded. (Previously
+        // decoded as AnyJSON, which always threw after the server applied the
+        // mark; callers' `try?` hid it.)
+        try await executeRpc("mark_convo_read", params: ["p_convo_id": convoId])
     }
 
     /// Fetches a user profile from Supabase RPC function (cached 5 min)
     public func getUserProfile(userId: String) async throws -> ApiUserProfile {
         return try await cachedRpc("get_user_profile", params: ["profile_id": userId], ttl: 300)
+    }
+
+    /// Drops the cached profile + profile-tab payloads for `userId` so the next
+    /// fetch is fresh — called after publishing a track, and by the profile's
+    /// pull-to-refresh.
+    public func invalidateProfile(userId: String) async {
+        await cache.remove(APICache.key("get_user_profile", params: ["profile_id": userId]))
+        await cache.remove(APICache.key("get_tracks_credited_to_user", params: ["p_user_id": userId]))
+        await cache.remove(APICache.key("get_user_packs", params: ["p_user_id": userId]))
     }
 
     /// Fetches every publicly-visible track where `userId` is credited, with the
@@ -1237,7 +1382,8 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Marks all of the signed-in user's notifications as read.
     public func markNotificationsRead() async throws {
-        let _: AnyJSON = try await performRpc("mark_notifications_read", params: nil)
+        // Void-returning RPC — empty body, must not be decoded.
+        try await executeRpc("mark_notifications_read", params: nil)
     }
 
     /// Fetches the signed-in user's notification toggles (cached 1 min).
@@ -1248,6 +1394,18 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     /// Fetches per-track analytics for the signed-in creator (cached 2 min).
     public func getMyTrackAnalytics() async throws -> [ApiTrackAnalytics] {
         return try await cachedRpc("get_my_track_analytics", params: nil, ttl: 120)
+    }
+
+    /// Creator engagement aggregates — followers / likes / saves / comments
+    /// (totals + last-30-day deltas) and 30-day shares (`get_my_engagement_stats`).
+    public func getMyEngagementStats() async throws -> ApiEngagementStats {
+        return try await cachedRpc("get_my_engagement_stats", params: nil, ttl: 120)
+    }
+
+    /// In-app unread indicator counts (`get_unread_counts` — the same RPC the
+    /// web uses for its dots). Never cached: it drives live badges.
+    public func getUnreadCounts() async throws -> ApiUnreadCounts {
+        return try await performRpc("get_unread_counts")
     }
 
     /// Flips a single notification toggle (the RPC coalesces every other column
@@ -1263,6 +1421,13 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     /// Fetches the current user's folders (cached 1 min)
     public func getUserFolders() async throws -> [ApiUserFolder] {
         return try await cachedRpc("get_user_folders", params: nil, ttl: 60)
+    }
+
+    /// Collaborators' actions from the past month (uploads / comments / joins)
+    /// across the caller's workspace folders (`get_workspace_activity`, newest
+    /// first; excludes the caller's own actions). Uncached — it's "what's new".
+    public func getWorkspaceActivity(limit: Int = 30) async throws -> [ApiWorkspaceActivity] {
+        return try await performRpc("get_workspace_activity", params: ["p_limit": limit])
     }
 
     /// Marketplace browse data — public packs + services (`get_explore_data`).
@@ -1488,16 +1653,25 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         await cache.remove(APICache.key("get_user_profile", params: ["profile_id": targetId]))
     }
 
-    /// Creates a new folder via Supabase RPC function
-    public func createFolder(name: String, description: String?) async throws {
-        var params: [String: Any] = ["p_name": name]
-        if let description, !description.isEmpty {
-            params["p_description"] = description
-        }
-        let _: AnyJSON = try await performRpc("create_folder", params: params)
+    /// Creates a new folder and returns its id — `create_folder` returns
+    /// `{ success, folder_id }`. `p_description` is always sent: the RPC
+    /// declares it without a default, so omitting it wouldn't resolve.
+    @discardableResult
+    public func createFolder(name: String, description: String?) async throws -> String {
+        let params: [String: Any] = [
+            "p_name": name,
+            "p_description": description ?? ""
+        ]
+        let created: CreatedFolder = try await performRpc("create_folder", params: params)
         // Invalidate cached folders
         let cacheKey = APICache.key("get_user_folders", params: nil)
         await cache.remove(cacheKey)
+        return created.folderId
+    }
+
+    private struct CreatedFolder: Decodable {
+        let folderId: String
+        enum CodingKeys: String, CodingKey { case folderId = "folder_id" }
     }
 
     /// Edits an existing folder via Supabase RPC function
@@ -1571,27 +1745,55 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         try await performRpc("search_all", params: ["p_query": query, "p_limit": limit])
     }
 
-    /// Uploads a file to Supabase Storage then saves metadata via RPC
+    /// Uploads a file to Supabase Storage then saves metadata via RPC.
+    /// The storage key is a fresh UUID — the same scheme as
+    /// `addAttachmentToFolder` and the web. Raw display names made invalid or
+    /// colliding storage keys (spaces/brackets/$; re-uploading a name 409'd),
+    /// and the `files` bucket is private anyway: the bare path is stored and
+    /// signed at display time, while the display name lives in metadata.
     public func uploadFile(folderId: String, fileName: String, fileData: Data, fileType: String, fileSize: Int) async throws {
-        let storagePath = "\(folderId)/\(fileName)"
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        let storagePath = "\(folderId)/\(UUID().uuidString.lowercased()).\(ext.isEmpty ? "bin" : ext)"
 
-        // Upload to storage bucket
         try await client.storage
             .from("files")
             .upload(storagePath, data: fileData, options: .init(contentType: fileType))
 
-        // Get the public URL
-        let publicURL = try client.storage
-            .from("files")
-            .getPublicURL(path: storagePath)
-
-        // Save metadata via RPC
         let params: [String: Any?] = [
             "p_folder_id": folderId,
             "p_name": fileName,
-            "p_file_url": publicURL.absoluteString,
+            "p_file_url": storagePath,
             "p_file_type": fileType,
             "p_file_size": fileSize,
+            "p_timespan": nil
+        ]
+        let _: AnyJSON = try await performRpc("upload_file_metadata", params: params as [String: Any])
+
+        // Invalidate cached folder files
+        let cacheKey = APICache.key("get_folder_files", params: ["p_folder_id": folderId])
+        await cache.remove(cacheKey)
+    }
+
+    /// Copies a message attachment into a workspace folder: uploads the bytes to
+    /// the `files` bucket under a fresh UUID path, then registers the metadata
+    /// via `upload_file_metadata` — the same path the web's chat "Add to
+    /// workspace" takes. Stores the bare storage path (resolved at display
+    /// time, like the web) and keeps the original attachment name as the
+    /// file's display name.
+    public func addAttachmentToFolder(folderId: String, fileName: String, fileData: Data, fileType: String) async throws {
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        let storagePath = "\(folderId)/\(UUID().uuidString.lowercased()).\(ext.isEmpty ? "bin" : ext)"
+
+        try await client.storage
+            .from("files")
+            .upload(storagePath, data: fileData, options: .init(contentType: fileType))
+
+        let params: [String: Any?] = [
+            "p_folder_id": folderId,
+            "p_name": fileName,
+            "p_file_url": storagePath,
+            "p_file_type": fileType,
+            "p_file_size": fileData.count,
             "p_timespan": nil
         ]
         let _: AnyJSON = try await performRpc("upload_file_metadata", params: params as [String: Any])
@@ -1636,7 +1838,8 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Deletes a file via Supabase RPC function
     public func deleteFile(fileId: String, folderId: String) async throws {
-        let _: AnyJSON = try await performRpc("delete_file", params: ["p_file_id": fileId])
+        // `delete_file` returns void — empty body, so it must not be decoded.
+        try await executeRpc("delete_file", params: ["p_file_id": fileId])
         // Invalidate cached folder files
         let cacheKey = APICache.key("get_folder_files", params: ["p_folder_id": folderId])
         await cache.remove(cacheKey)
@@ -1788,6 +1991,9 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             "p_looking_for_collab": lookingForCollab,
         ]
         try await executeRpc("create_track_v2", params: params)
+        // The new track should appear on the author's profile immediately —
+        // drop the cached profile (5-min TTL) so the next visit refetches.
+        await invalidateProfile(userId: userId)
     }
 
     // MARK: - Track edit / delete (web track-edit parity)
@@ -2385,6 +2591,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     }
 
     /// Uploads a user avatar to Supabase Storage and returns the public URL
+    /// (version-stamped — see `versioned`).
     public func uploadAvatar(userId: String, imageData: Data) async throws -> URL {
         let storagePath = "\(userId).png"
 
@@ -2396,10 +2603,11 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             .from("user-avatars")
             .getPublicURL(path: storagePath)
 
-        return publicURL
+        return Self.versioned(publicURL)
     }
 
     /// Uploads a user banner to Supabase Storage and returns the public URL
+    /// (version-stamped — see `versioned`).
     public func uploadBanner(userId: String, imageData: Data) async throws -> URL {
         let storagePath = "\(userId).png"
 
@@ -2411,7 +2619,17 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             .from("user-banners")
             .getPublicURL(path: storagePath)
 
-        return publicURL
+        return Self.versioned(publicURL)
+    }
+
+    /// Appends `?v=<timestamp>` to an upserted object's public URL. The storage
+    /// path is FIXED per user, so without this the stored URL never changes and
+    /// every image cache (Kingfisher, the storage CDN, browsers) keeps serving
+    /// the old picture after an update.
+    private static func versioned(_ url: URL) -> URL {
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "v", value: String(Int(Date().timeIntervalSince1970)))]
+        return comps?.url ?? url
     }
 
     /// Fetches track detail from Supabase RPC function (cached 5 min)

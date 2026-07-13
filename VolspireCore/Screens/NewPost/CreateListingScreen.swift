@@ -47,7 +47,8 @@ struct CreateListingScreen: View {
                 bottomBar
             }
         }
-        .gradientBackground()
+        // Flat app-base canvas — same as the sign-in/register pages.
+        .background(Color.vBase.ignoresSafeArea())
         .fileImporter(
             isPresented: $showAudioPicker,
             allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav],
@@ -71,7 +72,11 @@ struct CreateListingScreen: View {
     // MARK: - Header
 
     private var header: some View {
-        UploadFlowHeader(title: viewModel.isEditing ? "Edit Listing" : "New Listing") { dismiss() }
+        UploadFlowHeader(
+            icon: .handshake,
+            title: viewModel.isEditing ? "Edit Listing" : "New Listing",
+            subtitle: viewModel.isEditing ? "Update your collab listing" : "Post a collab listing"
+        ) { dismiss() }
     }
 
     // MARK: - Bottom bar (pinned CTA + always-visible status)
@@ -84,32 +89,22 @@ struct CreateListingScreen: View {
                 statusRow(hint, color: Color.vText3)
             }
 
-            Button {
+            // Same gradient CTA as the auth pages.
+            AuthCTA(
+                title: viewModel.isEditing ? "Save Changes" : "Post Listing",
+                loadingTitle: viewModel.isEditing ? "Saving…" : "Posting…",
+                isLoading: isPosting,
+                isDisabled: !viewModel.canPost
+            ) {
                 Task { await viewModel.post() }
-            } label: {
-                HStack(spacing: 10) {
-                    if isPosting {
-                        ProgressView()
-                            .tint(.black)
-                    }
-                    Text(isPosting ? (viewModel.isEditing ? "Saving…" : "Posting…")
-                        : (viewModel.isEditing ? "Save Changes" : "Post Listing"))
-                        .font(.appHeadline)
-                }
-                .foregroundStyle(.black)
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(.white, in: RoundedRectangle(cornerRadius: 16))
             }
-            .buttonStyle(.plain)
-            .disabled(!viewModel.canPost || isPosting)
-            .opacity(viewModel.canPost && !isPosting ? 1 : 0.3)
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background {
-            Color.vBase
+            // Same chrome tone as the Library header / tab bar (~#121212).
+            Color(white: 0.07)
                 .overlay(alignment: .top) {
                     Rectangle()
                         .fill(Color.vBorder)

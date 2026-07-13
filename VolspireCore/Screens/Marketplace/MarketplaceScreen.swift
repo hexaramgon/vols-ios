@@ -34,10 +34,6 @@ struct MarketplaceScreen: View {
         VStack(spacing: 0) {
             header
                 .zIndex(1) // keep the header's bottom shadow above the content below
-            if showSearchField {
-                searchRow
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
             categoryChips
             content
         }
@@ -58,6 +54,13 @@ private extension MarketplaceScreen {
             HeaderIconButton(icon: .search) {
                 withAnimation(.easeInOut(duration: 0.2)) { showSearchField = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { searchFocused = true }
+            }
+        } expansion: {
+            // Inside the header chrome so the bar background sits behind the
+            // field and the shadow falls below it — not bleeding onto the page.
+            if showSearchField {
+                searchRow
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
     }
@@ -97,7 +100,9 @@ private extension MarketplaceScreen {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 11)
+        // Fixed height — the clear button appearing once you type must not
+        // grow the field.
+        .frame(height: 42)
         .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
@@ -290,7 +295,7 @@ private extension MarketplaceScreen {
                         }
                     }
                     // Cascade by row (2 columns), capped so a long grid doesn't drag.
-                    .entranceReveal(browseAppeared, index: min(index / 2, 6))
+                    .entranceReveal(browseAppeared, index: min(index / 2, 6), distance: 0)
                 }
             }
             .padding(.horizontal, gridHPadding)
@@ -389,7 +394,7 @@ private extension MarketplaceScreen {
                 ForEach(Array(viewModel.filteredBoardListings.enumerated()), id: \.element.id) { index, listing in
                     listingCard(listing)
                         // Cascade by row (2 columns), capped so a long grid doesn't drag.
-                        .entranceReveal(boardAppeared, index: min(index / 2, 6))
+                        .entranceReveal(boardAppeared, index: min(index / 2, 6), distance: 0)
                 }
             }
             .padding(.horizontal, gridHPadding)

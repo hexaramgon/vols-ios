@@ -6,29 +6,20 @@ The iOS code is fully wired (GoogleSignIn SDK + `signInWithIdToken(.google)` in
 `AuthManager`). It won't work until these external steps + the two Info.plist
 values are filled in.
 
-- [ ] **Google Cloud Console — create an iOS OAuth client**
-  - Same Google project that backs the web sign-in:
-    APIs & Services → Credentials → Create Credentials → OAuth client ID →
-    Application type: **iOS**
-  - Bundle ID: `com.anonymous.volspire-mobile`
-  - Save the two outputs:
-    - **Client ID:** `NNNN-xxxx.apps.googleusercontent.com`
-    - **iOS URL scheme (reversed):** `com.googleusercontent.apps.NNNN-xxxx`
+- [x] **Google Cloud Console — iOS OAuth client** (done 2026-07-09) — created against
+  `com.volspire.app`; client id `35604592462-sl580dgdrb2aq9sc3md716t49apjfnbv`.
 
-- [ ] **Supabase — trust the iOS client**
-  - Authentication → Providers → Google → add the new **iOS client ID** to
-    **Authorized Client IDs** (keep the existing web one). Save.
+- [x] **Supabase — trust the iOS client** (done 2026-07-09) — iOS client ID added to
+  Google provider → Authorized Client IDs alongside the web one.
   - If sign-in returns a "nonce" error, enable **Skip nonce checks** (our native
     flow doesn't send one).
 
-- [ ] **Fill in `VolspireCore/Info.plist`** (placeholders marked `YOUR_IOS_CLIENT_ID`)
-  - `GIDClientID` → the Client ID
-  - **Uncomment** the Google Sign-In `CFBundleURLTypes` block (it's currently commented
-    out so the placeholder scheme doesn't fail App Store validation) and replace the
-    reversed-client-id scheme with the real one.
+- [x] **`VolspireCore/Info.plist`** (done 2026-07-09) — `GIDClientID` set and the
+  Google Sign-In `CFBundleURLTypes` block restored with the real reversed scheme.
 
 - [ ] **Test:** Sign in with Google → native account sheet appears (no Safari) →
-  lands back in the app authenticated.
+  lands back in the app authenticated. (Watch for the nonce error above on the
+  first attempt.)
 
 ### Notes / gotchas
 - Bundle ID is currently `com.anonymous.volspire-mobile` (template default). If you'll
@@ -38,20 +29,67 @@ values are filled in.
 - The old web-redirect Google flow (and `volspire://auth/callback`) is no longer
   used for sign-in; the `volspire` URL scheme is left in place and is harmless.
 
-## App bundle identifier — choose a real one before public App Store release
+## App bundle identifier — RENAMED to `com.volspire.app` 2026-07-09; portal steps remain
 
-The app still ships under the Expo/template default prefix.
+- **App bundle id:** `com.volspire.app` (`project.pbxproj`, app target — Debug & Release) ✓
+- **Test target:** `com.volspire.app.VolspireTests` ✓
+- Local effect of the rename: the next build is a "new app" on device/simulator
+  (side-by-side install, fresh keychain → sign in again). Delete the old install.
 
-- **Current app bundle id:** `com.anonymous.volspire-mobile` (`project.pbxproj`, app target — Debug & Release)
-- **Test target:** `com.anonymous.volspire-mobile.VolspireTests` (derives from the app id; TestFlight never builds or uploads it)
+- [ ] **Register the App ID** (Apple Developer → Identifiers) with the **Sign in with
+  Apple** capability (Xcode automatic signing usually does this on first device build),
+  and create the App Store Connect app record under the new id on next upload
+  (TestFlight testers get re-invited; old record's builds run until they expire).
+- [ ] **Supabase — Apple provider:** add `com.volspire.app` to Authorized Client IDs
+  (native Apple sign-in validates the token audience against the bundle id).
+- [ ] **Google iOS OAuth client** — create it against `com.volspire.app` (see the
+  Google Sign-In section above; nothing existed under the old id, so nothing to redo).
 
-- [ ] **Pick the permanent id** (e.g. `com.volspire.app`) and set `PRODUCT_BUNDLE_IDENTIFIER`
-  for the **app target** in `Volspire.xcodeproj/project.pbxproj` (both Debug & Release), and
-  update the test target to `<new-id>.VolspireTests` to match.
-- [ ] **Register the App ID** (Apple Developer → Identifiers) and create / align the App Store
-  Connect app record to it.
-- [ ] **Redo the iOS Google OAuth client** for the new id (the OAuth client + Supabase
-  *Authorized Client IDs* are keyed to the bundle id — see the Google Sign-In section above).
+## Push notifications — LIVE 2026-07-10 (see docs/push-notifications.md)
+
+Fully working end-to-end: iOS APNs registration (`PushNotificationManager`),
+`register_push_token`/`deactivate_push_token` RPCs, both edge functions send
+real APNs alerts (ES256 JWT, prod→sandbox fallback, preference gate), custom
+bundled sound (`notif.caf`), and server-computed icon badge
+(`get_unread_badge_count` = unread activity + unread DMs; cleared on app
+foreground). Secrets configured (`APNS_AUTH_KEY`/`APNS_KEY_ID`/
+`APPLE_TEAM_ID` = 9Q838CQ524 — NOT the stale team id in the pbxproj).
+Full architecture + debugging playbook: `docs/push-notifications.md`.
+
+- [ ] Optional later: notify followers on new-track upload (no trigger on
+      `tracks` insert yet — the "uploads" preference exists but is dormant).
+
+## Native account deletion — required before public App Store release
+
+Settings' "Manage Account" now goes through email (no external web links as of
+2026-07-09; Help/Terms/Privacy render natively in `SettingsInfoScreens.swift`).
+That's fine for TestFlight, but App Store Guideline 5.1.1(v) requires apps with
+account creation to offer **in-app** account deletion.
+
+- [ ] Build a native "Delete account" flow: confirmation + password
+      re-verification (the privacy policy promises re-verification), then the
+      same deletion path the web uses (check the web's Settings → Account for
+      the RPC/flow to mirror), then sign out locally.
+- [ ] Keep the email path as the fallback (privacy policy documents both).
+
+## Developer entity — LLC before public release (decided 2026-07-09)
+
+Decision: no personal name on the App Store seller line → needs an **Organization**
+developer account, which requires a real legal entity. App name/bundle id are NOT
+affected by this (seller name is independent); TestFlight can continue as Individual
+in the meantime.
+
+- [ ] Form the LLC (target legal name **"Volspire LLC"** so the seller line reads right —
+  Apple shows the registered legal name, DBAs don't count).
+- [ ] Get an EIN (IRS, free, online).
+- [ ] Get a **D-U-N-S number** for the LLC (free via Apple's D-U-N-S request tool;
+  days–2 weeks; legal name must match state registration).
+- [ ] **Convert** the existing Apple Developer account Individual → Organization
+  (apps, bundle ids, TestFlight, reviews all carry over; seller line updates).
+  Convert **before** the first public App Store release — after that, the personal
+  name has already been shown publicly.
+- [ ] When monetization un-gates: paid-apps agreement + banking/tax under the LLC
+  (EIN + business bank), and Stripe Connect on web is cleaner under the entity too.
 
 ### Why it can't wait
 - **A bundle id can't be changed once the App Store Connect app record exists** — switching then
@@ -95,8 +133,8 @@ at the right handler — the case already exists in `AnalyticsEventType`.
 - [ ] **Stripe Connect onboarding** — `connect_modal_opened`,
   `connect_onboarding_started`, `connect_onboarding_completed`. Seller-onboarding flow,
   not present on iOS yet (and *completed* is webhook-fired on web).
-- [ ] **`visualizer_toggled`** — N/A: the audio visualizer/spectrum was removed from iOS.
-  Skip unless the visualizer returns.
+- [ ] **`visualizer_toggled`** — now wireable: the visualizer is back (MetalVisualizer,
+  gated by `FeatureFlags.visualizer`). Log in `RegularNowPlaying.visualizerToggleButton`.
 
 ### Parity notes / deltas vs web
 - `page_view` uses logical screen names (`home`, `track`, `profile`, `media_list`, …),
@@ -180,37 +218,33 @@ Also intentionally instant: the play/pause glyph swap (`.animation(nil)` +
 Still true: do NOT use a blanket `.transaction { $0.animation = nil }` on these — it also
 kills the icons' layout/movement animation (tried and reverted).
 
-Note: `isShuffled` / `repeatMode` are local `@State` — the buttons don't drive actual
-playback behavior yet. See the "Wire shuffle / repeat into playback" section below.
+Note (updated 2026-07-08): shuffle/repeat now drive real playback — state lives on
+PlayerController/MediaPlayer. See the "Wire shuffle / repeat" section below.
 
-## Wire shuffle / repeat into actual playback (buttons are visual-only today)
+## Wire shuffle / repeat into actual playback — shuffle DONE 2026-07-08, repeat tri-state open
 
-`PlayerButtons.swift` holds `isShuffled` / `repeatMode` as local `@State` — tapping them
-changes tint only. Nothing in the stack implements the behavior.
+**Shuffle is real now (2026-07-08):** `MediaPlayer` owns `shuffleEnabled` + the queue
+reorder — current track pinned first, original order kept so un-shuffle restores it,
+gapless prefetch re-pointed and lock-screen queue index re-pushed on toggle, and a
+queue started while shuffle is on gets shuffled too. `PlayerController.isShuffleOn`
+mirrors the player's publisher (so shuffle-all entry points light the button up),
+and the Playlist / MediaList "Shuffle" buttons route through player-level shuffle
+(random start + natural order underneath). Web semantics were checked: the web pops
+a random next from a consume-queue; iOS reorders the queue instead — deliberate, to
+keep index navigation + gapless prefetch working.
 
-How the stack works today (for whoever picks this up):
-- `MediaPlayer` (Player package) owns the queue: `items: [MediaID]`. `forward()` /
-  `backward()` walk it **linearly with wraparound**, and `urlAudioPlayerDidFinishPlaying`
-  (MediaPlayer.swift:341) auto-advances the same way — i.e. today's behavior is
-  effectively **repeat-all, always**. "Repeat off" is therefore a behavior *change*
-  (stop at end of queue), not just a no-op default.
-- `PlayerController.onForward/onBackward` just delegate to `MediaPlayer`.
-- `MediaLibrary/MediaState/MediaPlaybackMode.swift` is an unused stub type (id + title
-  only) — either build on it or delete it when doing this.
+**Repeat:** repeat-one was already wired (`repeatEnabled` — forward/backward/track-end
+all restart the current track). With it off, the queue wraps forever (repeat-all,
+always) — unchanged.
 
-- [ ] Move `isShuffled` / `repeatMode` state up out of `PlayerButtons` (PlayerController,
-      forwarded to MediaPlayer — same pattern as `applyEffects`). Local state also
-      currently resets whenever the button view is rebuilt.
-- [ ] **Shuffle:** on enable, build a shuffled play order over `items` (keep the original
-      order around so un-shuffle restores it; keep the current track first so playback
-      doesn't jump). `forward()`/`backward()`/auto-advance walk the active order.
-- [ ] **Repeat:** in `urlAudioPlayerDidFinishPlaying` — `one`: replay current (seek 0 +
-      play); `all`: wrap (today's behavior); `off`: advance until the end of the queue,
-      then stop (pause + reset). Explicit `forward()` taps should probably still wrap
-      even with repeat off (matches Apple Music / Spotify).
-- [ ] Check the web app's player for intended semantics/parity before implementing.
+Remaining:
+- [ ] Decide whether repeat should be tri-state (off / all / one) with **off stopping
+      at the end of the queue** — today "off" still wraps. Check the web player's
+      intended semantics before building.
 - [ ] Optional polish: report shuffle/repeat to the lock screen via
       `MPRemoteCommandCenter` change-shuffle/repeat commands (`SystemMediaInterface`).
+- [ ] Delete the unused `MediaLibrary/MediaState/MediaPlaybackMode.swift` stub — the
+      shuffle implementation didn't need it.
 
 ## Reply-to-a-reply (nested comments) — deferred
 
@@ -235,6 +269,30 @@ Recommended if we ever want it — **flatten** (what IG/YouTube do, zero backend
 
 True arbitrary nesting (recursive-CTE `get_track_comments` + nested rendering) is a bigger
 lift and diverges from the web — only if the product wants deep threads.
+
+## Profile tab slide animation — removed 2026-07-12, re-add via a REAL PAGER later
+
+The profile tabs (Tracks / Featured On / Market) used to slide directionally on switch; now
+they crossfade (`ProfileTabContent`: `.id(selected)` + `.transition(.opacity)`, 0.2s) because
+every transition-based slide broke one of three things — tap targets drifting vertically after
+the switch, cover images sitting frozen/delayed instead of moving with the slide, or both.
+The full failure table (geometryGroup variants, `.push`, offset slide-fades, spam guards,
+layout nudges) lives in the memory note `hit-testing-rules.md` — none of those are worth
+retrying.
+
+- [ ] Re-add the directional slide as a **real pager**: all three tabs kept mounted side by
+      side in an `HStack`, the container offset by `-index * width` (the RegularNowPlaying
+      artwork⇄comments pager is the in-app reference implementation).
+- [ ] Solve the height problem: inside the profile's single ScrollView the pager must size to
+      the *selected* tab's natural height (measure each tab via `onGeometryChange`, animate the
+      container height alongside the offset).
+- [ ] Mind the cost: all tabs mounted = all tabs load their content — consider keeping the
+      lazy "load on first visit" behavior per tab.
+- [ ] Keep what already works: `ArtworkView`'s first-frame rendering flags
+      (`startLoadingBeforeViewAppear` + `loadDiskFileSynchronously`) and
+      `prefetchTabCovers()` — the pager still needs covers present at slide start.
+- [ ] Acceptance test: scroll mid-tab, spam-switch tabs, then immediately tap rows/buttons —
+      hitboxes must match visuals AND covers must travel with the slide, every time.
 
 ## Comments-button count — removed, re-add later
 

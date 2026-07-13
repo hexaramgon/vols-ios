@@ -11,6 +11,17 @@
 import Foundation
 import Services
 
+/// A track shared in a collab-request message — resolved from the message's
+/// structured `request_metadata.track_ids` (not parsed from text/URLs).
+struct SharedTrack: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let artist: String?
+    let coverURL: URL?
+    let audioURL: URL?
+    let artistUserId: String?
+}
+
 struct ChatMessage: Identifiable, Equatable {
     let id: String
     let text: String
@@ -22,10 +33,21 @@ struct ChatMessage: Identifiable, Equatable {
     let attachmentType: String?
     let attachmentName: String?
     var pending: Bool = false
+    /// Tracks referenced by a collab request, resolved to render-ready cards.
+    var sharedTracks: [SharedTrack] = []
+    /// Collab-request lifecycle — drives the inline Accept/Decline UI.
+    var requestId: String? = nil
+    var requestStatus: String? = nil        // mutated optimistically on respond
+    var requestFromUserId: String? = nil
 
     var isSystem: Bool { type == "system" }
     var isImageAttachment: Bool { isAttachment && (attachmentType?.hasPrefix("image") ?? false) }
     var isAudioAttachment: Bool { isAttachment && (attachmentType?.hasPrefix("audio") ?? false) }
+    var isCollabRequest: Bool { type == "collab_request" }
+    /// A collab request still awaiting a decision.
+    var isPendingRequest: Bool {
+        isCollabRequest && requestStatus != "accepted" && requestStatus != "rejected"
+    }
 }
 
 @Observable
@@ -43,6 +65,8 @@ final class ConversationViewModel {
     private let currentUserId: String?
     private let service: SupabaseService
     private let storage: StorageService
+    /// Resolved shared tracks, cached across polls (keyed by track id).
+    private var sharedTrackCache: [String: SharedTrack] = [:]
 
     init(
         convoId: String,
@@ -56,17 +80,31 @@ final class ConversationViewModel {
         self.storage = storage
     }
 
-    func load() async {
+    /// `settleDelay` defers *applying* the result (not fetching it): the first
+    /// load happens during the nav-push animation, and building the full thread
+    /// mid-transition stutters — so the fetch overlaps the push, but the heavy
+    /// first render waits until the transition has settled. Costs nothing on a
+    /// slow network (the delay runs concurrently with the fetch).
+    func load(settleDelay: Duration = .zero) async {
         if messages.isEmpty { loadingState = .loading }
+        async let settled: Void = Self.sleep(settleDelay)
         do {
             let rows = try await service.getConvoMessages(convoId: convoId, limit: 50, offset: 0)
-            messages = (await mapAll(rows)).sorted { $0.createdAt < $1.createdAt }
+            let mapped = (await mapAll(rows)).sorted { $0.createdAt < $1.createdAt }
+            await settled
+            messages = mapped
             loadingState = .loaded
             try? await service.markConvoRead(convoId: convoId)
         } catch {
             print("[ConversationVM] load: \(error)")
+            await settled
             if messages.isEmpty { loadingState = .error(error.localizedDescription) }
         }
+    }
+
+    private static func sleep(_ duration: Duration) async {
+        guard duration > .zero else { return }
+        try? await Task.sleep(for: duration)
     }
 
     func send() async {
@@ -155,8 +193,18 @@ final class ConversationViewModel {
         let mapped = await mapAll(rows)
         let existing = Set(messages.map(\.id))
         let fresh = mapped.filter { !existing.contains($0.id) }
-        guard !fresh.isEmpty else { return }
 
+        // Sync request status on rows we already have — it flips when the other
+        // party (or another device) responds while the thread is open, and the
+        // header's Pending chip / ✕✓ buttons key off it.
+        let byId = Dictionary(mapped.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for i in messages.indices {
+            if let updated = byId[messages[i].id], updated.requestStatus != messages[i].requestStatus {
+                messages[i].requestStatus = updated.requestStatus
+            }
+        }
+
+        guard !fresh.isEmpty else { return }
         messages.append(contentsOf: fresh)
         messages.sort { $0.createdAt < $1.createdAt }
         if fresh.contains(where: { !$0.isFromMe }) {
@@ -164,26 +212,79 @@ final class ConversationViewModel {
         }
     }
 
-    /// Maps rows to chat messages, batch-signing any attachment paths (private bucket).
+    /// Maps rows to chat messages: batch-signs attachment paths (private bucket)
+    /// and batch-resolves any collab-request track references into cards.
     private func mapAll(_ rows: [ApiConvoMessage]) async -> [ChatMessage] {
         let paths: [String?] = rows.map { ($0.attachment ?? false) ? $0.attachmentUrl : nil }
         let signed = await storage.signAttachmentUrls(paths: paths)
-        return rows.enumerated().map { idx, m in map(m, signedURL: signed[idx]) }
+        let tracks = await resolveSharedTracks(rows)
+        return rows.enumerated().map { idx, m in map(m, signedURL: signed[idx], tracks: tracks) }
     }
 
-    private func map(_ m: ApiConvoMessage, signedURL: String?) -> ChatMessage {
+    /// Resolves every distinct referenced track id, fetching only the ones not
+    /// already cached (so the 4s poll doesn't re-fetch unchanged tracks).
+    private func resolveSharedTracks(_ rows: [ApiConvoMessage]) async -> [String: SharedTrack] {
+        let ids = Set(rows.flatMap { $0.requestMetadata?.trackIds ?? [] })
+        let missing = ids.filter { sharedTrackCache[$0] == nil }
+        if !missing.isEmpty, let fetched = try? await service.getTracksByIds(Array(missing)) {
+            for t in fetched {
+                sharedTrackCache[t.trackId] = SharedTrack(
+                    id: t.trackId,
+                    title: t.title ?? "Track",
+                    artist: t.artistUsername,
+                    coverURL: storage.resolveTrackUrl(t.coverUrl).flatMap { URL(string: $0) },
+                    audioURL: storage.resolveTrackUrl(t.audioUrl).flatMap { URL(string: $0) },
+                    artistUserId: t.artistUserId
+                )
+            }
+        }
+        return sharedTrackCache
+    }
+
+    private func map(_ m: ApiConvoMessage, signedURL: String?, tracks: [String: SharedTrack]) -> ChatMessage {
         let type = m.messageType ?? "message"
         let isAttachment = m.attachment ?? false
+        let shared = (m.requestMetadata?.trackIds ?? []).compactMap { tracks[$0] }
         return ChatMessage(
             id: m.messageId,
             text: m.content ?? "",
-            isFromMe: type != "system" && m.userId != nil && m.userId == currentUserId,
+            // Case-insensitive: UUIDs are case-insensitive by spec, and the two
+            // sides can differ in case (Postgres text is lowercase; some SDK paths
+            // yield uppercase).
+            isFromMe: type != "system" && m.userId != nil && m.userId?.lowercased() == currentUserId?.lowercased(),
             createdAt: MessageTime.parse(m.createdAt) ?? Date(),
             type: type,
             isAttachment: isAttachment,
             attachmentURL: signedURL.flatMap { URL(string: $0) },
             attachmentType: m.attachmentType,
-            attachmentName: m.attachmentName
+            attachmentName: m.attachmentName,
+            sharedTracks: shared,
+            requestId: m.requestId,
+            requestStatus: m.requestStatus,
+            requestFromUserId: m.requestFromUserId
         )
+    }
+
+    /// Accepts or declines a collab request, updating the bubble in place.
+    func respondToRequest(_ message: ChatMessage, accept: Bool) async {
+        guard let requestId = message.requestId, message.isPendingRequest else { return }
+        // Optimistic: flip the status now, revert on failure.
+        let previous = message.requestStatus
+        setRequestStatus(message.id, accept ? "accepted" : "rejected")
+        do {
+            if accept {
+                try await service.acceptRequest(requestId: requestId)
+            } else {
+                try await service.rejectRequest(requestId: requestId)
+            }
+        } catch {
+            print("[ConversationVM] respondToRequest: \(error)")
+            setRequestStatus(message.id, previous)
+        }
+    }
+
+    private func setRequestStatus(_ messageId: String, _ status: String?) {
+        guard let i = messages.firstIndex(where: { $0.id == messageId }) else { return }
+        messages[i].requestStatus = status
     }
 }

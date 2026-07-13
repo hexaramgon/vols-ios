@@ -39,6 +39,8 @@ struct RegularNowPlaying: View {
     /// Shared comments state: the list (in the pager) and the input bar (in the
     /// controls, morphed from the Comments button) read the same model.
     @State private var commentsModel = NowPlayingCommentsModel()
+    /// Drives the album cover's settle-in entrance on expand (see artworkOrVisualizer).
+    @State private var coverEntranceDone = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -219,6 +221,25 @@ private extension RegularNowPlaying {
         return false
     }
 
+    /// Availability lives on the model (shared with the full-bleed layer in
+    /// ExpandableNowPlaying).
+    var canShowVisualizer: Bool {
+        model.visualizerAvailable
+    }
+
+    var visualizerToggleButton: some View {
+        Button {
+            withAnimation(.smooth(duration: 0.3)) { model.showVisualizer.toggle() }
+        } label: {
+            LucideIcon(.sparkles, size: 18)
+                .foregroundStyle(.white.opacity(model.showVisualizer ? 1 : 0.85))
+                .frame(width: 38, height: 38)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(.white.opacity(model.showVisualizer ? 0.35 : 0.12)))
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder
     var artworkOrVisualizer: some View {
         if isVideo, model.isPortraitVideo {
@@ -241,6 +262,15 @@ private extension RegularNowPlaying {
             // Video track whose AVPlayer hasn't spun up yet: show a loading state
             // rather than flashing the album cover; the video takes over once ready.
             videoLoadingPlaceholder
+        } else if model.showVisualizer, model.visualizerAvailable {
+            // Fullscreen visualizer renders full-bleed behind everything (see
+            // ExpandableNowPlaying). Keep a clear, same-sized matched-geometry
+            // frame here — like portrait video — so the layout and the
+            // expand/collapse glide stay intact.
+            Color.clear
+                .frame(width: artworkSize, height: artworkSize)
+                .matchedGeometryEffect(id: PlayerMatchedGeometry.artwork, in: animationNamespace, isSource: coverMatchEnabled && expanded)
+                .frame(maxWidth: .infinity)
         } else {
             // Album cover — a centered square (matched-geometry on the square so the
             // expand/collapse glide to the mini-player stays clean). The inner cover
@@ -258,6 +288,15 @@ private extension RegularNowPlaying {
             .matchedGeometryEffect(id: PlayerMatchedGeometry.artwork, in: animationNamespace, isSource: coverMatchEnabled && expanded)
             .frame(maxWidth: .infinity)
             .animation(.smooth(duration: 0.3), value: model.display)
+            // Entrance: the cover used to arrive at full presence on the first
+            // frame of the expansion, ahead of the card. Now it settles in a
+            // beat later with a gentle scale, landing as the card finishes.
+            .scaleEffect(coverEntranceDone ? 1 : 0.92)
+            .opacity(coverEntranceDone ? 1 : 0)
+            .onAppear {
+                withAnimation(.smooth(duration: 0.4).delay(0.12)) { coverEntranceDone = true }
+            }
+            .onDisappear { coverEntranceDone = false }
         }
     }
 
@@ -302,6 +341,19 @@ private extension RegularNowPlaying {
                 //         .offset(y: 42)
                 //         .padding(.horizontal, 25)
                 // }
+                .overlay(alignment: .bottomTrailing) {
+                    if canShowVisualizer {
+                        visualizerToggleButton
+                            // Inside the centered square's bottom-right corner
+                            // (the square is inset `horizontalPadding` per side).
+                            .padding(.trailing, Const.horizontalPadding + 10)
+                            .padding(.bottom, 10)
+                            // Hides with the rest of the controls in immersive
+                            // mode (tap anywhere restores them).
+                            .opacity(minimized ? 0 : 1)
+                            .allowsHitTesting(!minimized)
+                    }
+                }
                 .padding(.bottom, artworkVerticalPadding)
 
             NowPlayingInfoStrip()

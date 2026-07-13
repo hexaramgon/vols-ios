@@ -2,12 +2,13 @@
 //  ImageCropperView.swift
 //  Volspire
 //
-//  Square image picker with two modes:
-//   • Fit  — the whole image, aspect-fit into a 1:1 canvas, with the empty bars
-//            filled by a blurred, zoomed copy of the same image (mirrors the web
-//            app's blur-fill for vertical/horizontal covers). Nothing is cropped.
-//   • Crop — the classic "move & scale" square cropper (a UIScrollView does the
-//            zoom/pan + crop-rect math, more reliable than SwiftUI gestures).
+//  Image picker for a fixed output aspect ratio (default 1:1; pass e.g. 3 for a
+//  wide banner) with two modes:
+//   • Fit  — the whole image, aspect-fit into the target canvas, with the empty
+//            bars filled by a blurred, zoomed copy of the same image (mirrors the
+//            web app's blur-fill for off-ratio covers). Nothing is cropped.
+//   • Crop — the classic "move & scale" cropper (a UIScrollView does the zoom/pan
+//            + crop-rect math, more reliable than SwiftUI gestures).
 //  The image must be orientation-normalised first — see `normalizedUp()`.
 //
 
@@ -19,23 +20,58 @@ import UIKit
 struct ImageCropperView: View {
     /// Source image — pass `someImage.normalizedUp()` so pixel coords match display.
     let image: UIImage
-    /// Square 1:1 JPEG data, delivered when the user taps Done.
+    /// Cropped/fitted JPEG data at `aspectRatio`, delivered when the user taps Done.
     let onCrop: (Data) -> Void
     let onCancel: () -> Void
 
-    /// Max side length (px) of the exported image.
+    /// Output width ÷ height. 1 = square (avatar/track cover), 3 = wide banner.
+    var aspectRatio: CGFloat = 1
+    /// Max side length (px) of the exported image's longer edge.
     var outputSize: CGFloat = 1024
+    /// When false the picker is crop-only: no Fit/Crop toggle, no blur-fill —
+    /// avatars and banners always crop; covers keep both modes.
+    var allowsFitMode = true
+    /// Dim outside an inscribed circle (avatar crops) so the preview shows
+    /// exactly what the round profile picture will contain.
+    var showsCircularMask = false
+
+    /// Pixel size of the exported canvas, sized so its longer edge is `outputSize`.
+    private var outputCanvas: CGSize {
+        aspectRatio >= 1
+            ? CGSize(width: outputSize, height: outputSize / aspectRatio)
+            : CGSize(width: outputSize * aspectRatio, height: outputSize)
+    }
 
     private enum Mode: String, CaseIterable, Identifiable {
         case fit = "Fit", crop = "Crop"
         var id: Self { self }
     }
 
-    @State private var mode: Mode = .fit
+    @State private var mode: Mode
     @State private var cropper = ScrollCropper()
-    /// The rendered blur-fill square — generated once so the preview is exactly
+    /// The rendered blur-fill image — generated once so the preview is exactly
     /// what gets uploaded (WYSIWYG), and reused for Done.
     @State private var fitImage: UIImage?
+
+    init(
+        image: UIImage,
+        onCrop: @escaping (Data) -> Void,
+        onCancel: @escaping () -> Void,
+        aspectRatio: CGFloat = 1,
+        outputSize: CGFloat = 1024,
+        allowsFitMode: Bool = true,
+        showsCircularMask: Bool = false
+    ) {
+        self.image = image
+        self.onCrop = onCrop
+        self.onCancel = onCancel
+        self.aspectRatio = aspectRatio
+        self.outputSize = outputSize
+        self.allowsFitMode = allowsFitMode
+        self.showsCircularMask = showsCircularMask
+        // Crop-only starts (and stays) in crop — no onAppear flip, no re-mount.
+        _mode = State(initialValue: allowsFitMode ? .fit : .crop)
+    }
 
     var body: some View {
         // A full-screen cover lays out edge-to-edge with no safe-area inset, so pad
@@ -46,7 +82,9 @@ struct ImageCropperView: View {
             header
 
             GeometryReader { geo in
-                let side = min(geo.size.width, geo.size.height)
+                // Largest box of the target aspect ratio that fits the space.
+                let boxW = min(geo.size.width, geo.size.height * aspectRatio)
+                let boxH = boxW / aspectRatio
                 Group {
                     switch mode {
                     case .fit:
@@ -54,38 +92,56 @@ struct ImageCropperView: View {
                             Image(uiImage: fitImage)
                                 .resizable()
                                 .scaledToFit()
-                                .frame(width: side, height: side)
+                                .frame(width: boxW, height: boxH)
                         } else {
-                            Color.black.frame(width: side, height: side)
+                            Color.black.frame(width: boxW, height: boxH)
                         }
                     case .crop:
                         ZoomableImageScrollView(image: image, cropper: cropper)
-                            .frame(width: side, height: side)
+                            .frame(width: boxW, height: boxH)
                             .overlay {
-                                Rectangle()
-                                    .strokeBorder(Color.white.opacity(0.5), lineWidth: 1)
-                                    .allowsHitTesting(false)
+                                if showsCircularMask {
+                                    // Dim everything outside the inscribed circle —
+                                    // the round-avatar preview.
+                                    CircleCutoutMask()
+                                        .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
+                                        .allowsHitTesting(false)
+                                    Circle()
+                                        .strokeBorder(Color.white.opacity(0.7), lineWidth: 1)
+                                        .allowsHitTesting(false)
+                                } else {
+                                    Rectangle()
+                                        .strokeBorder(Color.white.opacity(0.5), lineWidth: 1)
+                                        .allowsHitTesting(false)
+                                }
                             }
                     }
                 }
-                .frame(width: geo.size.width, height: geo.size.height) // centre the square
+                .frame(width: geo.size.width, height: geo.size.height) // centre the box
             }
 
-            modeToggle
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
+            if allowsFitMode {
+                modeToggle
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 12)
+            }
         }
         .padding(.top, insets.top)
         .padding(.bottom, max(insets.bottom, 8))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.ignoresSafeArea())
+        // The manual window-inset paddings above are the ONLY inset source —
+        // without this, the cover ALSO applies the system safe area and the
+        // whole layout ends up double-padded (header pushed down, box floating
+        // between giant black gaps).
+        .ignoresSafeArea()
         .preferredColorScheme(.dark)
         // Render the blur-fill up front so switching to Fit is instant and the
-        // preview matches the exported bytes exactly.
+        // preview matches the exported bytes exactly. (Crop-only skips it.)
         .onAppear {
-            if fitImage == nil {
-                fitImage = SquareBlurFill.render(image, side: outputSize)
+            if allowsFitMode, fitImage == nil {
+                fitImage = BlurFill.render(image, size: outputCanvas)
             }
         }
     }
@@ -151,20 +207,63 @@ struct ImageCropperView: View {
         case .fit:
             if let data = fitImage?.jpegData(compressionQuality: 0.9) { onCrop(data) }
         case .crop:
-            if let data = cropper.cropJPEG(maxPixel: outputSize) { onCrop(data) }
+            if let data = cropper.cropJPEG(maxPixel: outputSize) {
+                onCrop(data)
+            } else if let data = centerFillJPEG() {
+                // The live crop couldn't be read (scroll view not laid out) —
+                // export the default framing rather than a dead Done button.
+                onCrop(data)
+            }
         }
+    }
+
+    /// The image aspect-filled (center-cropped) into the output canvas — what
+    /// the crop view shows before any pan/zoom.
+    private func centerFillJPEG() -> Data? {
+        let canvas = CGRect(origin: .zero, size: outputCanvas)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let scale = max(canvas.width / max(image.size.width, 1), canvas.height / max(image.size.height, 1))
+        let drawn = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let rendered = UIGraphicsImageRenderer(size: canvas.size, format: format).image { _ in
+            image.draw(in: CGRect(
+                x: canvas.midX - drawn.width / 2,
+                y: canvas.midY - drawn.height / 2,
+                width: drawn.width,
+                height: drawn.height
+            ))
+        }
+        return rendered.jpegData(compressionQuality: 0.9)
+    }
+}
+
+/// Full-rect path with an inscribed circle removed (even-odd fill) — dims the
+/// corners of an avatar crop so the round preview is obvious.
+private struct CircleCutoutMask: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.addRect(rect)
+        let side = min(rect.width, rect.height)
+        path.addEllipse(in: CGRect(
+            x: rect.midX - side / 2,
+            y: rect.midY - side / 2,
+            width: side,
+            height: side
+        ))
+        return path
     }
 }
 
 // MARK: - Blur-fill (letterbox) renderer
 
-/// Renders an image into a 1:1 square: a blurred, aspect-filled copy behind the
-/// sharp, aspect-fit original — so vertical/horizontal images become square
-/// without cropping (the web app's cover treatment).
-enum SquareBlurFill {
-    static func render(_ image: UIImage, side: CGFloat) -> UIImage {
-        let canvas = CGRect(x: 0, y: 0, width: side, height: side)
-        let background = blurred(image, radius: side * 0.045) ?? image
+/// Renders an image into a fixed-size canvas: a blurred, aspect-filled copy
+/// behind the sharp, aspect-fit original — so off-ratio images fit without
+/// cropping (the web app's cover treatment).
+enum BlurFill {
+    static func render(_ image: UIImage, size: CGSize) -> UIImage {
+        let canvas = CGRect(origin: .zero, size: size)
+        let background = blurred(image, radius: min(size.width, size.height) * 0.045) ?? image
 
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -261,9 +360,9 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         private var didSetup = false
 
         /// Sized once the scroll view has real bounds: fit the image to fill the
-        /// square (min zoom), cap max zoom, and centre the initial crop.
+        /// (possibly non-square) crop box (min zoom), cap max zoom, and centre it.
         func setupIfNeeded(_ scrollView: UIScrollView) {
-            guard !didSetup, let imageView, scrollView.bounds.width > 1 else { return }
+            guard !didSetup, let imageView, scrollView.bounds.width > 1, scrollView.bounds.height > 1 else { return }
             let imageSize = imageView.image?.size ?? .zero
             guard imageSize.width > 0, imageSize.height > 0 else { return }
             didSetup = true
@@ -271,16 +370,16 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
             imageView.frame = CGRect(origin: .zero, size: imageSize)
             scrollView.contentSize = imageSize
 
-            let side = scrollView.bounds.width
-            let minScale = max(side / imageSize.width, side / imageSize.height)
+            let box = scrollView.bounds.size
+            let minScale = max(box.width / imageSize.width, box.height / imageSize.height)
             scrollView.minimumZoomScale = minScale
             scrollView.maximumZoomScale = minScale * 5
             scrollView.zoomScale = minScale
 
             let scaled = CGSize(width: imageSize.width * minScale, height: imageSize.height * minScale)
             scrollView.contentOffset = CGPoint(
-                x: max(0, (scaled.width - side) / 2),
-                y: max(0, (scaled.height - side) / 2)
+                x: max(0, (scaled.width - box.width) / 2),
+                y: max(0, (scaled.height - box.height) / 2)
             )
         }
 
@@ -297,26 +396,28 @@ final class ScrollCropper {
     weak var scrollView: UIScrollView?
     var image: UIImage?
 
-    /// Crops the currently-visible square to JPEG, downscaled so its side is at
-    /// most `maxPixel`. Assumes `image` is scale-1 / orientation-up.
+    /// Crops the currently-visible box to JPEG, downscaled so its longer edge is at
+    /// most `maxPixel` (preserving the box's aspect). Assumes `image` is scale-1 /
+    /// orientation-up.
     func cropJPEG(maxPixel: CGFloat) -> Data? {
         guard let scrollView, let image, let cg = image.cgImage, scrollView.zoomScale > 0 else { return nil }
         let zoom = scrollView.zoomScale
-        let side = scrollView.bounds.width
+        let box = scrollView.bounds.size
 
         var rect = CGRect(
             x: scrollView.contentOffset.x / zoom,
             y: scrollView.contentOffset.y / zoom,
-            width: side / zoom,
-            height: side / zoom
+            width: box.width / zoom,
+            height: box.height / zoom
         )
         // Guard against bounce overscroll spilling past the image edges.
         rect = rect.intersection(CGRect(origin: .zero, size: image.size))
         guard !rect.isNull, rect.width > 0, rect.height > 0, let cropped = cg.cropping(to: rect) else { return nil }
 
         let croppedImage = UIImage(cgImage: cropped, scale: 1, orientation: .up)
-        let target = min(maxPixel, max(rect.width, rect.height))
-        let renderSize = CGSize(width: target, height: target)
+        let maxSide = max(rect.width, rect.height)
+        let renderScale = maxSide > maxPixel ? maxPixel / maxSide : 1
+        let renderSize = CGSize(width: rect.width * renderScale, height: rect.height * renderScale)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         let rendered = UIGraphicsImageRenderer(size: renderSize, format: format).image { _ in

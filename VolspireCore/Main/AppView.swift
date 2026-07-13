@@ -10,6 +10,7 @@ import SwiftUI
 
 struct AppView: View {
     @Environment(Dependencies.self) var dependencies
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Minimum time the splash stays up so the logo is actually seen.
     @State private var minSplashElapsed = false
@@ -46,6 +47,27 @@ struct AppView: View {
             }
         }
         .animation(.easeOut(duration: 0.45), value: showSplash)
+        // Sign-out teardown: whenever an authenticated session ends (explicit
+        // sign-out OR a server-revoked session), stop playback and drop all
+        // per-user in-memory state so the next session starts clean.
+        .onChange(of: dependencies.authManager.state) { old, new in
+            if case .authenticated = old, case .unauthenticated = new {
+                dependencies.resetForSignOut()
+            }
+            // Session became active (launch restore or fresh sign-in):
+            // register this device for pushes. First run shows the system
+            // permission prompt; afterwards this silently refreshes the token.
+            if case .authenticated = new {
+                Task { await PushNotificationManager.shared.enable() }
+            }
+        }
+        // Opening the app clears the icon badge — the next push re-stamps it
+        // with the true unread count (computed server-side).
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                PushNotificationManager.shared.clearBadge()
+            }
+        }
         .task {
             await dependencies.authManager.restoreSession()
         }

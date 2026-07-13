@@ -4,10 +4,12 @@
 //
 //  Volspire-flavoured settings: a branded account header, flat edge-to-edge
 //  rows (no iOS-style grouped cards or coloured chips), and a brand accent.
+//  Lucide icons throughout (matching the rest of the app), and NO external web
+//  links — Help/Terms/Privacy render natively (SettingsInfoScreens.swift) and
+//  account matters go through email.
 //
 
 import DesignSystem
-import Kingfisher
 import SwiftUI
 
 struct SettingsScreen: View {
@@ -15,14 +17,12 @@ struct SettingsScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @Environment(PlayerController.self) private var playerController
-    @State private var viewModel = SettingsViewModel()
+    @AppStorage(SettingsKeys.visualizerLowPower) private var visualizerLowPower = false
+    /// Log-out is destructive-ish (drops the session) — confirm before doing it.
+    @State private var showLogoutConfirm = false
 
-    private enum Links {
-        static let help = URL(string: "https://volspire.com/support")!
-        static let terms = URL(string: "https://volspire.com/terms")!
-        static let privacy = URL(string: "https://volspire.com/privacy")!
-        static let account = URL(string: "https://volspire.com/settings")!
-    }
+    /// The only way out of the app from Settings — support/account email.
+    private static let supportEmail = URL(string: "mailto:management@volspire.com")!
 
     /// Clears the custom tab bar + home indicator + (when present) the floating
     /// mini-player — none of which are part of this pushed screen's safe area.
@@ -34,31 +34,49 @@ struct SettingsScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                accountHeader
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                    .padding(.bottom, 8)
-
-                section("Preferences") {
+                section("Preferences", topPadding: 4) {
                     NavigationLink {
                         NotificationSettingsScreen()
                     } label: {
-                        SettingsListRow(icon: "bell", title: "Notifications",
+                        SettingsListRow(icon: .bell, title: "Notifications",
                                         subtitle: "Pick what you hear about")
                     }
                     .buttonStyle(.plain)
+
+                    if FeatureFlags.visualizer {
+                        divider
+                        toggleRow(icon: .sparkles, title: "Low Power Visualizer",
+                                  subtitle: "Softer 30fps visuals, easier on the battery",
+                                  isOn: $visualizerLowPower)
+                    }
                 }
 
                 section("Support") {
-                    linkRow(icon: "questionmark.circle", title: "Help Center", url: Links.help)
+                    NavigationLink {
+                        HelpCenterScreen()
+                    } label: {
+                        SettingsListRow(icon: .circleHelp, title: "Help Center",
+                                        subtitle: "FAQs, copyright & safety")
+                    }
+                    .buttonStyle(.plain)
                     divider
-                    linkRow(icon: "doc.text", title: "Terms of Service", url: Links.terms)
-                    divider
-                    linkRow(icon: "lock.shield", title: "Privacy Policy", url: Links.privacy)
+                    mailRow(icon: .mail, title: "Contact us", subtitle: "management@volspire.com")
                 }
 
-                section("Account") {
-                    linkRow(icon: "creditcard", title: "Manage Account",
-                            subtitle: "Plan, billing & deletion on the web", url: Links.account)
+                section("Legal") {
+                    NavigationLink {
+                        SettingsDocScreen(doc: .terms)
+                    } label: {
+                        SettingsListRow(icon: .file, title: "Terms of Service")
+                    }
+                    .buttonStyle(.plain)
+                    divider
+                    NavigationLink {
+                        SettingsDocScreen(doc: .privacy)
+                    } label: {
+                        SettingsListRow(icon: .lock, title: "Privacy Policy")
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 logoutRow
@@ -67,85 +85,58 @@ struct SettingsScreen: View {
             .padding(.bottom, bottomInset)
         }
         .scrollIndicators(.hidden)
+        // The page is shorter than the screen, so every drag is a rubber-band —
+        // and a bounce can settle with the nav bar's scroll-content margin
+        // exposed, parking the content visibly lower. No overflow → no scroll.
+        .scrollBounceBehavior(.basedOnSize)
         .appNavBar(title: "Settings") { dismiss() }
-        .task { await viewModel.loadAccount(userId: dependencies.authManager.currentUserId) }
-    }
-}
-
-// MARK: - Account header
-
-private extension SettingsScreen {
-    var accountHeader: some View {
-        HStack(spacing: 14) {
-            Group {
-                if let url = viewModel.accountAvatarURL {
-                    KFImage(url).downsampled(to: 58).resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    ZStack {
-                        Color.vBase
-                        Image(systemName: "person.fill").font(.system(size: 24)).foregroundStyle(Color.vText3)
-                    }
-                }
-            }
-            .frame(width: 58, height: 58)
-            .clipShape(Circle())
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(viewModel.accountUsername.isEmpty ? "Your account" : viewModel.accountUsername)
-                    .font(.appTitle3)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Text(accountSubtitle)
-                    .font(.appFootnote)
-                    .foregroundStyle(Color.vText2)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.vSurface)
-                .overlay {
-                    LinearGradient(
-                        colors: [Color.brand.opacity(0.22), Color.brand.opacity(0)],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    )
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        }
-        .redacted(reason: viewModel.accountLoaded ? [] : .placeholder)
-    }
-
-    var accountSubtitle: String {
-        switch viewModel.accountType {
-        case "collaborator": "Creator account"
-        case "listener": "Listener account"
-        default: "Volspire member"
-        }
     }
 }
 
 // MARK: - Sections + rows (flat, edge-to-edge)
 
 private extension SettingsScreen {
-    func section<Rows: View>(_ title: String, @ViewBuilder rows: () -> Rows) -> some View {
+    /// `topPadding` separates a section from whatever sits above it — the
+    /// first section passes a small value so it hugs the nav bar.
+    func section<Rows: View>(_ title: String, topPadding: CGFloat = 28, @ViewBuilder rows: () -> Rows) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
                 .font(.appCallout)
                 .foregroundStyle(Color.vText2)
                 .padding(.bottom, 4)
-                .padding(.top, 28)
+                .padding(.top, topPadding)
             rows()
         }
         .padding(.horizontal, ViewConst.screenPaddings)
     }
 
-    func linkRow(icon: String, title: String, subtitle: String? = nil, url: URL) -> some View {
-        Button { openURL(url) } label: {
+    /// A row that opens the support mailbox — the arrow marks it as leaving the app.
+    func mailRow(icon: LucideIcon.Name, title: String, subtitle: String? = nil) -> some View {
+        Button { openURL(Self.supportEmail) } label: {
             SettingsListRow(icon: icon, title: title, subtitle: subtitle, external: true)
         }
         .buttonStyle(.plain)
+    }
+
+    /// A flat row with a trailing switch — same anatomy as SettingsListRow,
+    /// but toggling a local preference instead of navigating.
+    func toggleRow(icon: LucideIcon.Name, title: String, subtitle: String? = nil, isOn: Binding<Bool>) -> some View {
+        HStack(spacing: 16) {
+            LucideIcon(icon, .lg)
+                .foregroundStyle(Color.vText2)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.appBodyMedium).foregroundStyle(.white)
+                if let subtitle {
+                    Text(subtitle).font(.appFootnote).foregroundStyle(Color.vText3).lineLimit(1)
+                }
+            }
+            Spacer()
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .tint(Color.brand)
+        }
+        .padding(.vertical, 14)
     }
 
     var divider: some View {
@@ -154,11 +145,10 @@ private extension SettingsScreen {
 
     var logoutRow: some View {
         Button {
-            Task { await dependencies.authManager.signOut() }
+            showLogoutConfirm = true
         } label: {
             HStack(spacing: 16) {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 18))
+                LucideIcon(.logOut, .lg)
                     .frame(width: 24)
                 Text("Log out").font(.appBodyMedium)
                 Spacer()
@@ -170,6 +160,16 @@ private extension SettingsScreen {
         .buttonStyle(.plain)
         .padding(.horizontal, ViewConst.screenPaddings)
         .padding(.top, 28)
+        .confirmationDialog(
+            "Log out of Volspire?",
+            isPresented: $showLogoutConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Log out", role: .destructive) {
+                Task { await dependencies.authManager.signOut() }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 
     var footer: some View {
@@ -197,18 +197,17 @@ private extension SettingsScreen {
 
 // MARK: - Shared pieces
 
-/// A flat settings row: monochrome icon, title, optional subtitle, and a
-/// trailing chevron (push) or up-right arrow (opens the web).
+/// A flat settings row: monochrome Lucide icon, title, optional subtitle, and
+/// a trailing chevron (push) or up-right arrow (leaves the app, e.g. mail).
 struct SettingsListRow: View {
-    let icon: String
+    let icon: LucideIcon.Name
     let title: String
     var subtitle: String? = nil
     var external: Bool = false
 
     var body: some View {
         HStack(spacing: 16) {
-            Image(systemName: icon)
-                .font(.system(size: 18))
+            LucideIcon(icon, .lg)
                 .foregroundStyle(Color.vText2)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
@@ -218,8 +217,7 @@ struct SettingsListRow: View {
                 }
             }
             Spacer()
-            Image(systemName: external ? "arrow.up.right" : "chevron.right")
-                .font(.system(size: external ? 12 : 14, weight: .semibold))
+            LucideIcon(external ? .arrowUpRight : .chevronRight, external ? .xs : .sm)
                 .foregroundStyle(Color.vText3)
         }
         .padding(.vertical, 14)

@@ -102,7 +102,12 @@ class Router {
 
     func popToRoot() {
         path.removeLast(path.count)
+        rootResetTick += 1
     }
+
+    /// Bumped on every `popToRoot` (tab-bar re-tap / Home tap). A tab's root
+    /// screen can observe it to also reset itself to the top (Home does).
+    private(set) var rootResetTick = 0
 }
 
 private struct RouterViewModifier: ViewModifier {

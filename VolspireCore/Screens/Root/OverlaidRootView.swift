@@ -61,7 +61,9 @@ struct OverlaidRootView: View {
                         .offset(y: isConversationActive ? 140 : 0)
                         .opacity(isConversationActive ? 0 : 1)
                         .allowsHitTesting(!isConversationActive)
-                        .animation(.easeInOut(duration: 0.3), value: isConversationActive)
+                        // Same curve as the tab bar's hide in RootTabView so the two
+                        // move as one piece.
+                        .animation(.smooth(duration: 0.35), value: isConversationActive)
                         .toolbarColorScheme(colorScheme, for: .navigationBar)
                         // Slide up + fade in when a track starts (reverse on clear)
                         // instead of popping in/out.
@@ -100,47 +102,58 @@ struct OverlaidRootView: View {
 }
 
 private extension OverlaidRootView {
-    /// The full-screen avatar zoom — one circular image grows from the tapped
-    /// avatar's frame to a large centred circle over a dimmed app, and shrinks back.
     @ViewBuilder
     var avatarPreviewOverlay: some View {
         if avatarPreview.mounted, let url = avatarPreview.url {
-            let f = avatarPreview.sourceFrame
-            let circular = avatarPreview.circular
-            // Expanded size: a square for the circular avatar; for an attachment,
-            // fit the source's aspect ratio within the screen.
-            let expanded: CGSize = {
-                if circular {
-                    let big = min(UIScreen.size.width - 56, 340)
-                    return CGSize(width: big, height: big)
-                }
-                let aspect = max(f.width, 1) / max(f.height, 1)
-                let maxW = UIScreen.size.width - 24
-                let maxH = UIScreen.size.height * 0.72
-                var w = maxW, h = maxW / aspect
-                if h > maxH { h = maxH; w = maxH * aspect }
-                return CGSize(width: w, height: h)
-            }()
-            let w = avatarPreview.zoomed ? expanded.width : f.width
-            let h = avatarPreview.zoomed ? expanded.height : f.height
-            let cx = avatarPreview.zoomed ? UIScreen.size.width / 2 : f.midX
-            let cy = avatarPreview.zoomed ? UIScreen.size.height / 2 : f.midY
-            let shape: AnyShape = circular ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            ZStack {
-                Color.black.opacity(avatarPreview.zoomed ? 0.92 : 0).ignoresSafeArea()
-
-                KFImage(url)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: w, height: h)
-                    .clipShape(shape)
-                    .shadow(color: .black.opacity(0.5), radius: avatarPreview.zoomed ? 28 : 14, y: avatarPreview.zoomed ? 12 : 6)
-                    .position(x: cx, y: cy)
+            if avatarPreview.circular {
+                circularAvatarZoom(url)
+            } else {
+                imageAttachmentPreview(url)
             }
-            .ignoresSafeArea()
-            .contentShape(Rectangle())
-            .onTapGesture { avatarPreview.dismiss() }
         }
+    }
+
+    /// Profile avatars: one circular image grows from the tapped frame to a large
+    /// centred circle over a dimmed app, and shrinks back (unchanged).
+    private func circularAvatarZoom(_ url: URL) -> some View {
+        let f = avatarPreview.sourceFrame
+        let big = min(UIScreen.size.width - 56, 340)
+        let w = avatarPreview.zoomed ? big : f.width
+        let h = avatarPreview.zoomed ? big : f.height
+        let cx = avatarPreview.zoomed ? UIScreen.size.width / 2 : f.midX
+        let cy = avatarPreview.zoomed ? UIScreen.size.height / 2 : f.midY
+        return ZStack {
+            Color.black.opacity(avatarPreview.zoomed ? 0.92 : 0).ignoresSafeArea()
+
+            KFImage(url)
+                .resizable()
+                .scaledToFill()
+                .frame(width: w, height: h)
+                .clipShape(Circle())
+                .shadow(color: .black.opacity(0.5), radius: avatarPreview.zoomed ? 28 : 14, y: avatarPreview.zoomed ? 12 : 6)
+                .position(x: cx, y: cy)
+        }
+        .ignoresSafeArea()
+        .contentShape(Rectangle())
+        .onTapGesture { avatarPreview.dismiss() }
+    }
+
+    /// Message image attachments: a plain centred full-screen viewer that fades in
+    /// (no fly-from-frame zoom). Tap anywhere to dismiss.
+    private func imageAttachmentPreview(_ url: URL) -> some View {
+        ZStack {
+            Color.black.opacity(avatarPreview.zoomed ? 0.94 : 0).ignoresSafeArea()
+
+            KFImage(url)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: UIScreen.size.width, maxHeight: UIScreen.size.height * 0.86)
+                .opacity(avatarPreview.zoomed ? 1 : 0)
+                .scaleEffect(avatarPreview.zoomed ? 1 : 0.97)
+        }
+        .ignoresSafeArea()
+        .contentShape(Rectangle())
+        .onTapGesture { avatarPreview.dismiss() }
     }
 }
 

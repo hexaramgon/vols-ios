@@ -34,6 +34,15 @@ public extension Color {
     static let graySecondary: Color = .init("GraySecondary", bundle: .module)
 }
 
+public extension LinearGradient {
+    /// Brand-led blue accent for composer send buttons (chat input + player
+    /// comments) so every "send" reads as one family. White icons stay legible.
+    static let sendAccent = LinearGradient(
+        colors: [Color.brand, Color(red: 0.16, green: 0.40, blue: 0.86)],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
+}
+
 extension Color {
     func adjust(
         hue: CGFloat = 0,

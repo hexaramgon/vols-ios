@@ -99,7 +99,11 @@ struct NewServiceScreen: View {
     // MARK: - Header + bottom bar
 
     private var header: some View {
-        UploadFlowHeader(title: viewModel.isEditing ? "Edit Service" : "New Service") { dismiss() }
+        UploadFlowHeader(
+            icon: .briefcase,
+            title: viewModel.isEditing ? "Edit Service" : "New Service",
+            subtitle: viewModel.isEditing ? "Update your service" : "Offer a service"
+        ) { dismiss() }
     }
 
     private var bottomBar: some View {
@@ -124,7 +128,7 @@ struct NewServiceScreen: View {
                 .foregroundStyle(.black)
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
-                .background(.white, in: RoundedRectangle(cornerRadius: 16))
+                .background(.white, in: Capsule())
             }
             .buttonStyle(.plain)
             .disabled(!viewModel.canPublish || isSaving)
@@ -134,7 +138,8 @@ struct NewServiceScreen: View {
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background {
-            Color.vBase
+            // Same chrome tone as the Library header / tab bar (~#121212).
+            Color(white: 0.07)
                 .overlay(alignment: .top) {
                     Rectangle()
                         .fill(Color.vBorder)

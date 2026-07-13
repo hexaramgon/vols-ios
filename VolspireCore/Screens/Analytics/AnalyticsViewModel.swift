@@ -34,6 +34,9 @@ struct TrackAnalyticsItem: Identifiable {
 @Observable @MainActor
 final class AnalyticsViewModel {
     private(set) var tracks: [TrackAnalyticsItem] = []
+    /// Audience engagement (followers / likes / saves / comments + 30d deltas).
+    /// Optional: the dashboard still renders without it if the RPC fails.
+    private(set) var engagement: ApiEngagementStats?
     private(set) var loaded = false
     /// The last load got no response (used as an offline indicator).
     private(set) var loadFailed = false
@@ -48,6 +51,9 @@ final class AnalyticsViewModel {
     }
 
     func load() async {
+        // Engagement loads alongside the track analytics; it's additive, so a
+        // failure there never blocks the dashboard.
+        async let engagementResult = supabaseService.getMyEngagementStats()
         do {
             tracks = try await supabaseService.getMyTrackAnalytics().map { row in
                 TrackAnalyticsItem(
@@ -68,6 +74,7 @@ final class AnalyticsViewModel {
             print("[AnalyticsVM] Failed to load analytics: \(error)")
             loadFailed = true
         }
+        engagement = try? await engagementResult
         loaded = true
     }
 
@@ -89,6 +96,20 @@ final class AnalyticsViewModel {
 
     /// Week-over-week change (last 7 days vs the 7 before), as a percentage.
     var weekTrend: Int { Self.weekTrend(from: dailyPlays) }
+
+    /// The plays series for the selected window (7 or 30 days, oldest → today).
+    func plays(last days: Int) -> [Int] { Array(dailyPlays.suffix(days)) }
+
+    /// Trend for a window: its most recent half vs the half before it, as a
+    /// percentage (so the pill stays meaningful for both 7D and 30D).
+    func trend(days: Int) -> Int {
+        let series = Array(dailyPlays.suffix(days))
+        let half = max(days / 2, 1)
+        let recent = series.suffix(half).reduce(0, +)
+        let prior = series.dropLast(half).suffix(half).reduce(0, +)
+        if prior == 0 { return recent > 0 ? 100 : 0 }
+        return Int(((Double(recent) - Double(prior)) / Double(prior) * 100).rounded())
+    }
 
     /// Total source-attributed plays (denominator for source percentages).
     var totalSourcePlays: Int {

@@ -108,7 +108,10 @@ struct WorkspaceScreen: View {
 
     /// Magnifying-glass toggle that reveals/hides the folder search field.
     private var searchToggle: some View {
-        Button {
+        // The shared header-icon button — identical size/style to the search icons on
+        // Home, Library, Marketplace and Messages. It's a toggle, so pass `.x` while
+        // the field is open; otherwise it's exactly `HeaderIconButton(icon: .search)`.
+        HeaderIconButton(icon: showSearch ? .x : .search) {
             withAnimation(.smooth(duration: 0.25)) { showSearch.toggle() }
             if showSearch {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { searchFocused = true }
@@ -116,13 +119,7 @@ struct WorkspaceScreen: View {
                 searchFocused = false
                 viewModel.searchText = ""
             }
-        } label: {
-            Image(systemName: showSearch ? "xmark" : "magnifyingglass")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
         }
-        .buttonStyle(.plain)
     }
 
     /// Crossfade progress for the title bar as the hero scrolls away.
@@ -245,10 +242,10 @@ private extension WorkspaceScreen {
     /// the edit sheet directly. The row body navigates into the folder.
     func folderRow(_ folder: ApiUserFolder, isLast: Bool) -> some View {
         HStack(spacing: 16) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 31))
-                .foregroundStyle(Color(white: 0.58))
-                .frame(width: 36)
+            LucideIcon(.folder, .lg)
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 44, height: 44)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(folder.name).font(.appBodyLargeMedium).foregroundStyle(.white).lineLimit(1)
@@ -274,7 +271,7 @@ private extension WorkspaceScreen {
         }
         .overlay(alignment: .bottom) {
             if !isLast {
-                Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5).padding(.leading, 52)
+                Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5).padding(.leading, 60)
             }
         }
     }

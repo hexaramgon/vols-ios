@@ -89,7 +89,7 @@ struct CommentComposerBar: View {
 
                 // Collapsed pill with text: keep a send button so you can post
                 // without re-opening the keyboard (expanded puts send in the row below).
-                if !expanded && model.canSend {
+                if !expanded && (model.canSend || model.isSending) {
                     sendButton
                 }
             }
@@ -106,8 +106,8 @@ struct CommentComposerBar: View {
                     if model.commentTimestamp == nil {
                         // Clock: drop the start at the current position.
                         Button { dropTimestamp() } label: {
-                            LucideIcon(.clock, .lg)
-                                .foregroundStyle(.white.opacity(0.5))
+                            LucideIcon(.clock, .xl)
+                                .foregroundStyle(.white)
                         }
                         .buttonStyle(.plain)
                     } else {
@@ -120,7 +120,9 @@ struct CommentComposerBar: View {
                     }
 
                     Spacer(minLength: 0)
-                    sendButton
+                    if model.canSend || model.isSending {
+                        sendButton
+                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
@@ -158,6 +160,8 @@ struct CommentComposerBar: View {
         )
         .animation(.smooth(duration: 0.28), value: expanded)
         .animation(.easeOut(duration: 0.25), value: keyboardTopY)
+        // Send button scale-fades in when there's something to post (matches chat).
+        .animation(.spring(response: 0.32, dampingFraction: 0.72), value: model.canSend)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notif in
             if let frame = notif.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                 keyboardTopY = frame.minY
@@ -263,20 +267,28 @@ struct CommentComposerBar: View {
         .buttonStyle(.plain)
     }
 
+    /// Up-arrow in an accent-gradient circle — the same send button as the chat
+    /// input, scale-fading in when there's something to post.
     @ViewBuilder
     private var sendButton: some View {
-        if model.isSending {
-            ProgressView()
-                .tint(.white.opacity(0.6))
-                .frame(width: 32, height: 32)
-        } else {
-            Button { model.send(trackId: currentTrackId, fileId: currentFileId) } label: {
-                LucideIcon(.circleArrowUp, .xxl)
-                    .foregroundStyle(model.canSend ? .white : .white.opacity(0.3))
+        Group {
+            if model.isSending {
+                ProgressView()
+                    .tint(.white)
+                    .frame(width: 32, height: 32)
+            } else {
+                Button { model.send(trackId: currentTrackId, fileId: currentFileId) } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(LinearGradient.sendAccent, in: Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-            .disabled(!model.canSend)
         }
+        .padding(.leading, 2)
+        .transition(.scale.combined(with: .opacity))
     }
 
     @ViewBuilder

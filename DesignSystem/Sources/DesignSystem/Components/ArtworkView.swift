@@ -36,22 +36,29 @@ public struct ArtworkView: View {
                     .aspectRatio(contentMode: .fit)
             }
             switch artwork {
-            case let .placeholder(name):
-                Image(lucide: .radio)
-                    .renderingMode(.template)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .aspectRatio(1.0, contentMode: .fit)
-                    .scaleEffect(0.6)
-                    .foregroundStyle(Color.iconSecondary)
+            case .placeholder:
+                placeholderIcon
 
             case let .webImage(url):
+                // While the cover is in flight, the ZStack's solid `background`
+                // shows through — a plain colour placeholder, no icon.
                 KFImage.url(url)
                     .setProcessor(DownsamplingImageProcessor(size: CGSize(width: targetPx, height: targetPx)))
                     // Keep the original cached too, so a prefetched (un-processed)
                     // cover is reused here and downsampled from disk — no second
                     // network fetch when the cell scrolls in.
                     .cacheOriginalImage()
+                    // Together these two put disk-cached covers on the FIRST frame:
+                    // KFImage normally starts loading in onAppear (after the first
+                    // frame committed), so even a synchronous disk read arrived a
+                    // beat late — the covers visibly trailed animated content swaps
+                    // (profile tab slides), because a view materializing mid-
+                    // animation gets no animation. Starting the load during body
+                    // evaluation + reading the disk synchronously makes covers
+                    // ordinary members of the sliding subtree from frame 0. Cheap:
+                    // the downsample target keeps decodes at ~240–720px.
+                    .startLoadingBeforeViewAppear()
+                    .loadDiskFileSynchronously()
                     // Crossfade in when loaded from network/disk; cached (and
                     // prefetched) covers still appear instantly with no fade.
                     .fade(duration: 0.25)
@@ -97,6 +104,17 @@ public struct ArtworkView: View {
                     .stroke(Color(.palette.artworkBorder), lineWidth: border)
             }
         }
+    }
+
+    /// The coverless-track icon, also used while a web cover loads.
+    private var placeholderIcon: some View {
+        Image(lucide: .radio)
+            .renderingMode(.template)
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .aspectRatio(1.0, contentMode: .fit)
+            .scaleEffect(0.6)
+            .foregroundStyle(Color.iconSecondary)
     }
 
     /// Target decode size in pixels: the measured side (or a sane default before

@@ -34,21 +34,29 @@ struct TrackOptionsSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var loadingID: UUID?
+    /// Measured natural height of the header + rows: the sheet detents to
+    /// exactly fit its content instead of a fixed `.medium`, which left a
+    /// half-screen sheet with dead space under two or three rows.
+    @State private var contentHeight: CGFloat = 300
 
     var body: some View {
         VStack(spacing: 0) {
-            SheetHeader(title: title, subtitle: headerSubtitle) { dismiss() } leading: {
-                ArtworkView(artwork, cornerRadius: 8)
-                    .frame(width: 40, height: 40)
-            }
-
             VStack(spacing: 0) {
-                ForEach(actions) { row($0) }
+                SheetHeader(title: title, subtitle: headerSubtitle) { dismiss() } leading: {
+                    ArtworkView(artwork, cornerRadius: 8)
+                        .frame(width: 40, height: 40)
+                }
+
+                VStack(spacing: 0) {
+                    ForEach(actions) { row($0) }
+                }
+                .padding(.top, 8)
             }
-            .padding(.top, 8)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
 
             Spacer(minLength: 0)
         }
+        .presentationDetents([.height(contentHeight + ViewConst.safeAreaInsets.bottom + 8)])
         .environment(\.colorScheme, .dark)
     }
 
@@ -107,5 +115,109 @@ struct TrackOptionsSheet: View {
         }
         .buttonStyle(.plain)
         .disabled(loadingID != nil)
+    }
+}
+
+// MARK: - InlineCreateRow
+
+/// A picker-list row that expands into an inline "name → create" field — used by
+/// the add-to-playlist / add-to-workspace sheets to create a new container
+/// without leaving the sheet. `onCreate` returns whether creation succeeded:
+/// on success the row collapses and clears; on failure it stays open so the
+/// caller's error banner can explain what happened.
+struct InlineCreateRow: View {
+    /// Collapsed-row label, e.g. "New playlist".
+    let label: String
+    /// Text-field prompt while expanded, e.g. "Playlist name".
+    let placeholder: String
+    let onCreate: (String) async -> Bool
+
+    @State private var expanded = false
+    @State private var name = ""
+    @State private var busy = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Group {
+            if expanded {
+                HStack(spacing: 12) {
+                    tile
+                    TextField(
+                        "",
+                        text: $name,
+                        prompt: Text(placeholder).foregroundStyle(.white.opacity(0.35))
+                    )
+                    .font(.appCalloutSemibold)
+                    .foregroundStyle(.white)
+                    .focused($focused)
+                    .submitLabel(.done)
+                    .onSubmit { submit() }
+                    .disabled(busy)
+
+                    Spacer(minLength: 8)
+
+                    if busy {
+                        ProgressView().tint(.white).controlSize(.small)
+                    } else {
+                        Button { submit() } label: {
+                            LucideIcon(.circleCheck, .lg)
+                                .foregroundStyle(canSubmit ? Color.green : Color.vText3)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canSubmit)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+            } else {
+                Button {
+                    withAnimation(.smooth(duration: 0.2)) { expanded = true }
+                    // Focus once the field is mounted (same-tick focus doesn't land).
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { focused = true }
+                } label: {
+                    HStack(spacing: 12) {
+                        tile
+                        Text(label)
+                            .font(.appCalloutSemibold)
+                            .foregroundStyle(.white)
+                        Spacer(minLength: 8)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(MenuRowStyle())
+            }
+        }
+    }
+
+    private var canSubmit: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var tile: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.white.opacity(0.08))
+            LucideIcon(.plus, .lg)
+                .foregroundStyle(.white.opacity(0.85))
+        }
+        .frame(width: 48, height: 48)
+    }
+
+    private func submit() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !busy else { return }
+        busy = true
+        Task {
+            let ok = await onCreate(trimmed)
+            busy = false
+            if ok {
+                withAnimation(.smooth(duration: 0.2)) {
+                    expanded = false
+                    name = ""
+                }
+            }
+        }
     }
 }

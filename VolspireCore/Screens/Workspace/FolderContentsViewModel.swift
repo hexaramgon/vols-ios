@@ -4,6 +4,7 @@
 //
 //
 
+import DesignSystem
 import Foundation
 import Observation
 import Services
@@ -17,12 +18,31 @@ enum FolderContentsLoadingState {
     case error(String)
 }
 
+/// A file picked for upload — rendered as an optimistic row at the top of the
+/// list while it uploads, flipping to an inline failed state (with retry)
+/// instead of a modal alert.
+struct PendingUpload: Identifiable, Equatable {
+    enum Phase: Equatable {
+        case uploading
+        case failed(String)
+    }
+
+    let id = UUID()
+    let url: URL
+    let fileName: String
+    let fileType: String
+    var phase: Phase = .uploading
+
+    var isFailed: Bool { if case .failed = phase { return true } else { return false } }
+}
+
 @Observable @MainActor
 final class FolderContentsViewModel {
     var files: [ApiFolderFile] = []
     var loadingState: FolderContentsLoadingState = .idle
     var showFilePicker = false
-    var isUploading = false
+    /// In-flight / failed uploads, shown above the real file rows.
+    var pendingUploads: [PendingUpload] = []
     var uploadError: String?
 
     let folderId: String
@@ -201,42 +221,95 @@ final class FolderContentsViewModel {
         storageService.avatarUrl(pathOrUrl: path).flatMap { URL(string: $0) }
     }
 
+    /// Inline, transient error for file actions — rendered as an `ErrorBanner`
+    /// above the list (not a modal alert). Auto-clears after a few seconds.
+    var actionError: String?
+
     func deleteFile(_ file: ApiFolderFile) async {
         do {
             try await supabaseService.deleteFile(fileId: file.fileId, folderId: folderId)
             files.removeAll { $0.id == file.id }
         } catch {
             print("[FolderContentsVM] Failed to delete file: \(error)")
-            uploadError = error.localizedDescription
+            showActionError(friendlyDeleteError(error))
         }
     }
 
-    func uploadFile(url: URL) async {
-        isUploading = true
-        uploadError = nil
-        do {
-            guard url.startAccessingSecurityScopedResource() else {
-                throw NSError(domain: "FolderContents", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot access file"])
-            }
-            defer { url.stopAccessingSecurityScopedResource() }
+    /// The server's raw reasons ("File not found or unauthorized",
+    /// "forbidden_on_service_order_folder") translated for humans.
+    private func friendlyDeleteError(_ error: Error) -> String {
+        let raw = error.localizedDescription
+        if raw.contains("unauthorized") || raw.contains("not found") {
+            return "Only the file's uploader or the folder owner can delete this file."
+        }
+        if raw.contains("forbidden_on_service_order_folder") {
+            return "Files in an order folder can't be deleted."
+        }
+        return "Couldn't delete the file. Please try again."
+    }
 
-            let fileData = try Data(contentsOf: url)
-            let fileName = url.lastPathComponent
-            let fileType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+    private func showActionError(_ message: String) {
+        actionError = message
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            if actionError == message { actionError = nil }
+        }
+    }
+
+    /// Queues picked files for upload. Each one appears immediately as an
+    /// optimistic row; uploads run concurrently and independently, so one
+    /// failure never blocks the rest (and the + button stays usable).
+    func enqueueUploads(urls: [URL]) {
+        for url in urls {
+            let item = PendingUpload(
+                url: url,
+                fileName: url.lastPathComponent,
+                fileType: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            )
+            pendingUploads.append(item)
+            Task { await upload(item) }
+        }
+    }
+
+    func retryUpload(_ id: PendingUpload.ID) {
+        guard let index = pendingUploads.firstIndex(where: { $0.id == id }) else { return }
+        pendingUploads[index].phase = .uploading
+        let item = pendingUploads[index]
+        Task { await upload(item) }
+    }
+
+    func dismissUpload(_ id: PendingUpload.ID) {
+        pendingUploads.removeAll { $0.id == id }
+    }
+
+    private func upload(_ item: PendingUpload) async {
+        do {
+            // Read off the main thread — a big file's Data(contentsOf:) would
+            // freeze the UI (same lesson as the upload-track video staging).
+            let fileData = try await Task.detached(priority: .userInitiated) { [url = item.url] in
+                guard url.startAccessingSecurityScopedResource() else {
+                    throw NSError(domain: "FolderContents", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot access this file."])
+                }
+                defer { url.stopAccessingSecurityScopedResource() }
+                return try Data(contentsOf: url)
+            }.value
 
             try await supabaseService.uploadFile(
                 folderId: folderId,
-                fileName: fileName,
+                fileName: item.fileName,
                 fileData: fileData,
-                fileType: fileType,
+                fileType: item.fileType,
                 fileSize: fileData.count
             )
+            // The real row replaces the optimistic one in a single update.
             await refresh()
+            pendingUploads.removeAll { $0.id == item.id }
+            Haptics.impact(.soft)
         } catch {
             print("[FolderContentsVM] Upload failed: \(error)")
-            uploadError = error.localizedDescription
+            guard let index = pendingUploads.firstIndex(where: { $0.id == item.id }) else { return }
+            pendingUploads[index].phase = .failed("Couldn't upload — check your connection.")
         }
-        isUploading = false
     }
 
     // MARK: - Display Helpers

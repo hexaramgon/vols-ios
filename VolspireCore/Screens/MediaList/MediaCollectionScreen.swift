@@ -194,7 +194,6 @@ private extension MediaCollectionScreen {
             Button { viewModel.onShuffle() } label: {
                 pillLabel(icon: .shuffle, text: "Shuffle", fg: .white)
                     .background(Color.white.opacity(0.14), in: Capsule())
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.15), lineWidth: 1))
             }
             .buttonStyle(.plain)
         }
@@ -330,7 +329,7 @@ private extension MediaCollectionScreen {
             artist: media.meta.artist,
             actions: mediaActions(media)
         )
-        .presentationDetents([.medium])
+        // Detents come from TrackOptionsSheet itself (sized to its rows).
         .presentationDragIndicator(.visible)
         .sheetBackground()
     }

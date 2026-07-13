@@ -29,6 +29,11 @@ public final class URLAudioPlayer {
     nonisolated(unsafe) private let timePitch: TimePitch
     nonisolated(unsafe) private let mixer: Mixer
 
+    /// Post-effects output node for audio-reactive visuals (the visualizer's
+    /// tap installs here). The mixer is created once and never replaced, so a
+    /// tap survives engine stop/start cycles.
+    public var visualizerAudioNode: AVAudioNode { mixer.avAudioNode }
+
     // MARK: - AVPlayer (video display only — muted)
 
     private var videoPlayer: AVPlayer?
@@ -76,8 +81,9 @@ public final class URLAudioPlayer {
     /// Set for video files so the UI can display the video layer.
     public private(set) var avPlayer: AVPlayer?
 
-    /// Token for the foreground observer (removed on deinit).
+    /// Tokens for the foreground/background observers (removed on deinit).
     nonisolated(unsafe) private var foregroundObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var backgroundObserver: NSObjectProtocol?
 
     // MARK: - Init
 
@@ -104,12 +110,28 @@ public final class URLAudioPlayer {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.resyncVideoToAudio() }
         }
+        // Backgrounding (incl. screen lock): detach the muted video player's
+        // item. It can't render back there anyway, and while it HAS an item
+        // iOS ties the lock-screen Now Playing timebase to the AVPlayer — whose
+        // suspended rate (0) freezes the scrubber while AudioKit audio keeps
+        // playing. With no item attached, the system honours our own
+        // elapsed/rate pushes. Reattached + resynced on foreground above.
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.detachVideoForBackground() }
+        }
         #endif
     }
 
     deinit {
         if let foregroundObserver {
             NotificationCenter.default.removeObserver(foregroundObserver)
+        }
+        if let backgroundObserver {
+            NotificationCenter.default.removeObserver(backgroundObserver)
         }
     }
 
@@ -250,11 +272,24 @@ private extension URLAudioPlayer {
         vp.rate = effectsProcessor.playbackRate
     }
 
+    /// Backgrounding: pull the item out of the muted video player so it stops
+    /// feeding the system Now Playing timebase (see the observer in `init` —
+    /// a suspended AVPlayer's 0 rate froze the lock-screen scrubber).
+    func detachVideoForBackground() {
+        guard isVideoMode, let vp = videoPlayer, vp.currentItem != nil else { return }
+        vp.pause()
+        vp.replaceCurrentItem(with: nil)
+    }
+
     /// Snap the muted video player back to the audio (AudioKit) playhead — used when
     /// returning from the background, where the video renderer was suspended while
-    /// the audio kept advancing.
+    /// the audio kept advancing. Also reattaches the item dropped by
+    /// `detachVideoForBackground`.
     func resyncVideoToAudio() {
         guard isVideoMode, let vp = videoPlayer else { return }
+        if vp.currentItem == nil, let videoPlayerItem {
+            vp.replaceCurrentItem(with: videoPlayerItem)
+        }
         let cmTime = CMTime(seconds: akPlayer.currentTime, preferredTimescale: 600)
         vp.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
         if akPlayer.isPlaying {
@@ -413,7 +448,17 @@ private extension URLAudioPlayer {
             print("URLAudioPlayer: Engine start failed – \(error)")
         }
 
-        if let savedTime = pausedAtTime, let fileURL = loadedFileURL {
+        // Standard resume first: a paused player continues from its paused
+        // frame instantly — no file reload, no seek, no stutter.
+        if akPlayer.status == .paused {
+            akPlayer.resume()
+            installCompletionHandler()
+        }
+
+        // Fallback: the player isn't resumable (an interruption tore the
+        // engine down and dropped the scheduled audio) — reload the file and
+        // seek back to where we were.
+        if !akPlayer.isPlaying, let savedTime = pausedAtTime, let fileURL = loadedFileURL {
             akPlayer.completionHandler = nil
             do {
                 try akPlayer.load(url: fileURL)
@@ -425,8 +470,9 @@ private extension URLAudioPlayer {
                 akPlayer.play()
                 installCompletionHandler()
             }
-        } else {
+        } else if !akPlayer.isPlaying {
             akPlayer.play()
+            installCompletionHandler()
         }
 
         pausedAtTime = nil
@@ -436,9 +482,18 @@ private extension URLAudioPlayer {
     }
 
     func pauseAudio() {
-        pausedAtTime = akPlayer.currentTime
+        // A system interruption (another app taking audio) stops the engine
+        // BEFORE we're notified — by the time this pause runs, currentTime may
+        // have already snapped to 0. Fall back to the last ticked position so
+        // resume doesn't restart the track from the beginning.
+        let current = akPlayer.currentTime
+        pausedAtTime = current > 0 ? current : elapsedTime
+        // Pause (not stop): the scheduled audio stays queued, so resume can
+        // continue in place. The completion handler is disarmed because an
+        // engine teardown mid-pause can fire it spuriously (phantom
+        // "track finished" → auto-skip); resume re-arms it.
         akPlayer.completionHandler = nil
-        akPlayer.stop()
+        akPlayer.pause()
 
         stopProgressUpdates()
     }
@@ -489,15 +544,23 @@ private extension URLAudioPlayer {
     func startProgressUpdates() {
         progressTimer?.invalidate()
         // Emit once immediately so the (already-known) duration lands right away —
-        // the timer's first tick is 0.5s out, which made the duration appear late.
+        // the timer's first tick is a beat out, which made the duration appear late.
         emitProgress()
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        // 10Hz: at 0.5s a tick moved the scrubber ~2% of the bar on a short
+        // track — visible steps. Ticks are cheap (no system now-playing push).
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.emitProgress() }
         }
     }
 
     private func emitProgress() {
-        elapsedTime = akPlayer.currentTime
+        // Only trust currentTime while the player is actually running — a tick
+        // landing in the window between a system interruption stopping the
+        // engine and the notification arriving would clobber the real position
+        // with 0, and every resume path restores from this value.
+        if akPlayer.isPlaying {
+            elapsedTime = akPlayer.currentTime
+        }
         delegate?.urlAudioPlayer(
             self,
             didUpdateProgress: .init(elapsedTime: elapsedTime, duration: duration)

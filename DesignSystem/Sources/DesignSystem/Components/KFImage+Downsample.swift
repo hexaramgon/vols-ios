@@ -22,8 +22,10 @@ public extension KFImage {
     /// at the call site instead so nothing stretches.
     func downsampled(to side: CGFloat, fade: TimeInterval = 0.25) -> KFImage {
         let px = max(1, side) * UIScreen.main.scale
-        return setProcessor(DownsamplingImageProcessor(size: CGSize(width: px, height: px)))
+        let base = setProcessor(DownsamplingImageProcessor(size: CGSize(width: px, height: px)))
             .cacheOriginalImage()
-            .fade(duration: fade)
+        // fade <= 0 must mean NO transition at all — `.fade(duration: 0)` still
+        // configures a transition, which can animate the swap.
+        return fade > 0 ? base.fade(duration: fade) : base
     }
 }

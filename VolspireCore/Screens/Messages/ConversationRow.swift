@@ -45,8 +45,9 @@ struct ConversationRow: View {
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         if item.hasUnread {
-                            // Web uses a plain white dot for unread.
-                            Circle().fill(.white).frame(width: 7, height: 7)
+                            // One dot color app-wide (the web's row dots are white,
+                            // but iOS standardizes every unread dot on vUnread).
+                            Circle().fill(Color.vUnread).frame(width: 7, height: 7)
                         }
                     }
                 }

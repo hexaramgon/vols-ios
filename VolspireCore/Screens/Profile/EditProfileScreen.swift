@@ -14,9 +14,17 @@ import SwiftUI
 
 struct EditProfileScreen: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(PlayerController.self) private var playerController
     @Bindable var viewModel: ProfileScreenViewModel
 
     let userId: String
+
+    /// Clears the floating tab bar + (when present) the mini-player docked
+    /// above it — same formula as Library / Messages / MediaCollection.
+    private var bottomInset: CGFloat {
+        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
+        return ViewConst.safeAreaInsets.bottom + 52 + mini
+    }
 
     @State private var editUsername: String = ""
     @State private var editBio: String = ""
@@ -35,57 +43,65 @@ struct EditProfileScreen: View {
     @State private var avatarCropTarget: CropTarget? = nil
     @State private var bannerItem: PhotosPickerItem? = nil
     @State private var selectedBannerData: Data? = nil
+    /// A freshly-picked banner awaiting crop (at the hero's on-screen aspect).
+    @State private var bannerCropTarget: CropTarget? = nil
     @State private var locationCompleter = LocationCompleter()
     @FocusState private var locationFocused: Bool
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 22) {
-                    header
-                    formCard.padding(.horizontal, ViewConst.screenPaddings)
-                    rolesCard.padding(.horizontal, ViewConst.screenPaddings)
-                }
-                .padding(.bottom, 48)
+        // A pushed page (not a sheet) — back chevron pops, Save stays trailing.
+        ScrollView {
+            VStack(spacing: 22) {
+                header
+                formCard.padding(.horizontal, ViewConst.screenPaddings)
+                rolesCard.padding(.horizontal, ViewConst.screenPaddings)
             }
-            .scrollDismissesKeyboard(.interactively)
-            .background(Color.vBase.ignoresSafeArea())
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Color(white: 0.1), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("Edit Profile")
-                        .font(.appHeadline)
+            .padding(.bottom, bottomInset)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .background(Color.vBase.ignoresSafeArea())
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbarBackground(Color(white: 0.1), for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Edit Profile")
+                    .font(.appHeadline)
+                    .foregroundStyle(.white)
+            }
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: ViewConst.backIconSize, weight: .semibold))
                         .foregroundStyle(.white)
                 }
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                        .font(.appBody)
-                        .foregroundStyle(Color.vText2)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(action: save) {
-                        if isSaving {
-                            ProgressView().tint(.white)
-                        } else {
-                            Text("Save").font(.appHeadline)
-                        }
-                    }
-                    .disabled(isSaving || !hasChanges)
-                    .foregroundStyle(hasChanges ? .white : Color.vText3)
-                }
             }
-            .alert("Error", isPresented: .init(
-                get: { errorMessage != nil },
-                set: { if !$0 { errorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "")
+            ToolbarItem(placement: .confirmationAction) {
+                Button(action: save) {
+                    if isSaving {
+                        ProgressView().tint(.white)
+                    } else {
+                        Text("Save").font(.appHeadline)
+                    }
+                }
+                .disabled(isSaving || !hasChanges)
+                .foregroundStyle(hasChanges ? Color.brand : Color.vText3)
             }
         }
-        .preferredColorScheme(.dark)
+        .alert("Error", isPresented: .init(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
+        }
+        .enableSwipeBack()
+        // NOTE: no .preferredColorScheme here — as a pushed page it inherits
+        // dark from the stack. Declaring it again made the window re-resolve
+        // the scheme on pop (a whole-screen dim flash). Sheets need their own;
+        // pushed pages must not.
         .onAppear {
             editUsername = viewModel.username
             editBio = viewModel.bio
@@ -126,31 +142,44 @@ private extension EditProfileScreen {
         let bannerData = selectedBannerData
         let bannerURL = viewModel.bannerImageURL
         return PhotosPicker(selection: $bannerItem, matching: .images) {
-            BannerImageView(data: bannerData, url: bannerURL)
+            // The image lives in an overlay of a proposal-sized placeholder: a
+            // `.fill` image REPORTS its covering width (~450pt for a wide banner
+            // at 150pt tall), and that used to stretch the whole ScrollView
+            // content wider than the screen — everything shoved off the right
+            // edge. Overlays never influence layout, so this can't.
+            Color.clear
                 .frame(height: 150)
                 .frame(maxWidth: .infinity)
+                .overlay { BannerImageView(data: bannerData, url: bannerURL) }
                 .clipped()
                 .overlay(alignment: .bottomTrailing) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "camera.fill").font(.system(size: 11))
-                        Text("Edit cover").font(.appFootnoteSemibold)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(.black.opacity(0.5), in: Capsule())
-                    .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 1))
-                    .padding(12)
+                    EditPenPill()
                 }
         }
-        // Deferred: just stash the picked banner — it uploads on Save, not now.
+        // Pick → crop (hero aspect) → stash. Uploads on Save, not now.
         .onChange(of: bannerItem) { _, newItem in
             guard let newItem else { return }
             Task {
-                if let data = try? await newItem.loadTransferable(type: Data.self) {
-                    selectedBannerData = data
+                if let data = try? await newItem.loadTransferable(type: Data.self),
+                   let ui = UIImage(data: data) {
+                    bannerCropTarget = CropTarget(image: ui.normalizedUp())
                 }
             }
+        }
+        .fullScreenCover(item: $bannerCropTarget) { target in
+            // Crop at the hero banner band's canonical aspect (fixed ≈0.92 so
+            // the stored image is identical from any device — see ProfileLayout).
+            // The old wide 3:1 crop got aspect-filled into this near-square
+            // box: blown up ~3× (blurry) and showing only the middle slice of
+            // what was framed. 1600px keeps @3x screen widths sharp.
+            ImageCropperView(
+                image: target.image,
+                onCrop: { data in selectedBannerData = data; bannerCropTarget = nil },
+                onCancel: { bannerCropTarget = nil },
+                aspectRatio: ProfileLayout.bannerCropAspect,
+                outputSize: 1600,
+                allowsFitMode: false
+            )
         }
     }
 
@@ -165,19 +194,12 @@ private extension EditProfileScreen {
                     .clipShape(Circle())
                     .overlay(Circle().stroke(Color.vBase, lineWidth: 4))
                     .overlay(alignment: .bottomTrailing) {
-                        Image(systemName: "camera.fill").font(.system(size: 12)).foregroundStyle(.black)
-                            .frame(width: 30, height: 30)
-                            .background(.white, in: Circle())
-                            .overlay(Circle().stroke(Color.vBase, lineWidth: 3))
+                        EditPenBadge()
                     }
-            }
-
-            PhotosPicker(selection: $avatarItem, matching: .images) {
-                Text("Edit photo").font(.appCalloutSemibold).foregroundStyle(.white)
             }
         }
         .frame(maxWidth: .infinity)
-        // Pick → crop (blur-fill/square) → stash. Nothing uploads until Save.
+        // Pick → crop (square) → stash. Nothing uploads until Save.
         .onChange(of: avatarItem) { _, newItem in
             guard let newItem else { return }
             Task {
@@ -191,7 +213,9 @@ private extension EditProfileScreen {
             ImageCropperView(
                 image: target.image,
                 onCrop: { data in selectedAvatarData = data; avatarCropTarget = nil },
-                onCancel: { avatarCropTarget = nil }
+                onCancel: { avatarCropTarget = nil },
+                allowsFitMode: false,
+                showsCircularMask: true
             )
         }
     }
@@ -225,7 +249,7 @@ private extension EditProfileScreen {
             fieldLabel("Location")
             HStack(spacing: 8) {
                 TextField("City, Country", text: $editLocation)
-                    .font(.appBody)
+                    .font(.appCalloutRegular)
                     .foregroundStyle(.white)
                     .tint(.white)
                     .textInputAutocapitalization(.words)
@@ -260,10 +284,10 @@ private extension EditProfileScreen {
                             .foregroundStyle(Color.vText3)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(suggestion.title)
-                                .font(.appCalloutRegular).foregroundStyle(.white).lineLimit(1)
+                                .font(.appFootnote).foregroundStyle(.white).lineLimit(1)
                             if !suggestion.subtitle.isEmpty {
                                 Text(suggestion.subtitle)
-                                    .font(.appFootnote).foregroundStyle(Color.vText3).lineLimit(1)
+                                    .font(.appCaption).foregroundStyle(Color.vText3).lineLimit(1)
                             }
                         }
                         Spacer(minLength: 0)
@@ -292,10 +316,10 @@ private extension EditProfileScreen {
     }
 
     func fieldLabel(_ text: String) -> some View {
-        Text(text.uppercased())
+        // Soft sentence-case label — same voice as the upload/auth forms.
+        Text(text)
             .font(.appFootnoteSemibold)
             .foregroundStyle(Color.vText3)
-            .tracking(0.6)
     }
 
     func clearButton(_ action: @escaping () -> Void) -> some View {
@@ -314,10 +338,10 @@ private extension EditProfileScreen {
             fieldLabel(label)
             HStack(spacing: 2) {
                 if let prefix {
-                    Text(prefix).font(.appBody).foregroundStyle(Color.vText2)
+                    Text(prefix).font(.appCalloutRegular).foregroundStyle(Color.vText2)
                 }
                 TextField(placeholder, text: text)
-                .font(.appBody)
+                .font(.appCalloutRegular)
                 .foregroundStyle(.white)
                 .tint(.white)
                 .autocorrectionDisabled(!capitalize)
@@ -340,11 +364,11 @@ private extension EditProfileScreen {
             ZStack(alignment: .topLeading) {
                 if text.wrappedValue.isEmpty {
                     Text(placeholder)
-                        .font(.appBody).foregroundStyle(Color.vText3)
+                        .font(.appCalloutRegular).foregroundStyle(Color.vText3)
                         .padding(.top, 8).padding(.leading, 5)
                 }
                 TextEditor(text: text)
-                    .font(.appBody)
+                    .font(.appCalloutRegular)
                     .foregroundStyle(.white)
                     .tint(.white)
                     .frame(minHeight: 78)
@@ -390,9 +414,9 @@ private extension EditProfileScreen {
             }
         } label: {
             Text(role)
-                .font(.appCallout)
+                .font(.appFootnoteMedium)
                 .foregroundStyle(selected ? .black : (disabled ? Color.vText3 : .white))
-                .padding(.horizontal, 13)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 7)
                 .background(selected ? Color.white : Color.white.opacity(0.07), in: Capsule())
         }
@@ -439,6 +463,32 @@ private extension EditProfileScreen {
 }
 
 // MARK: - Media subviews (structs so they're usable inside PhotosPicker labels)
+
+/// The cover's edit-pen chip (struct: `LucideIcon.init` is main-actor, and
+/// PhotosPicker labels are `@Sendable` — a struct's memberwise init isn't).
+/// Same boxy chip language as the header pills: 11pt continuous corners,
+/// solid dark fill, borderless, white icon.
+private struct EditPenPill: View {
+    var body: some View {
+        LucideIcon(.squarePen, .sm)
+            .foregroundStyle(.white)
+            .frame(width: 34, height: 34)
+            .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .padding(10)
+    }
+}
+
+/// The avatar's edit-pen badge — the same chip, ringed in the page colour so
+/// it separates from the photo (like the avatar's own vBase ring).
+private struct EditPenBadge: View {
+    var body: some View {
+        LucideIcon(.squarePen, .sm)
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(Color.vBase, lineWidth: 3))
+    }
+}
 
 /// A picked image awaiting crop in the full-screen cropper.
 private struct CropTarget: Identifiable {

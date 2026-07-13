@@ -8,6 +8,7 @@
 //  pinned Publish CTA and always-visible validation at the bottom.
 //
 
+import CoreTransferable
 import DesignSystem
 import PhotosUI
 import SwiftUI
@@ -19,13 +20,37 @@ private struct CropTarget: Identifiable {
     let image: UIImage
 }
 
+/// Receives a picked video as a temp FILE instead of an in-memory Data blob —
+/// combined with `.current` encoding this skips PhotoKit's slow pre-transcode
+/// and the giant RAM copy that used to run before compression even started.
+private struct PickedVideoFile: Transferable {
+    let url: URL
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { file in
+            SentTransferredFile(file.url)
+        } importing: { received in
+            // Copy out of the provider's sandbox before it's reclaimed.
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent("picked-\(UUID().uuidString)")
+                .appendingPathExtension(received.file.pathExtension)
+            try FileManager.default.copyItem(at: received.file, to: dest)
+            return Self(url: dest)
+        }
+    }
+}
+
 struct UploadTrackScreen: View {
     @State var viewModel: UploadTrackViewModel
     @Environment(\.dismiss) private var dismiss
+    /// The app player — paused when a preview starts so they don't overlap.
+    @Environment(PlayerController.self) private var playerController
     @State private var showAudioPicker = false
     @State private var showCoverPicker = false
     @State private var showVideoPicker = false
     @State private var showGenrePicker = false
+    /// Measured height of the title+genre column so the cover box matches it.
+    @State private var titleColumnHeight: CGFloat = 96
     @State private var showAssetPicker = false
     @State private var pickingAssetKind: String?
     @State private var selectedPhoto: PhotosPickerItem?
@@ -33,6 +58,12 @@ struct UploadTrackScreen: View {
     /// A freshly-picked cover awaiting crop in the full-screen cropper.
     @State private var coverCropTarget: CropTarget?
     @FocusState private var priceFieldFocused: Bool
+    @FocusState private var collabFocused: Bool
+
+    /// Wizard position (0 = media, 1 = details, 2 = options + publish).
+    @State private var step = 0
+    /// Which edge the next step pushes in from (forward vs back).
+    @State private var stepDirection: Edge = .trailing
 
     private let tagSuggestions = [
         "808", "trap", "melodic", "dark", "drill", "r&b", "lo-fi",
@@ -55,59 +86,79 @@ struct UploadTrackScreen: View {
         VStack(spacing: 0) {
             header
 
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 28) {
-                    coverAndTitleRow
-                    descriptionField
-                    publicPreviewSection
-                    collaboratorsSection
-                    tagsSection
-                    // Buyer downloads only feed the paid tiers — hidden while
-                    // monetization is gated off (matches the web).
-                    if FeatureFlags.marketplace {
-                        buyerDownloadsSection
+            // Industry-standard multi-step flow: 1) pick the media, 2) cover +
+            // details, 3) options + publish. Steps slide like a pager.
+            ZStack {
+                Group {
+                    switch step {
+                    case 0:
+                        stepScroll { publicPreviewSection }
+                    case 1:
+                        stepScroll {
+                            coverAndTitleRow
+                            descriptionField
+                            tagsSection
+                        }
+                    default:
+                        stepScroll {
+                            collaboratorsSection
+                            // Buyer downloads only feed the paid tiers — hidden while
+                            // monetization is gated off (matches the web).
+                            if FeatureFlags.marketplace {
+                                buyerDownloadsSection
+                            }
+                            distributionSection
+                            collaborationSection
+                            privacySection
+                        }
                     }
-                    distributionSection
-                    collaborationSection
-                    privacySection
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-                .padding(.bottom, 24)
+                .transition(.push(from: stepDirection))
             }
-            .scrollDismissesKeyboard(.interactively)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomBar
             }
         }
-        .gradientBackground()
+        // Flat app-base canvas — same as the sign-in/register pages.
+        .background(Color.vBase.ignoresSafeArea())
         .photosPicker(isPresented: $showCoverPicker, selection: $selectedPhoto, matching: .images)
-        .photosPicker(isPresented: $showVideoPicker, selection: $selectedVideo, matching: .videos)
+        // `.current` skips PhotoKit's transcode-to-H.264 on the way out of the
+        // library (which took about as long as the clip itself) — our own
+        // compressor re-encodes to MP4 anyway and reads HEVC natively.
+        .photosPicker(isPresented: $showVideoPicker, selection: $selectedVideo, matching: .videos,
+                      preferredItemEncoding: .current)
         .sheet(isPresented: $showGenrePicker) {
             GenrePickerSheet(genre: $viewModel.genre)
         }
-        .fileImporter(
-            isPresented: $showAudioPicker,
-            allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                viewModel.handleAudioFile(result: .success(url))
-            } else if case .failure(let error) = result {
-                viewModel.handleAudioFile(result: .failure(error))
+        // Each file importer sits on its own isolated view — two `.fileImporter`
+        // (or a `.fileImporter` next to the cover `.fullScreenCover`) on the same
+        // view shadow each other in SwiftUI, so the audio picker silently no-ops.
+        .background {
+            Color.clear.fileImporter(
+                isPresented: $showAudioPicker,
+                allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav],
+                allowsMultipleSelection: false
+            ) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    viewModel.handleAudioFile(result: .success(url))
+                } else if case .failure(let error) = result {
+                    viewModel.handleAudioFile(result: .failure(error))
+                }
             }
         }
-        .fileImporter(
-            isPresented: $showAssetPicker,
-            allowedContentTypes: assetPickerTypes,
-            allowsMultipleSelection: false
-        ) { result in
-            guard let kind = pickingAssetKind else { return }
-            pickingAssetKind = nil
-            if case .success(let urls) = result, let url = urls.first {
-                viewModel.handleAssetFile(kind: kind, result: .success(url))
-            } else if case .failure(let error) = result {
-                viewModel.handleAssetFile(kind: kind, result: .failure(error))
+        .background {
+            Color.clear.fileImporter(
+                isPresented: $showAssetPicker,
+                allowedContentTypes: assetPickerTypes,
+                allowsMultipleSelection: false
+            ) { result in
+                guard let kind = pickingAssetKind else { return }
+                pickingAssetKind = nil
+                if case .success(let urls) = result, let url = urls.first {
+                    viewModel.handleAssetFile(kind: kind, result: .success(url))
+                } else if case .failure(let error) = result {
+                    viewModel.handleAssetFile(kind: kind, result: .failure(error))
+                }
             }
         }
         .onChange(of: selectedVideo) { _, newValue in
@@ -117,9 +168,9 @@ struct UploadTrackScreen: View {
             // doesn't just sit there looking frozen while it loads.
             viewModel.isProcessingVideo = true
             Task {
-                if let data = try? await newValue.loadTransferable(type: Data.self) {
-                    let fileName = "video_\(UUID().uuidString).mov"
-                    viewModel.handleVideoData(data, fileName: fileName)
+                if let picked = try? await newValue.loadTransferable(type: PickedVideoFile.self) {
+                    let ext = picked.url.pathExtension.isEmpty ? "mov" : picked.url.pathExtension.lowercased()
+                    viewModel.handleVideoFile(at: picked.url, fileName: "video_\(UUID().uuidString).\(ext)")
                 } else {
                     viewModel.isProcessingVideo = false
                 }
@@ -152,47 +203,112 @@ struct UploadTrackScreen: View {
         }
     }
 
-    // MARK: - Header
+    // MARK: - Header + step machinery
 
     private var header: some View {
-        UploadFlowHeader(title: "Upload Track") { dismiss() }
+        UploadFlowHeader(icon: .music, title: "Upload Track") { dismiss() }
     }
 
-    // MARK: - Bottom bar (pinned CTA + always-visible status)
+    private func goTo(_ newStep: Int) {
+        stepDirection = newStep > step ? .trailing : .leading
+        withAnimation(.smooth(duration: 0.35)) { step = newStep }
+    }
+
+    /// Shared scroll shell for each step's sections.
+    private func stepScroll(@ViewBuilder _ content: () -> some View) -> some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 28, content: content)
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 24)
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    // MARK: - Bottom bar (Back / Continue / Publish + per-step status)
+
+    /// Whether the current step's requirements are met (gates Continue/Publish).
+    private var stepComplete: Bool {
+        switch step {
+        case 0: viewModel.mediaAttached && !viewModel.isProcessingVideo
+        case 1: detailsComplete
+        default: viewModel.canUpload
+        }
+    }
+
+    private var detailsComplete: Bool {
+        !viewModel.title.trimmingCharacters(in: .whitespaces).isEmpty
+            && !viewModel.genre.isEmpty
+            && viewModel.coverData != nil
+    }
+
+    private var stepHint: String? {
+        switch step {
+        case 0: viewModel.mediaAttached ? nil : "Add an audio or video file to continue"
+        case 1: detailsComplete ? nil : "Add a cover, title, and genre to continue"
+        default: viewModel.tierValidation
+        }
+    }
 
     private var bottomBar: some View {
         VStack(spacing: 10) {
             if case .error(let message) = viewModel.uploadState {
                 statusRow(message, color: UploadTheme.errorText)
-            } else if let hint = viewModel.validationHint {
+            } else if let hint = stepHint {
                 statusRow(hint, color: Color.vText3)
             }
 
-            Button {
-                Task { await viewModel.upload() }
-            } label: {
-                HStack(spacing: 10) {
-                    if isUploading {
-                        ProgressView()
-                            .tint(.black)
+            HStack(spacing: 10) {
+                if step > 0 {
+                    Button {
+                        goTo(step - 1)
+                    } label: {
+                        Text("Back")
+                            .font(.appHeadline)
+                            .foregroundStyle(.white)
+                            .frame(width: 92)
+                            .frame(height: 54)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
-                    Text(isUploading ? "Uploading…" : "Publish Track")
-                        .font(.appHeadline)
+                    .buttonStyle(.plain)
+                    .disabled(isUploading)
                 }
-                .foregroundStyle(.black)
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(.white, in: RoundedRectangle(cornerRadius: 16))
+
+                if step < 2 {
+                    // Plain white while stepping through — the gradient is
+                    // saved for the actual publish moment.
+                    Button {
+                        goTo(step + 1)
+                    } label: {
+                        Text("Continue")
+                            .font(.appHeadline)
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 54)
+                            .background(.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!stepComplete)
+                    .opacity(stepComplete ? 1 : 0.3)
+                } else {
+                    // Publish gets the gradient CTA (same as the auth pages).
+                    AuthCTA(
+                        title: "Publish Track",
+                        loadingTitle: "Uploading…",
+                        isLoading: isUploading,
+                        isDisabled: !stepComplete
+                    ) {
+                        Task { await viewModel.upload() }
+                    }
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(!viewModel.canUpload || isUploading)
-            .opacity(viewModel.canUpload && !isUploading ? 1 : 0.3)
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background {
-            Color.vBase
+            // Same chrome tone as the Library header / tab bar (~#121212).
+            Color(white: 0.07)
                 .overlay(alignment: .top) {
                     Rectangle()
                         .fill(Color.vBorder)
@@ -260,6 +376,8 @@ struct UploadTrackScreen: View {
                 }
                 .buttonStyle(.plain)
             }
+            // The cover box mirrors this column's height so their bottoms align.
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { titleColumnHeight = $0 })
         }
     }
 
@@ -280,7 +398,7 @@ struct UploadTrackScreen: View {
                 }
             }
         }
-        .frame(width: 96, height: 96)
+        .frame(width: max(96, titleColumnHeight), height: max(96, titleColumnHeight))
         .clipShape(RoundedRectangle(cornerRadius: 16))
         .overlay {
             if viewModel.coverImage == nil {
@@ -354,6 +472,11 @@ struct UploadTrackScreen: View {
                     viewModel.audioData = nil
                     viewModel.audioFileName = nil
                 }
+                UploadPreviewPlayer(data: data, fileName: viewModel.audioFileName, isVideo: false) {
+                    if playerController.state.isPlaying { playerController.onPlayPause() }
+                }
+                // Fresh player if a different file is picked.
+                .id(viewModel.audioFileName)
             } else {
                 Button {
                     showAudioPicker = true
@@ -374,6 +497,16 @@ struct UploadTrackScreen: View {
                     viewModel.videoAudioOnly = false
                     selectedVideo = nil
                 }
+                // Audio-only videos preview as audio — matching what actually
+                // gets uploaded when the toggle below is on. Keyed by file
+                // ONLY: flipping the mode swaps the container in place (same
+                // player, same position, no re-staging) so the toggle is
+                // instant instead of a staggered rebuild.
+                UploadPreviewPlayer(data: data, fileName: viewModel.videoFileName,
+                                    isVideo: !viewModel.videoAudioOnly) {
+                    if playerController.state.isPlaying { playerController.onPlayPause() }
+                }
+                .id(viewModel.videoFileName)
                 videoModeToggle
             } else if viewModel.isProcessingVideo {
                 videoProcessingCard
@@ -430,10 +563,10 @@ struct UploadTrackScreen: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 UploadPill("Keep video", icon: .video, expands: true, selected: !viewModel.videoAudioOnly) {
-                    viewModel.videoAudioOnly = false
+                    setVideoAudioOnly(false)
                 }
                 UploadPill("Audio only", icon: .fileAudio, expands: true, selected: viewModel.videoAudioOnly) {
-                    viewModel.videoAudioOnly = true
+                    setVideoAudioOnly(true)
                 }
             }
             Text(viewModel.videoAudioOnly
@@ -441,6 +574,20 @@ struct UploadTrackScreen: View {
                 : "The full video uploads and plays with picture.")
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText3)
+        }
+        // Move as one unit if any animation ever reaches this — text drifting
+        // apart from its pill mid-layout looked broken.
+        .geometryGroup()
+    }
+
+    /// The mode flip resizes the preview above (video well ↔ audio row) —
+    /// an animated height change here read as a glitch, so the update runs
+    /// with animations explicitly disabled: the swap is a single clean frame.
+    private func setVideoAudioOnly(_ value: Bool) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            viewModel.videoAudioOnly = value
         }
     }
 
@@ -513,7 +660,8 @@ struct UploadTrackScreen: View {
         .frame(width: 40, height: 40)
     }
 
-    // MARK: - Collaborators (user search → credited list, role inline)
+    // MARK: - Collaborators (picked from your collaborators — the same
+    // get_my_collaborators list the folder member picker uses)
 
     private var collaboratorsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -530,12 +678,16 @@ struct UploadTrackScreen: View {
                 TextField(
                     "",
                     text: $viewModel.collabQuery,
-                    prompt: Text("Search username…").foregroundStyle(Color.vText3)
+                    prompt: Text("Search collaborators…").foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
                 .foregroundStyle(.white)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .focused($collabFocused)
+                .onChange(of: collabFocused) { _, focused in
+                    viewModel.collabFocusChanged(focused)
+                }
                 .onChange(of: viewModel.collabQuery) { _, _ in
                     viewModel.collabQueryChanged()
                 }
@@ -548,6 +700,14 @@ struct UploadTrackScreen: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .uploadFieldShell()
+
+            if collabFocused, !viewModel.isSearchingCollabs, viewModel.collabResults.isEmpty {
+                Text(viewModel.hasNoCollaborators
+                    ? "People you've collabed with show up here once a collab request is accepted."
+                    : "No collaborators match “\(viewModel.collabQuery)”.")
+                    .font(.appFootnote)
+                    .foregroundStyle(Color.vText3)
+            }
 
             if !viewModel.collabResults.isEmpty {
                 VStack(spacing: 0) {

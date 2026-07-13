@@ -20,19 +20,31 @@ struct ActiveConversation: Identifiable, Equatable, Hashable {
 
 @Observable
 class ConversationState {
+    // Set directly by ConversationScreen's onAppear/onDisappear; the tab bar and
+    // mini-player observe it with their own scoped animations, so no withAnimation
+    // is needed (or wanted — competing curves made the hide look janky).
     var activeConversation: ActiveConversation?
+}
 
-    func open(_ conversation: ActiveConversation) {
-        withAnimation(.snappy(duration: 0.32)) {
-            activeConversation = conversation
-        }
+/// App-wide unread indicators: the Inbox tab dot (DMs) and the notifications
+/// bell dot (activity). Backed by the same `get_unread_counts` RPC the web
+/// uses; refreshed at the moments the counts can change (launch, foreground,
+/// tab switches, closing a conversation).
+@Observable @MainActor
+final class UnreadCounts {
+    private(set) var notifications = 0
+    private(set) var messages = 0
+    private let service = SupabaseService()
+
+    func refresh() async {
+        guard let counts = try? await service.getUnreadCounts() else { return }
+        notifications = counts.notifications
+        messages = counts.messages
     }
 
-    func close() {
-        withAnimation(.snappy(duration: 0.28)) {
-            activeConversation = nil
-        }
-    }
+    /// Optimistic zero when the notifications screen opens (the server marks
+    /// them read at the same moment).
+    func clearNotifications() { notifications = 0 }
 }
 
 struct RootTabView: View {
@@ -41,6 +53,10 @@ struct RootTabView: View {
     @State private var selectedTab: TabBarItem = .home
     @State private var profileAvatarImage: Image?
     @State private var visitedTabs: Set<TabBarItem> = [.home]
+    @State private var unreadCounts = UnreadCounts()
+    /// Measured height of the custom tab bar (varies with Dynamic Type).
+    @State private var tabBarHeight: CGFloat = 52
+    @Environment(\.scenePhase) private var scenePhase
 
     // One router (nav stack) per content tab, owned here so navigation can be
     // driven into whichever tab is currently active.
@@ -78,6 +94,13 @@ struct RootTabView: View {
     /// The collapsed mini-player floats above the tab bar, so content is padded to clear it.
     private var showMiniPlayer: Bool { !playerController.display.title.isEmpty }
 
+    private var isConversationOpen: Bool { conversationState.activeConversation != nil }
+
+    /// Bottom safe-area reservation: the tab bar plus clearance for the floating mini-player.
+    private var bottomBarReservation: CGFloat {
+        tabBarHeight + (showMiniPlayer ? ViewConst.compactNowPlayingHeight + 16 : 0)
+    }
+
     init() {
         // Near-black chrome to match the app's dark theme; Geist nav-bar titles.
         // (The bottom bar is now a custom SwiftUI view, so no UITabBar appearance here.)
@@ -109,20 +132,26 @@ struct RootTabView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                // Hide the tab bar inside an open conversation so the chat is
-                // full-screen and its input bar owns the bottom. Slides down/up.
-                if conversationState.activeConversation == nil {
-                    VStack(spacing: 0) {
-                        if showMiniPlayer {
-                            // Room for the floating mini-player above the bar (the bar stays pinned).
-                            Color.clear.frame(height: ViewConst.compactNowPlayingHeight + 16)
-                        }
-                        customTabBar
-                    }
-                    .transition(.move(edge: .bottom))
-                }
+                // Invisible reservation that keeps tab content above the bar (and
+                // the floating mini-player). Inside a conversation it collapses so
+                // the chat is full-screen — with NO animation: animating a safe-area
+                // change re-lays-out every kept-alive tab on every frame of the nav
+                // push, which is what made the tab-bar hide look choppy. The one-off
+                // jump happens behind the sliding bar / incoming chat, so it's
+                // never visible.
+                Color.clear
+                    .frame(height: isConversationOpen ? 0 : bottomBarReservation)
+                    .animation(nil, value: isConversationOpen)
             }
-            .animation(.easeInOut(duration: 0.3), value: conversationState.activeConversation == nil)
+            .overlay(alignment: .bottom) {
+                // The visible bar never unmounts — hiding is a pure offset, which
+                // stays smooth while the push animation runs alongside it.
+                customTabBar
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { tabBarHeight = $0 }
+                    .offset(y: isConversationOpen ? tabBarHeight + ViewConst.safeAreaInsets.bottom : 0)
+                    .animation(.smooth(duration: 0.35), value: isConversationOpen)
+                    .allowsHitTesting(!isConversationOpen)
+            }
             .sheet(isPresented: $showNewPost) {
                 NewPostView { postType in
                     selectedPostType = postType
@@ -174,6 +203,19 @@ struct RootTabView: View {
 
         }
         .environment(conversationState)
+        .environment(unreadCounts)
+        // Unread dots refresh at every moment the counts can change.
+        .task { await unreadCounts.refresh() }
+        .onChange(of: selectedTab) { _, _ in
+            Task { await unreadCounts.refresh() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await unreadCounts.refresh() } }
+        }
+        .onChange(of: conversationState.activeConversation) { _, convo in
+            // Closing a conversation → its messages were just read.
+            if convo == nil { Task { await unreadCounts.refresh() } }
+        }
         .task { await loadProfileAvatar() }
         .task { AnalyticsService.shared?.log(.pageView, metadata: ["to": .string(analyticsName(selectedTab))]) }
     }
@@ -241,11 +283,23 @@ struct RootTabView: View {
                     } else {
                         selectedTab = item
                         visitedTabs.insert(item)
+                        // Home always lands fully reset — root page, scrolled
+                        // to the top (HomeScreen observes rootResetTick).
+                        if item == .home { router(for: .home).popToRoot() }
                         AnalyticsService.shared?.log(.pageView, metadata: ["to": .string(analyticsName(item))])
                     }
                 } label: {
                     VStack(spacing: 3) {
                         tabIcon(for: item)
+                            // Unread-DM dot on the Inbox tab.
+                            .overlay(alignment: .topTrailing) {
+                                if item == .inbox, unreadCounts.messages > 0 {
+                                    Circle()
+                                        .fill(Color.vUnread)
+                                        .frame(width: 8, height: 8)
+                                        .offset(x: 3, y: -1)
+                                }
+                            }
                         Text(item.title)
                             .font(.appMicro)
                     }

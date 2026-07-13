@@ -57,15 +57,29 @@ final class ListingDetailViewModel {
     var isClosed: Bool { status == "closed" }
 
     func load() async {
-        if let fresh = try? await service.getListing(listingId: listing.listingId) {
-            listing = fresh
-            isSaved = fresh.viewerHasSaved ?? isSaved
-            saveCount = fresh.saveCount ?? saveCount
-            status = fresh.status ?? status
-            isAuthor = fresh.isAuthor ?? isAuthor
-            existingConvoId = fresh.viewerConvoId
+        // Fetch the fresh listing, comments and (author-only) responses concurrently
+        // instead of waterfalling getListing → comments → responses, so the detail
+        // resolves in one pass — the body and both skeleton'd sections fill in
+        // together rather than popping in one after another.
+        async let fresh = service.getListing(listingId: listing.listingId)
+        async let commentsDone: Void = loadComments()
+        async let responsesDone: Void = loadResponsesIfAuthor()
+
+        if let updated = try? await fresh {
+            listing = updated
+            isSaved = updated.viewerHasSaved ?? isSaved
+            saveCount = updated.saveCount ?? saveCount
+            status = updated.status ?? status
+            isAuthor = updated.isAuthor ?? isAuthor
+            existingConvoId = updated.viewerConvoId
         }
-        await loadComments()
+        _ = await (commentsDone, responsesDone)
+    }
+
+    /// Author-only responses, loaded concurrently with comments. `isAuthor` is
+    /// derived up front in `init` (a reliable userId match), so gating on it here —
+    /// before the fresh listing lands — is safe.
+    private func loadResponsesIfAuthor() async {
         if isAuthor { await loadResponses() }
     }
 

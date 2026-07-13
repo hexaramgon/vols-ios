@@ -130,12 +130,15 @@ final class UploadTrackViewModel {
 
     var tags: [String] = []
 
-    // Credits — added via user search, role editable inline per row.
+    // Credits — picked from your collaborators, role editable inline per row.
     var credits: [TrackCredit] = []
     var collabQuery: String = ""
     var collabResults: [ApiUserSearchResult] = []
     var isSearchingCollabs = false
-    private var collabSearchTask: Task<Void, Never>?
+    /// People you've actually worked with (`get_my_collaborators` — the same
+    /// source as the folder member picker). Loaded once, filtered locally.
+    private var allCollaborators: [ApiUserSearchResult]?
+    private var collabFieldFocused = false
 
     // Buyer-download assets, uploaded once and bundled per tier.
     var mp3Data: Data?
@@ -209,35 +212,53 @@ final class UploadTrackViewModel {
         self.authManager = authManager
     }
 
-    // MARK: - Collaborator search
+    // MARK: - Collaborator picking (same mechanism as folder sharing:
+    // your collaborators loaded once, filtered locally per keystroke;
+    // an empty query with the field focused shows the whole list)
 
-    func collabQueryChanged() {
-        collabSearchTask?.cancel()
-        let query = collabQuery
-            .trimmingCharacters(in: .whitespaces)
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "")
-        guard !query.isEmpty else {
-            collabResults = []
-            isSearchingCollabs = false
-            return
-        }
-        collabSearchTask = Task {
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
-            isSearchingCollabs = true
-            let results = (try? await supabaseService.searchUsers(query: query, limit: 6)) ?? []
-            guard !Task.isCancelled else { return }
-            collabResults = results
-            isSearchingCollabs = false
+    /// The list loaded and came back empty — the user has no collaborators yet.
+    var hasNoCollaborators: Bool { allCollaborators?.isEmpty == true }
+
+    func collabFocusChanged(_ focused: Bool) {
+        collabFieldFocused = focused
+        if focused, allCollaborators == nil {
+            Task { await loadCollaborators() }
+        } else {
+            filterCollaborators()
         }
     }
 
-    /// One-shot add — picking a search result credits them immediately with a
-    /// default role; the role is edited inline on the row (web behaviour).
+    func collabQueryChanged() {
+        if allCollaborators == nil {
+            Task { await loadCollaborators() }
+        } else {
+            filterCollaborators()
+        }
+    }
+
+    private func loadCollaborators() async {
+        isSearchingCollabs = true
+        allCollaborators = (try? await supabaseService.getMyCollaborators()) ?? []
+        isSearchingCollabs = false
+        filterCollaborators()
+    }
+
+    private func filterCollaborators() {
+        let q = collabQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        let base = allCollaborators ?? []
+        if q.isEmpty {
+            collabResults = collabFieldFocused ? base : []
+        } else {
+            collabResults = base.filter { ($0.username ?? "").lowercased().contains(q) }
+        }
+    }
+
+    /// One-shot add — picking a result credits them immediately with a default
+    /// role; the role is edited inline on the row (web behaviour). The list
+    /// re-filters (rather than clearing) so several people can be added in a row.
     func addCredit(_ user: ApiUserSearchResult) {
         collabQuery = ""
-        collabResults = []
+        filterCollaborators()
         guard !credits.contains(where: { $0.userId == user.userId }) else { return }
         credits.append(
             TrackCredit(
@@ -323,41 +344,35 @@ final class UploadTrackViewModel {
         }
     }
 
-    func handleVideoData(_ data: Data, fileName: String) {
+    /// Kicks off compression for a just-picked video, already staged to a local
+    /// temp file by the picker (no in-memory copy of the original). Consumes
+    /// (deletes) the file when done.
+    func handleVideoFile(at url: URL, fileName: String) {
         videoAudioOnly = false // fresh attach defaults to keeping the video
         isProcessingVideo = true
         videoProcessingProgress = 0
         Task {
-            if let compressed = await compressVideo(data: data) {
+            if let compressed = await compressVideo(inputURL: url) {
                 videoData = compressed
-                videoFileName = fileName.replacingOccurrences(of: ".mov", with: ".mp4")
+                videoFileName = (fileName as NSString).deletingPathExtension + ".mp4"
             } else {
-                videoData = data
+                // Compression unavailable/failed — upload the original bytes.
+                videoData = await Task.detached { try? Data(contentsOf: url) }.value
                 videoFileName = fileName
             }
+            try? FileManager.default.removeItem(at: url)
             isProcessingVideo = false
         }
     }
 
-    /// Compresses video data using AVAssetExportSession to keep it under Supabase's upload limit.
-    private func compressVideo(data: Data) async -> Data? {
-        let tempInput = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".mov")
+    /// Compresses a video file with AVAssetExportSession (straight from disk —
+    /// no Data round-trip) to keep it under Supabase's upload limit.
+    private func compressVideo(inputURL: URL) async -> Data? {
         let tempOutput = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".mp4")
+        defer { try? FileManager.default.removeItem(at: tempOutput) }
 
-        do {
-            try data.write(to: tempInput)
-        } catch {
-            return nil
-        }
-
-        defer {
-            try? FileManager.default.removeItem(at: tempInput)
-            try? FileManager.default.removeItem(at: tempOutput)
-        }
-
-        let asset = AVURLAsset(url: tempInput)
+        let asset = AVURLAsset(url: inputURL)
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else {
             return nil
         }
@@ -378,7 +393,8 @@ final class UploadTrackViewModel {
             return nil
         }
         videoProcessingProgress = 1
-        return try? Data(contentsOf: tempOutput)
+        // The compressed file can still be tens of MB — read it off-main.
+        return await Task.detached { try? Data(contentsOf: tempOutput) }.value
     }
 
     /// Extracts the audio track from a video into an .m4a, so an attached video

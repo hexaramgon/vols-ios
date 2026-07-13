@@ -16,7 +16,18 @@ import SwiftUI
 
 // MARK: - UI Models
 
-struct HomeTrack: Identifiable {
+/// One collaborator's recent workspace actions, for the stories-style
+/// Recent Activity rail (avatar circle → tap → their past-month history).
+struct WorkspaceActivityGroup: Identifiable {
+    let actorId: String
+    let username: String?
+    let avatar: String?
+    /// Newest first.
+    let events: [ApiWorkspaceActivity]
+    var id: String { actorId }
+}
+
+struct HomeTrack: Identifiable, Hashable {
     let id: String
     let title: String
     let artist: String
@@ -60,9 +71,34 @@ class HomeScreenViewModel {
     var feedTracks: [HomeTrack] = []
     var followingTracks: [HomeTrack] = []
     var artists: [ExploreArtistItem] = []
+    var folders: [ApiUserFolder] = []
+    /// Collaborators' actions across shared folders in the past month
+    /// (Workspace tab rail), newest first.
+    var workspaceActivity: [ApiWorkspaceActivity] = []
+
+    /// Activity grouped per collaborator (stories-style rail): one entry per
+    /// person, ordered by their most recent action, events newest-first.
+    var activityGroups: [WorkspaceActivityGroup] {
+        var order: [String] = []
+        var byActor: [String: [ApiWorkspaceActivity]] = [:]
+        for event in workspaceActivity {
+            if byActor[event.actorId] == nil { order.append(event.actorId) }
+            byActor[event.actorId, default: []].append(event)
+        }
+        return order.map { actorId in
+            let events = byActor[actorId] ?? []
+            return WorkspaceActivityGroup(
+                actorId: actorId,
+                username: events.first?.actorUsername,
+                avatar: events.first?.actorAvatar,
+                events: events
+            )
+        }
+    }
     var feedLoaded = false
     var followingLoaded = false
     var artistsLoaded = false
+    var foldersLoaded = false
 
     // Collab listings (lazy-loaded the first time the Collab tab opens).
     var collabListings: [ApiListing] = []
@@ -145,7 +181,11 @@ class HomeScreenViewModel {
         async let home: Void = loadHomeData()
         async let artistRail: Void = loadArtists()
         async let feed: Void = loadTracksFeed()
-        _ = await (home, artistRail, feed)
+        // Collab listings also feed the "All" tab's Collab rail (not just the
+        // Collab tab), so warm them on first load — `loadListings` is guarded, so
+        // opening the Collab tab afterwards is a no-op.
+        async let listings: Void = loadListings()
+        _ = await (home, artistRail, feed, listings)
     }
 
     func refresh() async {
@@ -171,6 +211,22 @@ class HomeScreenViewModel {
         followingLoaded = true
         do { followingTracks = mapTracks(try await supabaseService.getFollowingFeed()); prefetchCovers(followingTracks) }
         catch { followingLoaded = false; print("[HomeVM] following: \(error)") }
+    }
+
+    func loadFolders() async {
+        guard !foldersLoaded else { return }
+        foldersLoaded = true
+        // Generous limit: the RPC is already scoped to the past month and the
+        // rail groups client-side, so fetch the whole window.
+        async let activity = supabaseService.getWorkspaceActivity(limit: 100)
+        do { folders = try await supabaseService.getUserFolders() }
+        catch { print("[HomeVM] loadFolders: \(error)") }
+        workspaceActivity = (try? await activity) ?? []
+    }
+
+    /// Resolves an activity actor's avatar (bare storage path or full URL).
+    func activityAvatarURL(_ pathOrUrl: String?) -> URL? {
+        storageService.avatarUrl(pathOrUrl: pathOrUrl).flatMap { URL(string: $0) }
     }
 
     func loadArtists() async {

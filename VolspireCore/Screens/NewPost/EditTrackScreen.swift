@@ -41,7 +41,7 @@ struct EditTrackScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            UploadFlowHeader(title: "Edit Track") { dismiss() }
+            UploadFlowHeader(icon: .squarePen, title: "Edit Track", subtitle: "Update cover, title, and details") { dismiss() }
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 28) {
@@ -116,7 +116,7 @@ struct EditTrackScreen: View {
                 .foregroundStyle(.black)
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
-                .background(.white, in: RoundedRectangle(cornerRadius: 16))
+                .background(.white, in: Capsule())
             }
             .buttonStyle(.plain)
             .disabled(!viewModel.canSave || isSaving)
@@ -126,7 +126,8 @@ struct EditTrackScreen: View {
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background {
-            Color.vBase
+            // Same chrome tone as the Library header / tab bar (~#121212).
+            Color(white: 0.07)
                 .overlay(alignment: .top) {
                     Rectangle()
                         .fill(Color.vBorder)

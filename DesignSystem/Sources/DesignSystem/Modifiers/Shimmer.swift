@@ -25,8 +25,14 @@ public struct Shimmer: ViewModifier {
                 .mask(gradientMask)
                 .onAppear {
                     phase = 0
-                    withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
-                        phase = 0.8
+                    // One runloop later: starting a repeatForever animation inside
+                    // the same transaction as a nav-push insertion can attach it to
+                    // the transition's geometry (the classic repeatForever leak),
+                    // which jitters the push. After a hop the insertion has committed.
+                    DispatchQueue.main.async {
+                        withAnimation(.linear(duration: duration).repeatForever(autoreverses: false)) {
+                            phase = 0.8
+                        }
                     }
                 }
         } else {

@@ -2,127 +2,143 @@
 //  AuthComponents.swift
 //  Volspire
 //
-//  Shared pieces for the login/register pages, mirroring the web auth
-//  screens: the radial top glow on black, labeled dark inputs (with the
-//  eye toggle for passwords), the Google button, and the white CTA.
+//  Auth UI kit, v2 — flat dark canvas, grouped input cards (iOS-style rows
+//  divided by hairlines, placeholder-only), send-accent gradient CTA, flat
+//  provider buttons, and a segmented 6-digit code field.
 //
 
+import AuthenticationServices
 import DesignSystem
 import SwiftUI
+import UIKit
 
-// MARK: - Background (web: black + radial ellipse glow at the top)
+// MARK: - Canvas
 
-struct AuthBackground: View {
+/// Flat app-base background — the auth pages live in the same world as the
+/// rest of the app, no special glow.
+struct AuthCanvas: View {
     var body: some View {
-        ZStack(alignment: .top) {
-            Color.black
-
-            // radial-gradient(ellipse 80% 60% at 50% -10%, #163654, transparent 70%)
-            EllipticalGradient(
-                colors: [Color(red: 0.086, green: 0.212, blue: 0.329), .clear],
-                center: UnitPoint(x: 0.5, y: 0),
-                startRadiusFraction: 0,
-                endRadiusFraction: 0.7
-            )
-            .scaleEffect(x: 1.6, y: 1.0, anchor: .top)
-            .frame(height: UIScreen.size.height * 0.55)
-            .offset(y: -UIScreen.size.height * 0.08)
-        }
-        .ignoresSafeArea()
+        Color.vBase.ignoresSafeArea()
     }
 }
 
-// MARK: - Labeled input
+// MARK: - Press feedback
 
-struct AuthTextField: View {
-    let label: String
+struct AuthPress: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Grouped input card
+
+/// One rounded card holding input rows separated by hairlines — like a
+/// grouped iOS form, not individual labeled boxes.
+struct AuthFieldGroup<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+/// Hairline between rows in an `AuthFieldGroup`, inset past the icon column.
+struct AuthRowDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.06))
+            .frame(height: 0.5)
+            .padding(.leading, 50)
+    }
+}
+
+/// A text row inside an `AuthFieldGroup` — icon + placeholder, no label.
+struct AuthRow: View {
+    let icon: LucideIcon.Name
+    let placeholder: String
     @Binding var text: String
-    var prompt: String = ""
     var keyboard: UIKeyboardType = .default
     var contentType: UITextContentType?
     var autocapitalize = false
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(label)
-                .font(.appCallout)
-                .foregroundStyle(Color.vText2)
+    @FocusState private var focused: Bool
 
+    var body: some View {
+        HStack(spacing: 12) {
+            LucideIcon(icon, .md)
+                .foregroundStyle(focused ? .white : Color.vText3)
             TextField(
                 "",
                 text: $text,
-                prompt: Text(prompt).foregroundStyle(Color.vText3)
+                prompt: Text(placeholder).foregroundStyle(Color.vText3)
             )
-            .font(.appBodyLarge)
+            .font(.appBody)
             .foregroundStyle(.white)
             .tint(.white)
             .keyboardType(keyboard)
             .textContentType(contentType)
             .textInputAutocapitalization(autocapitalize ? .sentences : .never)
             .autocorrectionDisabled()
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(Color(white: 0.09))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.vBorder, lineWidth: 1))
+            .focused($focused)
         }
+        .padding(.horizontal, 16)
+        .frame(height: 54)
+        .animation(.easeInOut(duration: 0.15), value: focused)
     }
 }
 
-// MARK: - Labeled secure input with the web's eye toggle
-
-struct AuthSecureField: View {
-    let label: String
+/// A secure row inside an `AuthFieldGroup`, with the reveal toggle.
+struct AuthSecureRow: View {
+    let placeholder: String
     @Binding var text: String
     var contentType: UITextContentType = .password
 
     @State private var revealed = false
+    @FocusState private var focused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(label)
-                .font(.appCallout)
-                .foregroundStyle(Color.vText2)
-
-            HStack(spacing: 8) {
-                Group {
-                    if revealed {
-                        TextField("", text: $text)
-                    } else {
-                        SecureField("", text: $text)
-                    }
+        HStack(spacing: 12) {
+            LucideIcon(.lock, .md)
+                .foregroundStyle(focused ? .white : Color.vText3)
+            Group {
+                if revealed {
+                    TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(Color.vText3))
+                } else {
+                    SecureField("", text: $text, prompt: Text(placeholder).foregroundStyle(Color.vText3))
                 }
-                .font(.appBodyLarge)
-                .foregroundStyle(.white)
-                .tint(.white)
-                .textContentType(contentType)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-                Button {
-                    revealed.toggle()
-                } label: {
-                    LucideIcon(revealed ? .eyeOff : .eye, .md)
-                        .foregroundStyle(Color.vText3)
-                        .frame(width: 28, height: 28)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
             }
-            .padding(.leading, 14)
-            .padding(.trailing, 8)
-            .padding(.vertical, 12)
-            .background(Color(white: 0.09))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.vBorder, lineWidth: 1))
+            .font(.appBody)
+            .foregroundStyle(.white)
+            .tint(.white)
+            .textContentType(contentType)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .focused($focused)
+
+            Button {
+                revealed.toggle()
+            } label: {
+                LucideIcon(revealed ? .eyeOff : .eye, .md)
+                    .foregroundStyle(Color.vText3)
+                    .frame(width: 32, height: 32)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
         }
+        .padding(.leading, 16)
+        .padding(.trailing, 10)
+        .frame(height: 54)
+        .animation(.easeInOut(duration: 0.15), value: focused)
     }
 }
 
-// MARK: - Buttons
+// MARK: - Primary CTA (send-accent gradient, the app's action color)
 
-/// The white primary CTA (web's Button).
-struct AuthPrimaryButton: View {
+struct AuthCTA: View {
     let title: String
     var loadingTitle: String = "…"
     var isLoading = false
@@ -133,23 +149,61 @@ struct AuthPrimaryButton: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 if isLoading {
-                    ProgressView().tint(.black).controlSize(.small)
+                    ProgressView().tint(.white).controlSize(.small)
                 }
                 Text(isLoading ? loadingTitle : title)
                     .font(.appHeadline)
             }
-            .foregroundStyle(.black)
+            .foregroundStyle(isDisabled && !isLoading ? Color.vText3 : .white)
             .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(.white, in: RoundedRectangle(cornerRadius: 10))
+            .frame(height: 54)
+            .background {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        isDisabled && !isLoading
+                            ? AnyShapeStyle(Color.white.opacity(0.06))
+                            : AnyShapeStyle(LinearGradient.sendAccent)
+                    )
+            }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AuthPress())
         .disabled(isDisabled || isLoading)
-        .opacity(isDisabled && !isLoading ? 0.5 : 1)
+        .animation(.easeInOut(duration: 0.2), value: isDisabled)
     }
 }
 
-/// Google sign-in — dark button with the colored G (web GoogleButton).
+// MARK: - Provider buttons (flat, matching the field cards)
+
+/// Custom "Continue with Apple" — official wording + logo per the HIG's
+/// custom-button allowance; flat dark style to match the page.
+struct AppleAuthButton: View {
+    let label: String
+    let onCredential: (ASAuthorizationAppleIDCredential) -> Void
+    let onError: (Error) -> Void
+
+    @State private var coordinator = AppleSignInCoordinator()
+
+    var body: some View {
+        Button {
+            coordinator.start(onCredential: onCredential, onError: onError)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "apple.logo")
+                    .font(.system(size: 17, weight: .medium))
+                    .padding(.bottom, 2) // optical centre — the glyph sits low
+                Text(label)
+                    .font(.appBodyMedium)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(AuthPress())
+    }
+}
+
+/// "Continue with Google" — same flat card style.
 struct GoogleAuthButton: View {
     let label: String
     var isLoading = false
@@ -167,34 +221,132 @@ struct GoogleAuthButton: View {
                     .foregroundStyle(.white)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(Color(white: 0.09), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.vBorder, lineWidth: 1))
+            .frame(height: 54)
+            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AuthPress())
         .disabled(isLoading)
     }
 }
 
-// MARK: - Error banner (web: red-950/30 card with border, not bare text)
+/// Drives the native Apple ID authorization sheet for `AppleAuthButton`.
+@MainActor
+final class AppleSignInCoordinator: NSObject {
+    private var onCredential: ((ASAuthorizationAppleIDCredential) -> Void)?
+    private var onError: ((Error) -> Void)?
 
-/// Auth-screen error — now just the shared `ErrorBanner` (kept as a named alias
-/// so the login/register call sites don't change).
+    func start(
+        onCredential: @escaping (ASAuthorizationAppleIDCredential) -> Void,
+        onError: @escaping (Error) -> Void
+    ) {
+        self.onCredential = onCredential
+        self.onError = onError
+        let request = ASAuthorizationAppleIDProvider().createRequest()
+        request.requestedScopes = [.fullName, .email]
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        controller.delegate = self
+        controller.presentationContextProvider = self
+        controller.performRequests()
+    }
+}
+
+extension AppleSignInCoordinator: ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    // Delegate callbacks arrive on the main thread for a UI-presented
+    // controller — `assumeIsolated` is an assertion, not a thread hop.
+    nonisolated func authorizationController(
+        controller _: ASAuthorizationController,
+        didCompleteWithAuthorization authorization: ASAuthorization
+    ) {
+        MainActor.assumeIsolated {
+            if let credential = authorization.credential as? ASAuthorizationAppleIDCredential {
+                onCredential?(credential)
+            }
+        }
+    }
+
+    nonisolated func authorizationController(
+        controller _: ASAuthorizationController,
+        didCompleteWithError error: Error
+    ) {
+        MainActor.assumeIsolated {
+            // A dismissed sheet is a user choice, not an error to surface.
+            if (error as NSError).code == ASAuthorizationError.canceled.rawValue { return }
+            onError?(error)
+        }
+    }
+
+    nonisolated func presentationAnchor(for _: ASAuthorizationController) -> ASPresentationAnchor {
+        MainActor.assumeIsolated {
+            let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+            guard let scene else {
+                // Unreachable: the button that started the flow is on screen,
+                // so a connected window scene exists.
+                preconditionFailure("Apple sign-in presented with no connected window scene")
+            }
+            return scene.keyWindow ?? scene.windows.first ?? UIWindow(windowScene: scene)
+        }
+    }
+}
+
+// MARK: - Segmented 6-digit code field
+
+/// Six digit boxes over an invisible text field — autofill from Messages
+/// still works (`oneTimeCode`), and the active box brightens.
+struct AuthCodeField: View {
+    @Binding var code: String
+    var disabled = false
+
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<6, id: \.self) { index in
+                let digits = Array(code)
+                let active = focused && index == min(code.count, 5)
+                Text(index < digits.count ? String(digits[index]) : " ")
+                    .font(.appTitle2)
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 58)
+                    .background(
+                        Color.white.opacity(active ? 0.12 : 0.05),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: code)
+        .animation(.easeInOut(duration: 0.15), value: focused)
+        .overlay {
+            // Invisible input driving the boxes.
+            TextField("", text: $code)
+                .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
+                .foregroundStyle(.clear)
+                .tint(.clear)
+                .focused($focused)
+                .disabled(disabled)
+        }
+        .contentShape(.rect)
+        .onTapGesture { focused = true }
+    }
+}
+
+// MARK: - Small text pieces
+
+/// Centered "or" microcopy between the form and the provider buttons.
+struct AuthOrDivider: View {
+    var body: some View {
+        Text("or continue with")
+            .font(.appCaption)
+            .foregroundStyle(Color.vText3)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+/// Auth-screen error — the shared `ErrorBanner`.
 struct AuthErrorBanner: View {
     let message: String
     var body: some View { ErrorBanner(message) }
-}
-
-// MARK: - "or" divider
-
-struct AuthOrDivider: View {
-    var body: some View {
-        HStack(spacing: 12) {
-            Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-            Text("or")
-                .font(.appFootnote)
-                .foregroundStyle(Color.vText3)
-            Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-        }
-    }
 }

@@ -26,8 +26,17 @@ public struct PlayerVideoView: UIViewRepresentable {
     }
 
     public func updateUIView(_ uiView: PlayerLayerUIView, context: Context) {
-        uiView.playerLayer.player = player
-        uiView.playerLayer.videoGravity = gravity
+        // Guarded: updateUIView fires on EVERY parent re-render — during the
+        // expanded player's dismiss drag that's every frame. Re-assigning
+        // `player` on an AVPlayerLayer (even the same instance) can make the
+        // layer re-fit its video rect mid-gesture, visibly "reorienting" the
+        // video. Only touch the layer when something actually changed.
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
+        }
+        if uiView.playerLayer.videoGravity != gravity {
+            uiView.playerLayer.videoGravity = gravity
+        }
     }
 }
 

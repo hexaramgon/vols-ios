@@ -16,6 +16,8 @@ struct MessagesScreen: View {
     @Environment(ConversationState.self) private var conversationState
     @Environment(Router.self) private var router
     @Environment(PlayerController.self) private var playerController
+    @Environment(UnreadCounts.self) private var unreadCounts
+    @Environment(Dependencies.self) private var dependencies
     @State private var viewModel = MessagesScreenViewModel()
     @FocusState private var searchFocused: Bool
     /// Home/Marketplace-style search: hidden by default, revealed (and focused)
@@ -32,10 +34,6 @@ struct MessagesScreen: View {
         VStack(spacing: 0) {
             header
                 .zIndex(1) // keep the header's bottom shadow above the content below
-            if showSearchField {
-                searchRow
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
             ScrollView {
                 content
                     .animation(.easeOut(duration: 0.25), value: viewModel.loadingState)
@@ -48,7 +46,10 @@ struct MessagesScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationBarHidden(true)
         .gradientBackground()
-        .task { await viewModel.load() }
+        .task {
+            viewModel.currentUserId = dependencies.authManager.currentUserId
+            await viewModel.load()
+        }
         .onChange(of: conversationState.activeConversation) { _, convo in
             // Returning from a thread — refresh so unread + last-message update.
             if convo == nil { Task { await viewModel.load() } }
@@ -59,10 +60,19 @@ struct MessagesScreen: View {
 
     private var header: some View {
         ScreenHeader("Messages") {
-            HeaderIconButton(icon: .bell) { router.navigateToNotifications() }
+            HeaderIconButton(icon: .bell, showDot: unreadCounts.notifications > 0) {
+                router.navigateToNotifications()
+            }
             HeaderIconButton(icon: .search) {
                 withAnimation(.easeInOut(duration: 0.2)) { showSearchField = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { searchFocused = true }
+            }
+        } expansion: {
+            // Inside the header chrome so the bar background sits behind the
+            // field and the shadow falls below it — not bleeding onto the page.
+            if showSearchField {
+                searchRow
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
     }
@@ -103,7 +113,9 @@ struct MessagesScreen: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 11)
+        // Fixed height — the clear button (28pt) appearing once you type must
+        // not grow the field.
+        .frame(height: 42)
         .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.vBorder, lineWidth: 1))
     }
@@ -135,7 +147,12 @@ struct MessagesScreen: View {
         } else {
             LazyVStack(alignment: .leading, spacing: 2) {
                 if viewModel.filtered.isEmpty {
-                    emptyState(title: "No matches", message: nil).padding(.top, 60)
+                    // Quieter than the full empty state — this flashes while typing.
+                    Text("No matches")
+                        .font(.appSubheadline)
+                        .foregroundStyle(Color.vText3)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 60)
                 } else {
                     mainInbox
                 }
@@ -205,8 +222,10 @@ struct MessagesScreen: View {
     private func categorySubtitle(_ label: String, _ items: [ConversationItem]) -> String {
         let n = items.count
         if label == "Message requests" {
-            if let u = items.first?.username {
-                return "From @\(u)" + (n > 1 ? " · +\(n - 1) more" : "")
+            if let first = items.first {
+                // Direction-aware: requests I sent read "To @…", received "From @…".
+                let prefix = first.lastMessageFromMe ? "To" : "From"
+                return "\(prefix) @\(first.username)" + (n > 1 ? " · +\(n - 1) more" : "")
             }
             return "\(n) request\(n == 1 ? "" : "s")"
         }

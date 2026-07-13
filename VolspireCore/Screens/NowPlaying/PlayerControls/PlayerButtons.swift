@@ -13,9 +13,6 @@ struct PlayerButtons: View {
     /// Compact (minimized immersive video): slightly smaller icons + play circle.
     var compact: Bool = false
 
-    @State private var isShuffled = false
-    @State private var repeatMode = 0 // 0 = off, 1 = all, 2 = one
-
     private var sideSize: CGFloat { compact ? 22 : 26 }
     private var skipSize: IconSize { compact ? .xxl : .hero }
     /// Bright transport tint (matches the skip buttons) for the inactive state.
@@ -29,14 +26,14 @@ struct PlayerButtons: View {
         // shuffle · skip-back · big white play circle · skip-forward · repeat —
         // spread evenly across the width.
         HStack(spacing: 0) {
-            Button { isShuffled.toggle() } label: {
+            Button { model.toggleShuffle() } label: {
                 LucideIcon(.shuffle, size: sideSize)
-                    .foregroundStyle(isShuffled ? Color.brand : opaque)
+                    .foregroundStyle(model.isShuffleOn ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(opaque))
                     // Declared-instant tint. Same value-scoped idiom as the action-row
                     // like/save icons (which declare a 0.18s ease) — owning the toggle's
                     // animation means no ambient transaction can leak in, while layout
                     // changes (resize/move when minimizing) still animate.
-                    .animation(nil, value: isShuffled)
+                    .animation(nil, value: model.isShuffleOn)
                     .compactChip(compact)
             }
 
@@ -84,11 +81,11 @@ struct PlayerButtons: View {
 
             Spacer(minLength: 0)
 
-            Button { repeatMode = (repeatMode + 1) % 3 } label: {
-                LucideIcon(repeatMode == 2 ? .repeat1 : .`repeat`, size: sideSize)
-                    .foregroundStyle(repeatMode > 0 ? Color.brand : opaque)
-                    // Declared-instant tint + glyph swap (see shuffle above).
-                    .animation(nil, value: repeatMode)
+            Button { model.toggleRepeat() } label: {
+                LucideIcon(.`repeat`, size: sideSize)
+                    .foregroundStyle(model.isRepeatOn ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(opaque))
+                    // Declared-instant tint (see shuffle above).
+                    .animation(nil, value: model.isRepeatOn)
                     .compactChip(compact)
             }
         }
@@ -98,7 +95,7 @@ struct PlayerButtons: View {
 
 private extension View {
     /// In minimized (immersive) mode the side transport icons lose the frost behind
-    /// them, so give each a small blurred circle so it stays visible over the video.
+    /// them, so give each a small darkened circle so it stays visible over the video.
     func compactChip(_ active: Bool) -> some View {
         modifier(CompactChip(active: active))
     }
@@ -110,9 +107,11 @@ private struct CompactChip: ViewModifier {
         content
             .padding(active ? 10 : 0)
             .background(
+                // A plain translucent scrim, not a material: five per-button
+                // backdrop blurs over live video each cost a blur pass every
+                // frame, and at this size the darkened look reads the same.
                 Circle()
-                    .fill(.ultraThinMaterial)
-                    .environment(\.colorScheme, .dark)
+                    .fill(.black.opacity(0.35))
                     .opacity(active ? 1 : 0)
             )
     }

@@ -20,6 +20,10 @@ struct FolderContentsScreen: View {
     @State private var viewModel: FolderContentsViewModel
     @State private var pendingAction: FolderAction?
     @State private var fileForOptions: ApiFolderFile?
+    /// Staged by the options sheet's Delete row; the confirmation dialog
+    /// presents once that sheet has finished dismissing.
+    @State private var fileToDelete: ApiFolderFile?
+    @State private var showFileDeleteConfirm = false
 
     init(folderId: String, folderName: String) {
         _viewModel = State(
@@ -37,24 +41,23 @@ struct FolderContentsScreen: View {
             content
         }
         .scrollIndicators(.hidden)
-        .appNavBar(title: viewModel.folderName, collapsing: true) { dismiss() }
-        .toolbar {
-            if viewModel.isOwner {
-                ToolbarItem(placement: .topBarTrailing) { optionsButton }
-            }
+        .appNavBar(title: viewModel.folderName, collapsing: true, onBack: { dismiss() }) {
+            if viewModel.isOwner { optionsButton }
         }
-        .floatingAction(owner: "folderContents", systemImage: "plus", isBusy: viewModel.isUploading) {
+        // The + never turns into a spinner: uploads show as optimistic rows in
+        // the list itself, so the button stays available for adding more.
+        .floatingAction(owner: "folderContents", systemImage: "plus") {
             viewModel.showFilePicker = true
         }
         .refreshable { await viewModel.refresh() }
         .fileImporter(
             isPresented: $viewModel.showFilePicker,
             allowedContentTypes: [.audio, .image, .movie, .pdf, .data],
-            allowsMultipleSelection: false
+            allowsMultipleSelection: true
         ) { result in
             switch result {
             case let .success(urls):
-                if let url = urls.first { Task { await viewModel.uploadFile(url: url) } }
+                viewModel.enqueueUploads(urls: urls)
             case let .failure(error):
                 print("[FolderContents] File picker error: \(error)")
             }
@@ -67,7 +70,18 @@ struct FolderContentsScreen: View {
         } message: {
             Text(viewModel.uploadError ?? "")
         }
-        .sheet(item: $fileForOptions) { file in fileOptionsSheet(file) }
+        .sheet(item: $fileForOptions, onDismiss: {
+            if fileToDelete != nil { showFileDeleteConfirm = true }
+        }) { file in fileOptionsSheet(file) }
+        .confirmationDialog("Delete this file?", isPresented: $showFileDeleteConfirm, titleVisibility: .visible, presenting: fileToDelete) { file in
+            Button("Delete", role: .destructive) {
+                fileToDelete = nil
+                Task { await viewModel.deleteFile(file) }
+            }
+            Button("Cancel", role: .cancel) { fileToDelete = nil }
+        } message: { file in
+            Text("“\(displayName(file))” will be removed for everyone in this folder.")
+        }
         .sheet(isPresented: $viewModel.showOptions, onDismiss: runFolderAction) { optionsSheet }
         .sheet(isPresented: $viewModel.showEdit) { editSheet }
         .sheet(isPresented: $viewModel.showMembers) { ManageMembersSheet(viewModel: viewModel) }
@@ -88,8 +102,7 @@ struct FolderContentsScreen: View {
     /// Top-right "…" — folder options (owner only).
     private var optionsButton: some View {
         Button { viewModel.showOptions = true } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 16, weight: .semibold))
+            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
         }
@@ -108,17 +121,79 @@ private extension FolderContentsScreen {
         case .error:
             LoadErrorView { Task { await viewModel.refresh() } }
                 .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.6)
-        case .loaded where viewModel.files.isEmpty:
+        case .loaded where viewModel.files.isEmpty && viewModel.pendingUploads.isEmpty:
             stateView(icon: .folder, title: "No files yet", message: "Upload files to share them in this folder.")
         case .loaded:
             LazyVStack(spacing: 0) {
+                // Transient file-action errors (e.g. deleting someone else's
+                // file) — the shared inline banner, auto-dismissing.
+                if let message = viewModel.actionError {
+                    ErrorBanner(message)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                        .transition(.opacity)
+                }
+                // In-flight / failed uploads sit above the real rows and animate
+                // out once the server row replaces them.
+                ForEach(viewModel.pendingUploads) { pendingUploadRow($0) }
                 ForEach(Array(viewModel.files.enumerated()), id: \.element.id) { idx, file in
                     fileRow(file, isLast: idx == viewModel.files.count - 1)
                 }
             }
             .padding(.top, 4)
             .padding(.bottom, bottomInset)
+            .animation(.easeInOut(duration: 0.25), value: viewModel.pendingUploads)
+            .animation(.easeInOut(duration: 0.25), value: viewModel.actionError)
         }
+    }
+
+    /// Optimistic row for a file that's uploading (or failed) — same anatomy
+    /// as `fileRow` so the flip to the real row is seamless.
+    func pendingUploadRow(_ item: PendingUpload) -> some View {
+        HStack(spacing: 13) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                if item.isFailed {
+                    LucideIcon(.triangleAlert, .md).foregroundStyle(Color.vError)
+                } else {
+                    ProgressView().controlSize(.small).tint(.white.opacity(0.7))
+                }
+            }
+            .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.fileName).font(.appCallout).foregroundStyle(.white).lineLimit(1)
+                switch item.phase {
+                case .uploading:
+                    Text("Uploading…").font(.appCaption).foregroundStyle(Color.vText3)
+                case let .failed(message):
+                    Text(message).font(.appCaption).foregroundStyle(Color.vError).lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            if item.isFailed {
+                Button { viewModel.retryUpload(item.id) } label: {
+                    LucideIcon(.refreshCw, .md)
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                Button { viewModel.dismissUpload(item.id) } label: {
+                    LucideIcon(.x, .md)
+                        .foregroundStyle(Color.vText3)
+                        .frame(width: 36, height: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .opacity(item.isFailed ? 1 : 0.75)
     }
 
     /// Shimmering placeholder rows shown while the folder's files load —
@@ -271,24 +346,14 @@ private extension FolderContentsScreen {
 
 private extension FolderContentsScreen {
     var optionsSheet: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 13) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.white.opacity(0.08))
-                    LucideIcon(.folder, .lg).foregroundStyle(.white)
-                }
-                .frame(width: 52, height: 52)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(viewModel.folderName).font(.appTitle3Bold).foregroundStyle(.white).lineLimit(1)
-                    Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s")")
-                        .font(.appFootnote).foregroundStyle(.white.opacity(0.5))
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 6)
-            .padding(.bottom, 2)
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(
+                icon: .folder,
+                title: viewModel.folderName,
+                subtitle: "\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s")"
+            ) { viewModel.showOptions = false }
 
-            VStack(spacing: 2) {
+            VStack(spacing: 0) {
                 folderRow(icon: .squarePen, title: "Edit folder") {
                     pendingAction = .edit; viewModel.showOptions = false
                 }
@@ -299,30 +364,29 @@ private extension FolderContentsScreen {
                     pendingAction = .delete; viewModel.showOptions = false
                 }
             }
+            .padding(.top, 6)
+
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 22)
-        .padding(.bottom, 14)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(316)])
+        .presentationDetents([.height(272)])
         .presentationDragIndicator(.visible)
         .sheetBackground()
     }
 
     func folderRow(icon: LucideIcon.Name, title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 16) {
+            HStack(spacing: 14) {
                 LucideIcon(icon, .lg)
                     .foregroundStyle(tint)
-                    .frame(width: 26, alignment: .center)
+                    .frame(width: 26)
                 Text(title)
-                    .font(.appBodyLargeMedium)
+                    .font(.appBody)
                     .foregroundStyle(tint)
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 20)
             .padding(.vertical, 15)
             .contentShape(.rect)
         }
@@ -344,12 +408,13 @@ private extension FolderContentsScreen {
                     shareFile(file)
                 }
                 folderRow(icon: .trash2, title: "Delete", tint: Color(red: 1, green: 0.37, blue: 0.37)) {
+                    // Stage + close the sheet; the confirmation dialog presents
+                    // from the screen once the sheet is gone (see onDismiss).
+                    fileToDelete = file
                     fileForOptions = nil
-                    Task { await viewModel.deleteFile(file) }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
+            .padding(.top, 6)
 
             Spacer(minLength: 0)
         }
@@ -564,7 +629,7 @@ private struct ManageMembersSheet: View {
                 .foregroundStyle(selected ? .white : .white.opacity(0.6))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 7)
-                .background(selected ? Color.brand : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(selected ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(Color.white.opacity(0.06)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
     }

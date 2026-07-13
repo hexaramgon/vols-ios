@@ -15,6 +15,7 @@ struct NotificationsScreen: View {
     @Environment(Router.self) var router
     @Environment(\.dismiss) private var dismiss
     @Environment(PlayerController.self) private var playerController
+    @Environment(UnreadCounts.self) private var unreadCounts
     @State private var viewModel = NotificationsScreenViewModel()
 
     /// Clears the tab bar + (when present) the floating mini-player.
@@ -30,7 +31,12 @@ struct NotificationsScreen: View {
         .scrollIndicators(.hidden)
         .appNavBar(title: "Notifications") { dismiss() }
         .refreshable { await viewModel.refresh() }
-        .task { await viewModel.load() }
+        .task {
+            // Opening this screen reads everything (`load` marks all read
+            // server-side) — clear the bell dot optimistically.
+            unreadCounts.clearNotifications()
+            await viewModel.load()
+        }
     }
 
     @ViewBuilder
@@ -121,7 +127,7 @@ struct NotificationsScreen: View {
                     .foregroundStyle(Color.vText3)
                     .fixedSize()
                 if isUnread {
-                    Circle().fill(Color.brand).frame(width: 8, height: 8)
+                    Circle().fill(Color.vUnread).frame(width: 8, height: 8)
                 }
             }
             .padding(.top, 1)

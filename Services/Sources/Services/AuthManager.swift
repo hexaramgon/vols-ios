@@ -81,12 +81,19 @@ public final class AuthManager {
 
     // MARK: - Session Lifecycle
 
-    /// Check for existing session on app launch
+    /// Check for existing session on app launch.
+    ///
+    /// Offline-first (industry standard): trust the *locally stored* session —
+    /// even if its access token has expired — and let the SDK refresh it in the
+    /// background when the network allows. (`client.auth.session` instead
+    /// refreshes over the network when the token is stale, so launching offline
+    /// used to throw and spuriously sign the user out.) A genuinely revoked
+    /// session still signs out via the `.signedOut` auth event when a refresh
+    /// is rejected by the server.
     public func restoreSession() async {
-        do {
-            let session = try await client.auth.session
-            state = .authenticated(userId: session.user.id.uuidString)
-        } catch {
+        if let session = client.auth.currentSession {
+            state = .authenticated(userId: session.user.id.uuidString.lowercased())
+        } else {
             state = .unauthenticated
         }
     }
@@ -97,10 +104,13 @@ public final class AuthManager {
             switch event {
             case .signedIn:
                 if let session, !holdSessionForOnboarding {
-                    state = .authenticated(userId: session.user.id.uuidString)
+                    state = .authenticated(userId: session.user.id.uuidString.lowercased())
                 }
             case .signedOut:
+                // Covers server-driven sign-outs (revoked/rejected refresh)
+                // as well as explicit ones — always drop per-user API caches.
                 state = .unauthenticated
+                Task { await APICache.shared.clear() }
             default:
                 break
             }
@@ -164,7 +174,9 @@ public final class AuthManager {
     /// The current session's user id, even while the session is held for
     /// onboarding (when `state` hasn't flipped to authenticated yet).
     public func sessionUserId() async -> String? {
-        (try? await client.auth.session)?.user.id.uuidString
+        // Lowercased to match Postgres UUID text (Swift's `uuidString` is uppercase),
+        // so it compares equal to DB-sourced user ids.
+        (try? await client.auth.session)?.user.id.uuidString.lowercased()
     }
 
     /// Ends the register wizard — releases the hold and reveals the session
@@ -172,7 +184,7 @@ public final class AuthManager {
     public func finishOnboarding() async {
         holdSessionForOnboarding = false
         if let session = try? await client.auth.session {
-            state = .authenticated(userId: session.user.id.uuidString)
+            state = .authenticated(userId: session.user.id.uuidString.lowercased())
         }
     }
 
@@ -180,9 +192,50 @@ public final class AuthManager {
         errorMessage = nil
         do {
             let session = try await client.auth.signIn(email: email, password: password)
-            state = .authenticated(userId: session.user.id.uuidString)
+            state = .authenticated(userId: session.user.id.uuidString.lowercased())
         } catch {
             errorMessage = friendly(error)
+        }
+    }
+
+    // MARK: - Password reset (recovery)
+
+    /// Emails a 6-digit recovery code (the "Reset Password" template must
+    /// include `{{ .Token }}`, like the signup one). Also used to resend.
+    public func sendPasswordReset(email: String) async -> Bool {
+        errorMessage = nil
+        do {
+            try await client.auth.resetPasswordForEmail(email)
+            return true
+        } catch {
+            errorMessage = friendly(error)
+            return false
+        }
+    }
+
+    /// Verifies the recovery code — this signs the user in, so callers set
+    /// `holdSessionForOnboarding` first (same as the register wizard) so the
+    /// auth UI isn't yanked away before the new password is saved.
+    public func verifyRecoveryCode(email: String, code: String) async -> Bool {
+        errorMessage = nil
+        do {
+            let response = try await client.auth.verifyOTP(email: email, token: code, type: .recovery)
+            return response.session != nil
+        } catch {
+            errorMessage = friendly(error)
+            return false
+        }
+    }
+
+    /// Saves a new password for the current (recovery) session.
+    public func updatePassword(_ newPassword: String) async -> Bool {
+        errorMessage = nil
+        do {
+            try await client.auth.update(user: UserAttributes(password: newPassword))
+            return true
+        } catch {
+            errorMessage = friendly(error)
+            return false
         }
     }
 
@@ -204,7 +257,7 @@ public final class AuthManager {
                     idToken: tokenString
                 )
             )
-            state = .authenticated(userId: session.user.id.uuidString)
+            state = .authenticated(userId: session.user.id.uuidString.lowercased())
         } catch {
             errorMessage = friendly(error)
         }
@@ -236,7 +289,7 @@ public final class AuthManager {
                     accessToken: result.user.accessToken.tokenString
                 )
             )
-            state = .authenticated(userId: session.user.id.uuidString)
+            state = .authenticated(userId: session.user.id.uuidString.lowercased())
         } catch {
             // GIDSignInError.canceled (-5): the user dismissed the sheet — no-op.
             if (error as NSError).code == -5 { return }
@@ -265,13 +318,25 @@ public final class AuthManager {
 
     // MARK: - Sign Out
 
+    /// Local-first sign-out. The SDK removes the stored session and emits
+    /// `.signedOut` *before* the network revoke call, so a failed revoke
+    /// (offline, server error) must never surface as an error or leave the
+    /// user "half signed out" — locally, sign-out always succeeds.
     public func signOut() async {
+        // Stop pushes to this device first — the RPC needs the session that's
+        // about to be dropped.
+        await PushNotificationManager.shared.deactivateForSignOut()
         do {
             try await client.auth.signOut()
-            state = .unauthenticated
         } catch {
-            errorMessage = friendly(error)
+            // Best-effort revoke failed — the local session is already gone.
+            print("[AuthManager] signOut revoke failed (ignored): \(error)")
         }
+        // Also end the Google SDK's own session so the next Google sign-in
+        // shows the account picker instead of silently reusing the last one.
+        GIDSignIn.sharedInstance.signOut()
+        state = .unauthenticated
+        await APICache.shared.clear()
     }
 
     // MARK: - Helpers

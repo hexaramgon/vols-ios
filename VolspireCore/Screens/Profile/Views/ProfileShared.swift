@@ -16,6 +16,13 @@ enum ProfileLayout {
     /// Main-actor because it reads `UIScreen`; only view code calls it.
     @MainActor
     static var heroHeight: CGFloat { max(UIScreen.size.height * 0.54, 380) }
+
+    /// Canonical banner crop aspect (width ÷ height) — the hero's banner band
+    /// (screen width over `heroHeight × 0.82` incl. top inset) works out to
+    /// ≈0.92 on every modern iPhone, so a FIXED value keeps the stored crop
+    /// identical no matter which device it was made on; displays aspect-fill
+    /// the ≤1% remainder. (The web crops its wider band from the middle.)
+    static let bannerCropAspect: CGFloat = 0.92
     /// Two-column grid used by the Services + Packs tabs.
     static var grid: [GridItem] {
         [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]

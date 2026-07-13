@@ -69,16 +69,14 @@ struct NowPlayingCommentsPanel: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Text("Comments")
-                    .font(.appCaption2Semibold)
-                    .tracking(0.6)
-                    .foregroundStyle(.white.opacity(0.5))
-                    .textCase(.uppercase)
+                    .font(.appSubheadlineSemibold)
+                    .foregroundStyle(.white)
                 if model.isLoading {
                     ProgressView().tint(.white.opacity(0.4)).scaleEffect(0.7)
                 } else {
                     Text("\(model.comments.count)")
-                        .font(.appCaptionMedium)
-                        .foregroundStyle(.white.opacity(0.4))
+                        .font(.appFootnote)
+                        .foregroundStyle(.white.opacity(0.45))
                         .monospacedDigit()
                 }
             }
@@ -117,10 +115,21 @@ struct NowPlayingCommentsPanel: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.top, 12)
+                // Extra room so the last comment can scroll clear of the fade.
+                .padding(.bottom, 32)
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollDisabled(scrollLocked)
+            // Soft bottom edge: comments dissolve out over the last ~32pt
+            // instead of hard-clipping at the card's bottom.
+            .mask(
+                VStack(spacing: 0) {
+                    Rectangle().fill(.black)
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 32)
+                }
+            )
             // Track whether we're pinned to the top so the player only treats a
             // downward drag as a dismiss when there's nothing above to scroll to.
             .onScrollGeometryChange(for: Bool.self) { geometry in
@@ -169,7 +178,7 @@ struct NowPlayingCommentsPanel: View {
                         .buttonStyle(.plain)
                     }
                     Text(relativeTime(from: comment.createdAt))
-                        .font(.appMicro)
+                        .font(.appCaption2)
                         .foregroundStyle(.white.opacity(0.3))
                 }
                 Text(comment.content)

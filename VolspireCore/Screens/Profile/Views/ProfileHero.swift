@@ -162,14 +162,20 @@ private extension ProfileHeroView {
     var avatar: some View {
         Group {
             if let url = viewModel.profileImageURL {
-                KFImage(url).downsampled(to: 84).resizable().aspectRatio(contentMode: .fill)
+                KFImage(url)
+                    // Initial-letter placeholder while the image loads (or if it
+                    // fails) — no empty circle during the fetch. `fade: 0`
+                    // matters: downsampled() bakes in a 0.25s fade by default.
+                    .placeholder { avatarPlaceholder }
+                    // Disk-cached avatars render on the FIRST frame instead of
+                    // flashing the placeholder for an async cache lookup — only
+                    // true network loads show the letter at all.
+                    .loadDiskFileSynchronously()
+                    .downsampled(to: 84, fade: 0)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
             } else {
-                ZStack {
-                    LinearGradient(colors: [Color(white: 0.2), .vBase], startPoint: .top, endPoint: .bottom)
-                    Text(viewModel.username.first.map { String($0).uppercased() } ?? "?")
-                        .font(.appDisplay)
-                        .foregroundStyle(Color.vText3)
-                }
+                avatarPlaceholder
             }
         }
         .frame(width: 84, height: 84)
@@ -183,6 +189,21 @@ private extension ProfileHeroView {
             onAvatarTap()
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
+        // No animation may reach the avatar from ANY source — Kingfisher's
+        // internal swap, the entrance cascade, or the hero-colour wash. The
+        // placeholder→image change is always a hard cut.
+        .transaction { $0.animation = nil }
+    }
+
+    /// Gradient + initial letter — shown while the avatar loads and for
+    /// profiles without a photo.
+    private var avatarPlaceholder: some View {
+        ZStack {
+            LinearGradient(colors: [Color(white: 0.2), .vBase], startPoint: .top, endPoint: .bottom)
+            Text(viewModel.username.first.map { String($0).uppercased() } ?? "?")
+                .font(.appDisplay)
+                .foregroundStyle(Color.vText3)
+        }
     }
 
     var stats: some View {
@@ -288,9 +309,7 @@ private extension ProfileHeroView {
             Task { await viewModel.toggleFollow(userId: userId) }
         } label: {
             Group {
-                if viewModel.isTogglingFollow {
-                    ProgressView().tint(viewModel.isFollowing ? .white : .black)
-                } else if viewModel.isFollowing {
+                if viewModel.isFollowing {
                     HStack(spacing: 6) {
                         LucideIcon(.check, .sm)
                         Text("Following").font(.appFootnoteSemibold)
@@ -299,24 +318,41 @@ private extension ProfileHeroView {
                     Text("Follow").font(.appFootnoteSemibold)
                 }
             }
-            // Following: borderless, brand-tinted (theme colour) with white text.
-            // Not following: solid white call-to-action.
             .foregroundStyle(viewModel.isFollowing ? Color.white : Color.black)
             .frame(maxWidth: .infinity)
             .frame(height: 34)
-            .background(viewModel.isFollowing ? Color.brand : Color.white,
-                       in: RoundedRectangle(cornerRadius: 9))
+            // Cross-fade the send-accent gradient over a white base so following ↔
+            // not-following fades instead of hard-cutting the fill (a gradient and a
+            // solid colour can't interpolate — that swap was the flash). The toggle is
+            // optimistic (VM flips instantly, rolls back on failure) so no spinner.
+            .background {
+                Color.white
+                    .overlay(LinearGradient.sendAccent.opacity(viewModel.isFollowing ? 1 : 0))
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+            }
         }
         .buttonStyle(StaticButtonStyle())
-        .disabled(viewModel.isTogglingFollow)
-        .animation(.easeInOut(duration: 0.18), value: viewModel.isFollowing)
+        .animation(.easeInOut(duration: 0.22), value: viewModel.isFollowing)
     }
 
     @ViewBuilder
     var collabButton: some View {
         switch viewModel.collaboratorStatus {
         case "accepted":
-            pillButton(.messageCircle, "Message") { router.navigateToMessages() }
+            // Straight into the collab thread (the profile RPC hands us its
+            // convo id); the inbox is only a fallback for missing data.
+            pillButton(.messageCircle, "Message") {
+                if let convoId = viewModel.collabConvoId {
+                    router.navigateToConversation(ActiveConversation(
+                        convoId: convoId,
+                        otherUserId: viewModel.profileUserId,
+                        username: viewModel.username,
+                        avatarURL: viewModel.profileImageURL?.absoluteString
+                    ))
+                } else {
+                    router.navigateToMessages()
+                }
+            }
         case "pending":
             pillButton(.clock, "Pending", muted: true) {}
         default:

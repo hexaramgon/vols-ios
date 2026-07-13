@@ -47,6 +47,10 @@ struct TimingIndicator: View {
             }
         )
         .sliderStyle(.playbackProgress)
+        // Glide between progress ticks instead of stepping (most visible on
+        // short tracks, where each tick is a large slice of the bar). Off
+        // while scrubbing so the thumb tracks the finger with zero lag.
+        .animation(controller.isScrubbing ? nil : .linear(duration: 0.12), value: displayValue)
         .frame(height: 60)
         .transformEffect(.identity)
     }

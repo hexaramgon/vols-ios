@@ -76,10 +76,12 @@ class MediaListScreenViewModel {
 
     func onShuffle() {
         guard let player, !items.isEmpty else { return }
-        let shuffledItems = items.map(\.id).shuffled()
-        guard let itemID = shuffledItems.first else { return }
-
-        player.play(itemID, of: shuffledItems)
+        // Random starting track + player-level shuffle: the queue keeps its real
+        // order underneath, so toggling shuffle off in the player restores it.
+        let ids = items.map(\.id)
+        guard let start = ids.randomElement() else { return }
+        player.setShuffle(true)
+        player.play(start, of: ids)
     }
 
     /// Register every row's media in the shared MediaState so playback can resolve

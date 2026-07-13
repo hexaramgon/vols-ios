@@ -13,6 +13,10 @@ struct AnalyticsScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(PlayerController.self) private var playerController
     @State private var viewModel = AnalyticsViewModel()
+    /// Chart window in days (7 or 30) — the range picker in the overview card.
+    @State private var chartDays = 30
+    /// Index of the day pinned by dragging across the chart (nil when idle).
+    @State private var scrubIndex: Int?
 
     private var bottomInset: CGFloat {
         let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
@@ -43,6 +47,7 @@ struct AnalyticsScreen: View {
             VStack(spacing: 14) {
                 overviewCard
                 statsRow
+                audienceCard
                 if !viewModel.topSources.isEmpty { sourcesCard }
                 tracksCard
             }
@@ -55,26 +60,42 @@ struct AnalyticsScreen: View {
 
 private extension AnalyticsScreen {
     var overviewCard: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                sectionLabel("Total streams")
-                Text(viewModel.totalStreams.formatted())
-                    .font(.appDisplay)
-                    .foregroundStyle(.white)
-                    .contentTransition(.numericText())
+        let series = viewModel.plays(last: chartDays)
+        return VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    sectionLabel("Total streams")
+                    Text(viewModel.totalStreams.formatted())
+                        .font(.appDisplay)
+                        .foregroundStyle(.white)
+                        .contentTransition(.numericText())
+                }
+                Spacer()
+                rangePicker
             }
 
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Plays · last 30 days")
-                        .font(.appFootnote).foregroundStyle(Color.vText2)
+                    // While scrubbing, the label becomes the pinned day's readout.
+                    if let index = scrubIndex, series.indices.contains(index) {
+                        Text("\(scrubDate(index: index, count: series.count)) · \(series[index]) plays")
+                            .font(.appFootnoteSemibold).foregroundStyle(.white)
+                            .monospacedDigit()
+                    } else {
+                        Text("Plays · last \(chartDays) days")
+                            .font(.appFootnote).foregroundStyle(Color.vText2)
+                    }
                     Spacer()
-                    trendPill
+                    trendPill.opacity(scrubIndex == nil ? 1 : 0)
                 }
-                AnalyticsTrendChart(values: viewModel.dailyPlays)
+                .animation(.easeInOut(duration: 0.15), value: scrubIndex == nil)
+
+                ScrubbableTrendChart(values: series, scrubIndex: $scrubIndex)
                     .frame(height: 90)
+                    .id(chartDays) // fresh chart (and geometry) when the window changes
+
                 HStack {
-                    Text("30 days ago").font(.appCaption).foregroundStyle(Color.vText3)
+                    Text("\(chartDays) days ago").font(.appCaption).foregroundStyle(Color.vText3)
                     Spacer()
                     Text("Today").font(.appCaption).foregroundStyle(Color.vText3)
                 }
@@ -83,20 +104,49 @@ private extension AnalyticsScreen {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+        .onChange(of: chartDays) { _, _ in scrubIndex = nil }
+    }
+
+    /// 7D / 30D window toggle — selected chip is white like the roles chips.
+    var rangePicker: some View {
+        HStack(spacing: 4) {
+            ForEach([7, 30], id: \.self) { days in
+                let selected = chartDays == days
+                Button {
+                    withAnimation(.smooth(duration: 0.25)) { chartDays = days }
+                } label: {
+                    Text("\(days)D")
+                        .font(.appCaptionMedium)
+                        .foregroundStyle(selected ? .black : Color.vText2)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(selected ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.white.opacity(0.06)), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     var trendPill: some View {
-        let up = viewModel.weekTrend >= 0
+        let trend = viewModel.trend(days: chartDays)
+        let up = trend >= 0
         let tint = up ? Color.green : Color.red
         return HStack(spacing: 3) {
-            Image(systemName: up ? "arrow.up.right" : "arrow.down.right")
-                .font(.system(size: 10, weight: .bold))
-            Text("\(abs(viewModel.weekTrend))%").font(.appCaption).fontWeight(.semibold)
+            LucideIcon(.arrowUpRight, .xs)
+                .rotationEffect(.degrees(up ? 0 : 90))
+            Text("\(abs(trend))%").font(.appCaption).fontWeight(.semibold)
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(tint.opacity(0.16), in: Capsule())
+    }
+
+    /// "Jul 3"-style label for a scrubbed chart index (oldest → today series).
+    func scrubDate(index: Int, count: Int) -> String {
+        let daysAgo = count - 1 - index
+        let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
+        return date.formatted(.dateTime.month(.abbreviated).day())
     }
 }
 
@@ -105,20 +155,90 @@ private extension AnalyticsScreen {
 private extension AnalyticsScreen {
     var statsRow: some View {
         HStack(spacing: 12) {
-            statTile(value: viewModel.totalListeners.profileCompact, label: "Unique listeners", icon: "person.2.fill")
-            statTile(value: formatTime(viewModel.avgListenSeconds), label: "Avg. listen time", icon: "clock.fill")
+            statTile(value: viewModel.totalListeners.profileCompact, label: "Unique listeners", icon: .users)
+            statTile(value: formatTime(viewModel.avgListenSeconds), label: "Avg. listen time", icon: .clock)
         }
     }
 
-    func statTile(value: String, label: String, icon: String) -> some View {
+    func statTile(value: String, label: String, icon: LucideIcon.Name) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: icon).font(.system(size: 13)).foregroundStyle(Color.brand)
+            LucideIcon(icon, .sm).foregroundStyle(Color.brand)
             Text(value).font(.appTitle).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
             Text(label).font(.appCaption).foregroundStyle(Color.vText3)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+// MARK: - Audience (engagement)
+
+private extension AnalyticsScreen {
+    /// Active-like pink — same tint as the player's like button.
+    static let likedPink = Color(red: 0.957, green: 0.447, blue: 0.714)
+
+    /// Followers / likes / saves / comments with 30-day deltas, each in its
+    /// accent (followers use the app's send-accent gradient, likes the like
+    /// pink, the rest the brand accent). Hidden if the engagement RPC failed.
+    @ViewBuilder
+    var audienceCard: some View {
+        if let engagement = viewModel.engagement {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    sectionLabel("Audience")
+                    Text("Engagement across your profile and tracks · +N is the last 30 days")
+                        .font(.appCaption).foregroundStyle(Color.vText3)
+                }
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    engagementTile(icon: .userCheck, tint: AnyShapeStyle(LinearGradient.sendAccent),
+                                   value: engagement.followersTotal, delta: engagement.followers30d, label: "Followers")
+                    engagementTile(icon: .heart, tint: AnyShapeStyle(Self.likedPink),
+                                   value: engagement.likesTotal, delta: engagement.likes30d, label: "Likes")
+                    engagementTile(icon: .bookmark, tint: AnyShapeStyle(Color.brand),
+                                   value: engagement.savesTotal, delta: engagement.saves30d, label: "Saves")
+                    engagementTile(icon: .messageCircle, tint: AnyShapeStyle(Color.brand),
+                                   value: engagement.commentsTotal, delta: engagement.comments30d, label: "Comments")
+                }
+                if engagement.shares30d > 0 {
+                    HStack(spacing: 8) {
+                        LucideIcon(.share2, .sm).foregroundStyle(Color.brand)
+                        Text("\(engagement.shares30d) shares in the last 30 days")
+                            .font(.appFootnote).foregroundStyle(Color.vText2)
+                        Spacer()
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+        }
+    }
+
+    func engagementTile(icon: LucideIcon.Name, tint: AnyShapeStyle, value: Int, delta: Int, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                LucideIcon(icon, .md).foregroundStyle(tint)
+                Spacer()
+                if delta > 0 {
+                    Text("+\(delta)")
+                        .font(.appCaptionMedium)
+                        .foregroundStyle(tint)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.white.opacity(0.06), in: Capsule())
+                }
+            }
+            Text(value.profileCompact)
+                .font(.appTitle).foregroundStyle(.white)
+                .lineLimit(1).minimumScaleFactor(0.6)
+                .contentTransition(.numericText())
+            Text(label).font(.appCaption).foregroundStyle(Color.vText3)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14))
     }
 }
 
@@ -197,8 +317,7 @@ private extension AnalyticsScreen {
                 Text(track.streams.profileCompact).font(.appBodyMedium).foregroundStyle(.white).monospacedDigit()
                 Text("streams").font(.appCaption).foregroundStyle(Color.vText3)
             }
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
+            LucideIcon(.chevronRight, .xs)
                 .foregroundStyle(Color.vText3)
         }
         .contentShape(.rect)
@@ -221,8 +340,7 @@ private extension AnalyticsScreen {
 
     var emptyState: some View {
         VStack(spacing: 12) {
-            Image(systemName: "chart.line.uptrend.xyaxis")
-                .font(.system(size: 34))
+            LucideIcon(.chartLine, .hero)
                 .foregroundStyle(Color.vText3.opacity(0.7))
             Text("No analytics yet").font(.appHeadline).foregroundStyle(.white)
             Text("Upload a track and your streams, listeners and plays will show up here.")
@@ -327,6 +445,87 @@ struct AnalyticsTrendChart: View {
                     .stroke(Color.brand, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                 }
             }
+        }
+    }
+
+    private func points(in size: CGSize, maxValue: Int) -> [CGPoint] {
+        guard values.count > 1 else { return [] }
+        return values.enumerated().map { index, value in
+            CGPoint(
+                x: size.width * CGFloat(index) / CGFloat(values.count - 1),
+                y: size.height - (CGFloat(value) / CGFloat(maxValue)) * size.height
+            )
+        }
+    }
+}
+
+// MARK: - Scrubbable trend chart (drag to inspect a day)
+
+/// The dashboard trend chart with touch scrubbing: drag across it to pin a day
+/// (dashed rule + dot) and report its index up via `scrubIndex` — the overview
+/// header swaps to that day's date + plays while held; release clears it.
+struct ScrubbableTrendChart: View {
+    let values: [Int]
+    @Binding var scrubIndex: Int?
+
+    var body: some View {
+        GeometryReader { geo in
+            let maxValue = max(values.max() ?? 0, 1)
+            let size = geo.size
+            let points = points(in: size, maxValue: maxValue)
+
+            ZStack {
+                if let first = points.first, let last = points.last {
+                    // Filled area under the line.
+                    Path { path in
+                        path.move(to: CGPoint(x: first.x, y: size.height))
+                        path.addLine(to: first)
+                        for point in points.dropFirst() { path.addLine(to: point) }
+                        path.addLine(to: CGPoint(x: last.x, y: size.height))
+                        path.closeSubpath()
+                    }
+                    .fill(LinearGradient(
+                        colors: [Color.brand.opacity(0.35), Color.brand.opacity(0)],
+                        startPoint: .top, endPoint: .bottom
+                    ))
+
+                    // The line itself.
+                    Path { path in
+                        path.move(to: first)
+                        for point in points.dropFirst() { path.addLine(to: point) }
+                    }
+                    .stroke(Color.brand, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+
+                    // Scrub rule + pinned-day dot.
+                    if let index = scrubIndex, points.indices.contains(index) {
+                        let point = points[index]
+                        Path { path in
+                            path.move(to: CGPoint(x: point.x, y: 0))
+                            path.addLine(to: CGPoint(x: point.x, y: size.height))
+                        }
+                        .stroke(Color.white.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        Circle()
+                            .fill(Color.brand)
+                            .frame(width: 9, height: 9)
+                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                            .position(point)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { gesture in
+                        guard values.count > 1 else { return }
+                        let fraction = min(max(gesture.location.x / max(size.width, 1), 0), 1)
+                        let index = Int((fraction * CGFloat(values.count - 1)).rounded())
+                        if index != scrubIndex {
+                            scrubIndex = index
+                            Haptics.impact(.soft)
+                        }
+                    }
+                    .onEnded { _ in scrubIndex = nil }
+            )
         }
     }
 

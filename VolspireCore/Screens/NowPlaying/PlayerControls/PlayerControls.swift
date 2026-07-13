@@ -34,6 +34,8 @@ struct PlayerControls: View {
     /// Measured transport height, so the "raised" (non-full-bleed) inset can be
     /// computed as "fill the rest of the space above the bottom bar".
     @State private var transportHeight: CGFloat = 190
+    /// Debounces the height measurement — see `transportStack`.
+    @State private var measureWork: DispatchWorkItem?
 
     var body: some View {
         GeometryReader { geo in
@@ -44,17 +46,27 @@ struct PlayerControls: View {
                 Spacer(minLength: 0)
                 transportStack(spacing: spacing)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
-                        if h > 0, abs(h - transportHeight) > 1 { transportHeight = h }
+                        // Record the height only once layout goes quiet. During the
+                        // minimize/restore animation the transport resizes every
+                        // frame, and writing the height back mid-flight retargets
+                        // the position animation each frame — visible hitching.
+                        measureWork?.cancel()
+                        guard h > 0, abs(h - transportHeight) > 1 else { return }
+                        let work = DispatchWorkItem { transportHeight = h }
+                        measureWork = work
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
                     }
             }
             .padding(.bottom, transportInset(controlsHeight: geo.size.height))
             // The bottom bar (action row / comment input) floats at the very bottom —
-            // hidden when minimized.
+            // hidden when minimized. Faded rather than unmounted: the AirPlay
+            // button wraps a UIKit AVRoutePickerView, and re-creating it on every
+            // reveal hitches the first frame of the animation.
             .overlay(alignment: .bottom) {
-                if !minimized {
-                    bottomBar
-                        .padding(.bottom, commentsOpen ? 0 : max(ViewConst.safeAreaInsets.bottom, 12) + 10)
-                }
+                bottomBar
+                    .padding(.bottom, commentsOpen ? 0 : max(ViewConst.safeAreaInsets.bottom, 12) + 10)
+                    .opacity(minimized ? 0 : 1)
+                    .allowsHitTesting(!minimized)
             }
             .animation(.smooth(duration: 0.4), value: fullBleed)
             .animation(.easeInOut(duration: 0.3), value: minimized)
@@ -239,6 +251,7 @@ private extension PlayerControls {
         } label: {
             LucideIcon(model.isSaved ? .bookmarkFill : .bookmark, .xl)
                 .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
         }
     }
 
@@ -249,7 +262,8 @@ private extension PlayerControls {
             model.showingEffectsSheet = true
         } label: {
             LucideIcon(.slidersHorizontal, .xl)
-                .foregroundStyle(isActive ? Color.green : Color.white)
+                .foregroundStyle(isActive ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(Color.white))
+                .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
         }
     }
 }

@@ -29,6 +29,7 @@ struct AddToPlaylistSheet: View {
     /// Optimistic ±1 tweak to each playlist's track count as you toggle, so the
     /// count reacts without re-fetching.
     @State private var countAdjust: [String: Int] = [:]
+    @State private var errorText: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -39,6 +40,12 @@ struct AddToPlaylistSheet: View {
             ) { dismiss() }
 
             content
+
+            if let errorText {
+                ErrorBanner(errorText)
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 12)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environment(\.colorScheme, .dark)
@@ -64,22 +71,48 @@ struct AddToPlaylistSheet: View {
         if !loaded {
             ProgressView().tint(.white.opacity(0.6))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if playlists.isEmpty {
-            VStack(spacing: 8) {
-                LucideIcon(.listMusic, .hero).foregroundStyle(Color.vText3)
-                Text("No playlists yet").font(.appCalloutSemibold).foregroundStyle(.white)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.bottom, 60)
         } else {
             ScrollView {
                 LazyVStack(spacing: 2) {
+                    InlineCreateRow(label: "New playlist", placeholder: "Playlist name") { title in
+                        await createAndAdd(title: title)
+                    }
                     ForEach(playlists) { row($0) }
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
                 .padding(.bottom, 20)
+
+                if playlists.isEmpty {
+                    VStack(spacing: 8) {
+                        LucideIcon(.listMusic, .hero).foregroundStyle(Color.vText3)
+                        Text("No playlists yet").font(.appCalloutSemibold).foregroundStyle(.white)
+                        Text("Create one right here to get started.")
+                            .font(.appFootnote)
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 36)
+                }
             }
+        }
+    }
+
+    /// Inline "New playlist": creates it, adds the track, and re-fetches the
+    /// list so the new playlist shows with an accurate count and a check.
+    private func createAndAdd(title: String) async -> Bool {
+        errorText = nil
+        do {
+            let playlistId = try await service.createPlaylist(title: title)
+            try await service.addTrackToPlaylist(playlistId: playlistId, trackId: trackId)
+            playlists = (try? await service.getUserPlaylists()) ?? playlists
+            addedIds.insert(playlistId)
+            Haptics.impact(.soft)
+            return true
+        } catch {
+            errorText = "Couldn't create the playlist. Please try again."
+            print("[AddToPlaylistSheet] create failed: \(error)")
+            return false
         }
     }
 
