@@ -52,7 +52,9 @@ final class URLAudioPlayer {
 
     // MARK: - State
 
-    private static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "avi", "webm"]
+    /// Exposed to MediaPlayer.isVideoURL so the app's display-mode check and the
+    /// engine's video-mode check can never disagree on a format.
+    static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "avi", "webm"]
 
     let effectsProcessor = AudioEffectsProcessor()
     private var tempFileURL: URL?

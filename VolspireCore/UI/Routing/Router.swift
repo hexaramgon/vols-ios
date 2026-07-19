@@ -96,28 +96,13 @@ class Router {
 }
 
 private struct RouterViewModifier: ViewModifier {
-    @State private var router = Router()
+    /// Externally-owned router, or nil to own one locally.
+    let injected: Router?
+    @State private var ownedRouter = Router()
     @State private var floatingAction = FloatingActionModel()
-    func body(content: Content) -> some View {
-        NavigationStack(path: $router.path) {
-            content
-                .environment(router)
-                .environment(floatingAction)
-                .navigationDestination(for: Route.self) { route in
-                    RoutedView(route: route)
-                        .environment(router)
-                        .environment(floatingAction)
-                }
-        }
-        .floatingActionOverlay(floatingAction)
-    }
-}
 
-private struct InjectedRouterViewModifier: ViewModifier {
-    let router: Router
-    @State private var floatingAction = FloatingActionModel()
     func body(content: Content) -> some View {
-        @Bindable var router = router
+        @Bindable var router = injected ?? ownedRouter
         return NavigationStack(path: $router.path) {
             content
                 .environment(router)
@@ -134,13 +119,13 @@ private struct InjectedRouterViewModifier: ViewModifier {
 
 extension View {
     func withRouter() -> some View {
-        modifier(RouterViewModifier())
+        modifier(RouterViewModifier(injected: nil))
     }
 
     /// Uses an externally-owned router (RootTabView keeps one per tab) so
     /// navigation can be driven from outside the tab's own view tree.
     func withRouter(_ router: Router) -> some View {
-        modifier(InjectedRouterViewModifier(router: router))
+        modifier(RouterViewModifier(injected: router))
     }
 }
 

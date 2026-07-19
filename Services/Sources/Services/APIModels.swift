@@ -3,11 +3,25 @@
 //  Services
 //
 //  DTOs decoded from the Supabase RPC / PostgREST responses. Extracted from
-//  SupabaseService.swift, which retains the client, service protocol, and
-//  implementation.
+//  SupabaseService.swift, which retains the client and implementation.
+//
+//  Key mapping: every DTO decodes through `JSONDecoder.api` (snake_case →
+//  camelCase), so DTOs need NO CodingKeys for mechanical mappings — only true
+//  renames declare one (sole case today: ApiListing.attachmentsValue).
 //
 
 import Foundation
+
+public extension JSONDecoder {
+    /// The one decoder for API payloads: converts the wire's snake_case keys to
+    /// the DTOs' camelCase properties. NOT for `AnyJSON` param encoding — the
+    /// strategy also mangles dictionary keys, which would corrupt RPC params.
+    static let api: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }()
+}
 
 // MARK: - Home API Response Models
 
@@ -17,12 +31,6 @@ public struct HomeTracksResponse: Codable, Sendable {
     public let popularTracks: [ApiHomeTrack]?
     public let demos: [ApiHomeTrack]?
     public let samples: [ApiHomeTrack]?
-
-    enum CodingKeys: String, CodingKey {
-        case popularTracks = "popular_tracks"
-        case demos
-        case samples
-    }
 }
 
 public struct ApiHomeTrack: Codable, Sendable, Identifiable {
@@ -33,16 +41,6 @@ public struct ApiHomeTrack: Codable, Sendable, Identifiable {
     public let audioUrl: String?
     public let streams: Int?
     public let durationMs: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case title
-        case artist
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case streams
-        case durationMs = "duration_ms"
-    }
 }
 
 /// An artist row from `get_explore_artists` (Explore "Artists" tab).
@@ -56,17 +54,6 @@ public struct ApiExploreArtist: Codable, Sendable, Identifiable {
     public let followersCount: Int?
     public let tags: [String]?
     public let isFollowing: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case accountType = "account_type"
-        case monthlyListeners = "monthly_listeners"
-        case followersCount = "followers_count"
-        case tags
-        case isFollowing = "is_following"
-    }
 }
 
 // MARK: - Messages Models
@@ -94,23 +81,6 @@ public struct ApiConversation: Codable, Sendable, Identifiable {
     /// Collab-request lifecycle (`pending` / `accepted` / `rejected`) — drives
     /// the messages list's Requests vs Archived classification.
     public let requestStatus: String?
-
-    enum CodingKeys: String, CodingKey {
-        case convoId = "convo_id"
-        case title
-        case type
-        case lastMessageContent = "last_message_content"
-        case lastMessageAt = "last_message_at"
-        case lastMessageUserId = "last_message_user_id"
-        case lastMessageType = "last_message_type"
-        case lastMessageAttachmentType = "last_message_attachment_type"
-        case unreadCount = "unread_count"
-        case otherUserId = "other_user_id"
-        case otherUsername = "other_username"
-        case otherProfileImageUrl = "other_profile_image_url"
-        case archivedAt = "archived_at"
-        case requestStatus = "request_status"
-    }
 }
 
 /// One row from `get_convo_messages` (returned oldest-first).
@@ -140,27 +110,6 @@ public struct ApiConvoMessage: Codable, Sendable, Identifiable {
 
     public struct RequestMetadata: Codable, Sendable {
         public let trackIds: [String]?
-        enum CodingKeys: String, CodingKey { case trackIds = "track_ids" }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case messageId = "message_id"
-        case convoId = "convo_id"
-        case userId = "user_id"
-        case content
-        case createdAt = "created_at"
-        case attachment
-        case attachmentUrl = "attachment_url"
-        case attachmentType = "attachment_type"
-        case attachmentName = "attachment_name"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case messageType = "message_type"
-        case requestType = "request_type"
-        case requestMetadata = "request_metadata"
-        case requestId = "request_id"
-        case requestStatus = "request_status"
-        case requestFromUserId = "request_from_user_id"
     }
 }
 
@@ -175,16 +124,6 @@ public struct ApiSharedTrack: Codable, Sendable, Identifiable {
     public let artistUserId: String?
     public let artistUsername: String?
     public let artistImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case trackId = "track_id"
-        case title
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case artistUserId = "artist_user_id"
-        case artistUsername = "artist_username"
-        case artistImageUrl = "artist_image_url"
-    }
 }
 
 // MARK: - User Profile Response Models
@@ -215,24 +154,6 @@ public struct ApiUserProfile: Codable, Sendable {
     /// The viewer blocked this user — drives the Unblock affordance on the
     /// unavailable state.
     public let viewerHasBlocked: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username, bio, tags
-        case accountType = "account_type"
-        case profileImageUrl = "profile_image_url"
-        case bannerImageUrl = "banner_image_url"
-        case location
-        case followersCount = "followers_count"
-        case monthlyListenersCount = "monthly_listeners_count"
-        case trackCount = "track_count"
-        case tracks, services
-        case isFollowing = "is_following"
-        case collaboratorStatus = "collaborator_status"
-        case collabConvoId = "collab_convo_id"
-        case isUnavailable = "is_unavailable"
-        case viewerHasBlocked = "viewer_has_blocked"
-    }
 }
 
 public struct ApiUpdateProfileResponse: Codable, Sendable {
@@ -244,15 +165,6 @@ public struct ApiUpdateProfileResponse: Codable, Sendable {
     public let profileImageUrl: String?
     public let bannerImageUrl: String?
     public let tags: [String]?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username, bio, tags
-        case accountType = "account_type"
-        case location
-        case profileImageUrl = "profile_image_url"
-        case bannerImageUrl = "banner_image_url"
-    }
 }
 
 public struct ApiUserService: Codable, Sendable, Identifiable {
@@ -270,15 +182,6 @@ public struct ApiUserService: Codable, Sendable, Identifiable {
     public let gradient: String?
     /// `false` means the listing is private/owner-only (shown as a "Private" pill).
     public let isActive: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case serviceId = "service_id"
-        case title, description, price, currency, gradient
-        case serviceType = "service_type"
-        case deliveryTimeDays = "delivery_time_days"
-        case coverUrl = "cover_url"
-        case isActive = "is_active"
-    }
 }
 
 public struct ApiProfileTrack: Codable, Sendable, Identifiable {
@@ -290,13 +193,6 @@ public struct ApiProfileTrack: Codable, Sendable, Identifiable {
     public let hasVisual: Bool?
     /// `public` | `private` — own-profile rows surface a lock on private tracks.
     public let visibility: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, title, streams, visibility
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case hasVisual = "has_visual"
-    }
 }
 
 /// A track owned by another artist where this profile's user is credited
@@ -321,18 +217,6 @@ public struct ApiCreditedTrack: Codable, Sendable, Identifiable {
     public let isUnavailable: Bool?
     /// `delisted` | `private` | nil — why an unavailable row is tombstoned.
     public let unavailableReason: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, title, artist, streams, genre, role
-        case artistId = "artist_id"
-        case artistProfileImageUrl = "artist_profile_image_url"
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case hasVisual = "has_visual"
-        case durationMs = "duration_ms"
-        case isUnavailable = "is_unavailable"
-        case unavailableReason = "unavailable_reason"
-    }
 }
 
 /// A sample/preset/plugin pack owned by the profile user (`get_user_packs`).
@@ -351,16 +235,6 @@ public struct ApiUserPack: Codable, Sendable, Identifiable {
     public let isPublished: Bool?
     public let deprecated: Bool?
     public let createdAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case name, price, formats, downloads, gradient, deprecated
-        case packId = "pack_id"
-        case packType = "pack_type"
-        case fileCount = "file_count"
-        case coverUrl = "cover_url"
-        case isPublished = "is_published"
-        case createdAt = "created_at"
-    }
 }
 
 // MARK: - Folder File DTOs
@@ -389,27 +263,6 @@ public struct ApiFolderFile: Codable, Sendable, Identifiable {
     public let trackCoverUrl: String?
     public let trackAudioUrl: String?
     public let trackVisibility: String?
-
-    enum CodingKeys: String, CodingKey {
-        case fileId = "file_id"
-        case name
-        case fileUrl = "file_url"
-        case fileType = "file_type"
-        case fileSize = "file_size"
-        case timespan
-        case ownerId = "owner_id"
-        case createdAt = "created_at"
-        case uploaderUsername = "uploader_username"
-        case uploaderProfileImageUrl = "uploader_profile_image_url"
-        case type
-        case trackId = "track_id"
-        case trackTitle = "track_title"
-        case trackArtist = "track_artist"
-        case trackArtistId = "track_artist_id"
-        case trackCoverUrl = "track_cover_url"
-        case trackAudioUrl = "track_audio_url"
-        case trackVisibility = "track_visibility"
-    }
 }
 
 // MARK: - User Folder DTOs
@@ -422,15 +275,6 @@ public struct ApiUserFolder: Codable, Sendable, Identifiable {
     public let ownerId: String
     public let createdAt: String
     public let role: String
-
-    enum CodingKeys: String, CodingKey {
-        case folderId = "folder_id"
-        case name
-        case description
-        case ownerId = "owner_id"
-        case createdAt = "created_at"
-        case role
-    }
 }
 
 /// One row from `get_workspace_activity` — a collaborator's recent action
@@ -450,17 +294,6 @@ public struct ApiWorkspaceActivity: Codable, Sendable, Identifiable {
 
     /// No event PK comes back from the RPC — synthesize a stable identity.
     public var id: String { "\(activityType)-\(actorId)-\(createdAt ?? "")-\(fileName ?? "")" }
-
-    enum CodingKeys: String, CodingKey {
-        case activityType = "activity_type"
-        case actorId = "actor_id"
-        case actorUsername = "actor_username"
-        case actorAvatar = "actor_avatar"
-        case folderId = "folder_id"
-        case folderName = "folder_name"
-        case fileName = "file_name"
-        case createdAt = "created_at"
-    }
 }
 
 public struct ApiFolderMember: Codable, Sendable, Identifiable {
@@ -469,41 +302,40 @@ public struct ApiFolderMember: Codable, Sendable, Identifiable {
     public let username: String?
     public let profileImageUrl: String?
     public let role: String
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case role
-    }
 }
 
-public struct ApiUserSearchResult: Codable, Sendable, Identifiable {
+// MARK: - Shared user references
+
+/// THE "user row" shape (id + username + avatar) with a guaranteed id — search
+/// results, collaborators, comment authors, like/library artists, blocked accounts.
+public struct ApiUserSummary: Codable, Sendable, Hashable, Identifiable {
     public var id: String { userId }
     public let userId: String
     public let username: String?
     public let profileImageUrl: String?
 
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
+    public init(userId: String, username: String?, profileImageUrl: String?) {
+        self.userId = userId
+        self.username = username
+        self.profileImageUrl = profileImageUrl
+    }
+}
+
+/// The same shape with a nullable id — rows behind a left join where the user
+/// may be deleted/absent (notification actors, marketplace creators, reviewers).
+public struct ApiUserRef: Codable, Sendable, Hashable {
+    public let userId: String?
+    public let username: String?
+    public let profileImageUrl: String?
+
+    public init(userId: String?, username: String?, profileImageUrl: String?) {
+        self.userId = userId
+        self.username = username
+        self.profileImageUrl = profileImageUrl
     }
 }
 
 // MARK: - Notification DTOs
-
-public struct ApiNotificationActor: Codable, Sendable {
-    public let userId: String?   // null when the actor row has no/deleted user (left join)
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
 
 public struct ApiNotification: Codable, Sendable, Identifiable {
     public let id: String
@@ -516,36 +348,16 @@ public struct ApiNotification: Codable, Sendable, Identifiable {
     public let contextId: String?
     public let contextPreview: String?
     public let isRead: Bool?            // activity_log.is_read is nullable
-    public let actor: ApiNotificationActor?
+    public let actor: ApiUserRef?
     /// How many activity rows collapsed into this notification (> 1 only for
     /// aggregated likes/saves/shares).
     public let actionCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case createdAt = "created_at"
-        case action
-        case objectType = "object_type"
-        case objectId = "object_id"
-        case objectTitle = "object_title"
-        case contextType = "context_type"
-        case contextId = "context_id"
-        case contextPreview = "context_preview"
-        case isRead = "is_read"
-        case actor
-        case actionCount = "action_count"
-    }
 }
 
 /// The signed-in user's save/like state for a track (`get_track_interaction_status`).
 public struct ApiTrackInteractionStatus: Codable, Sendable {
     public let isSaved: Bool
     public let isLiked: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case isSaved = "is_saved"
-        case isLiked = "is_liked"
-    }
 }
 
 // MARK: - Notification Preferences
@@ -563,11 +375,6 @@ public struct ApiNotificationPreferences: Codable, Sendable {
     public let collaborations: Bool
     public let folders: Bool
     public let messages: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case newFollowers = "new_followers"
-        case likes, saves, comments, shares, purchases, uploads, collaborations, folders, messages
-    }
 
     /// Flag lookup by the RPC column name (e.g. "likes", "new_followers").
     public func value(for key: String) -> Bool? {
@@ -609,17 +416,6 @@ public struct ApiTrackAnalytics: Codable, Sendable, Identifiable {
         public let date: String
         public let plays: Int
     }
-
-    enum CodingKeys: String, CodingKey {
-        case title, streams, sources, genre
-        case trackId = "track_id"
-        case coverUrl = "cover_url"
-        case uniqueListeners = "unique_listeners"
-        case avgListenTime = "avg_listen_time"
-        case avgSeekCount = "avg_seek_count"
-        case dailyPlays = "daily_plays"
-        case createdAt = "created_at"
-    }
 }
 
 /// Unread indicator counts (`get_unread_counts`): bell (activity), Inbox
@@ -628,11 +424,6 @@ public struct ApiUnreadCounts: Codable, Sendable {
     public let notifications: Int
     public let messages: Int
     public let serviceActions: Int
-
-    enum CodingKeys: String, CodingKey {
-        case notifications, messages
-        case serviceActions = "service_actions"
-    }
 }
 
 /// Creator engagement aggregates (`get_my_engagement_stats`): audience counts
@@ -647,33 +438,9 @@ public struct ApiEngagementStats: Codable, Sendable {
     public let commentsTotal: Int
     public let comments30d: Int
     public let shares30d: Int
-
-    enum CodingKeys: String, CodingKey {
-        case followersTotal = "followers_total"
-        case followers30d = "followers_30d"
-        case likesTotal = "likes_total"
-        case likes30d = "likes_30d"
-        case savesTotal = "saves_total"
-        case saves30d = "saves_30d"
-        case commentsTotal = "comments_total"
-        case comments30d = "comments_30d"
-        case shares30d = "shares_30d"
-    }
 }
 
 // MARK: - Marketplace DTOs (get_explore_data)
-
-public struct ApiMarketplaceUser: Codable, Sendable, Hashable {
-    public let userId: String?
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
 
 public struct ApiMarketplacePack: Codable, Sendable, Identifiable, Hashable {
     public var id: String { packId }
@@ -686,20 +453,7 @@ public struct ApiMarketplacePack: Codable, Sendable, Identifiable, Hashable {
     public let avgRating: Double?
     public let coverUrl: String?
     public let gradient: String?
-    public let creator: ApiMarketplaceUser?
-
-    enum CodingKeys: String, CodingKey {
-        case packId = "pack_id"
-        case name
-        case packType = "pack_type"
-        case price
-        case downloads
-        case fileCount = "file_count"
-        case avgRating = "avg_rating"
-        case coverUrl = "cover_url"
-        case gradient
-        case creator
-    }
+    public let creator: ApiUserRef?
 }
 
 public struct ApiMarketplaceService: Codable, Sendable, Identifiable, Hashable {
@@ -712,19 +466,7 @@ public struct ApiMarketplaceService: Codable, Sendable, Identifiable, Hashable {
     public let avgRating: Double?
     public let coverUrl: String?
     public let gradient: String?
-    public let artist: ApiMarketplaceUser?
-
-    enum CodingKeys: String, CodingKey {
-        case serviceId = "service_id"
-        case title
-        case serviceType = "service_type"
-        case price
-        case deliveryTimeDays = "delivery_time_days"
-        case avgRating = "avg_rating"
-        case coverUrl = "cover_url"
-        case gradient
-        case artist
-    }
+    public let artist: ApiUserRef?
 }
 
 public struct ApiExploreData: Codable, Sendable {
@@ -743,7 +485,7 @@ public extension ApiUserPack {
             packId: packId, name: name, packType: packType, price: price,
             downloads: downloads, fileCount: fileCount, avgRating: nil,
             coverUrl: coverUrl, gradient: gradient,
-            creator: ApiMarketplaceUser(userId: creatorUserId, username: creatorUsername, profileImageUrl: creatorImageUrl)
+            creator: ApiUserRef(userId: creatorUserId, username: creatorUsername, profileImageUrl: creatorImageUrl)
         )
     }
 }
@@ -756,7 +498,7 @@ public extension ApiUserService {
             serviceId: serviceId, title: title, serviceType: serviceType, price: price,
             deliveryTimeDays: deliveryTimeDays, avgRating: nil,
             coverUrl: coverUrl, gradient: gradient,
-            artist: ApiMarketplaceUser(userId: artistUserId, username: artistUsername, profileImageUrl: artistImageUrl)
+            artist: ApiUserRef(userId: artistUserId, username: artistUsername, profileImageUrl: artistImageUrl)
         )
     }
 }
@@ -777,16 +519,6 @@ public struct ApiSearchTrack: Codable, Sendable, Identifiable {
     public let durationMs: Int?
     public let genre: String?
     public let hasVisual: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case title, artist, genre, streams
-        case trackId = "track_id"
-        case artistId = "artist_id"
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case durationMs = "duration_ms"
-        case hasVisual = "has_visual"
-    }
 }
 
 /// Combined `search_all` payload. Packs/services/artists reuse the existing
@@ -829,19 +561,15 @@ public struct ApiListing: Codable, Sendable, Identifiable, Hashable {
     /// The attachment clips (empty if none).
     public var attachments: [ApiListingAttachment] { attachmentsValue?.items ?? [] }
 
+    /// The one true rename in the API surface: the wire key `attachments` decodes
+    /// into `attachmentsValue` (a flexible wrapper), freeing the `attachments`
+    /// name for the typed accessor above. Raw values here are matched AFTER the
+    /// decoder's snake_case conversion, so every other case is just the property name.
     enum CodingKeys: String, CodingKey {
-        case listingId = "listing_id"
-        case category, title, description, tags, status, author
+        case listingId, category, title, description, tags, status, author
         case attachmentsValue = "attachments"
-        case createdAt = "created_at"
-        case responseCount = "response_count"
-        case saveCount = "save_count"
-        case commentCount = "comment_count"
-        case updatedAt = "updated_at"
-        case isAuthor = "is_author"
-        case viewerHasSaved = "viewer_has_saved"
-        case viewerHasResponded = "viewer_has_responded"
-        case viewerConvoId = "viewer_convo_id"
+        case createdAt, responseCount, saveCount, commentCount, updatedAt
+        case isAuthor, viewerHasSaved, viewerHasResponded, viewerConvoId
     }
 }
 
@@ -852,13 +580,6 @@ public struct ApiListingComment: Codable, Sendable, Identifiable {
     public let content: String
     public let createdAt: String?
     public let user: ApiListingAuthor
-
-    enum CodingKeys: String, CodingKey {
-        case commentId = "comment_id"
-        case content
-        case createdAt = "created_at"
-        case user
-    }
 }
 
 /// One responder to a listing (author-only, `get_listing_responses`).
@@ -869,24 +590,11 @@ public struct ApiListingResponse: Codable, Sendable, Identifiable {
     public let createdAt: String?
     public let messagePreview: String?
     public let responder: ApiListingAuthor
-
-    enum CodingKeys: String, CodingKey {
-        case responseId = "response_id"
-        case convoId = "convo_id"
-        case createdAt = "created_at"
-        case messagePreview = "message_preview"
-        case responder
-    }
 }
 
 public struct ApiListingAttachment: Codable, Sendable, Hashable {
     public let title: String?
     public let fileUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case title
-        case fileUrl = "file_url"
-    }
 }
 
 /// Decodes a listing's `attachments` whether it arrives as a proper JSON array
@@ -900,7 +608,7 @@ struct FlexibleListingAttachments: Codable, Sendable, Hashable {
             items = array
         } else if let string = try? container.decode(String.self),
                   let data = string.data(using: .utf8),
-                  let array = try? JSONDecoder().decode([ApiListingAttachment].self, from: data) {
+                  let array = try? JSONDecoder.api.decode([ApiListingAttachment].self, from: data) {
             items = array
         } else {
             items = []
@@ -917,12 +625,6 @@ public struct ApiListingAuthor: Codable, Sendable, Hashable {
     public let userId: String
     public let username: String
     public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
 }
 
 // MARK: - Marketplace detail DTOs (get_pack / get_service_detail)
@@ -931,23 +633,6 @@ public struct ApiListingAuthor: Codable, Sendable, Hashable {
 public struct ApiSellerReputation: Codable, Sendable, Hashable {
     public let avgRating: Double?
     public let reviewCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case avgRating = "avg_rating"
-        case reviewCount = "review_count"
-    }
-}
-
-public struct ApiReviewer: Codable, Sendable, Hashable {
-    public let userId: String?
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
 }
 
 public struct ApiReview: Codable, Sendable, Hashable, Identifiable {
@@ -957,13 +642,7 @@ public struct ApiReview: Codable, Sendable, Hashable, Identifiable {
     public let body: String?
     public let createdAt: String?
     public let verified: Bool?
-    public let reviewer: ApiReviewer?
-
-    enum CodingKeys: String, CodingKey {
-        case reviewId = "review_id"
-        case rating, body, verified, reviewer
-        case createdAt = "created_at"
-    }
+    public let reviewer: ApiUserRef?
 }
 
 /// One sample/file inside a pack.
@@ -977,14 +656,6 @@ public struct ApiPackFile: Codable, Sendable, Hashable, Identifiable {
     public let fileUrl: String?
     public let fileSize: Int?
     public let isPreview: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case fileId = "file_id"
-        case name, category, format, duration
-        case fileUrl = "file_url"
-        case fileSize = "file_size"
-        case isPreview = "is_preview"
-    }
 }
 
 public struct ApiPackDetail: Codable, Sendable {
@@ -1012,22 +683,6 @@ public struct ApiPackDetail: Codable, Sendable {
     public let files: [ApiPackFile]?
     public let reviews: [ApiReview]?
     public let isPublished: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case name, description, price, currency, formats, tags, downloads, likes, saves, files, reviews, gradient
-        case packId = "pack_id"
-        case packType = "pack_type"
-        case coverUrl = "cover_url"
-        case fileCount = "file_count"
-        case avgRating = "avg_rating"
-        case reviewCount = "review_count"
-        case createdAt = "created_at"
-        case ownerId = "owner_id"
-        case creatorUsername = "creator_username"
-        case creatorImage = "creator_image"
-        case sellerReputation = "seller_reputation"
-        case isPublished = "is_published"
-    }
 }
 
 /// A service pricing tier (Basic / Standard / Pro).
@@ -1057,12 +712,6 @@ public struct ApiServiceArtist: Codable, Sendable, Hashable {
     public let username: String?
     public let profileImageUrl: String?
     public let bio: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username, bio
-        case profileImageUrl = "profile_image_url"
-    }
 }
 
 public struct ApiServiceDetail: Codable, Sendable {
@@ -1090,19 +739,6 @@ public struct ApiServiceDetail: Codable, Sendable {
     public let portfolio: [ApiListingAttachment]?
     public let sellerReputation: ApiSellerReputation?
     public let reviews: [ApiReview]?
-
-    enum CodingKeys: String, CodingKey {
-        case title, price, currency, revisions, tags, likes, saves, artist, packages, process, deliverables, faqs, reviews, gradient, portfolio
-        case serviceId = "service_id"
-        case serviceType = "service_type"
-        case longDescription = "long_description"
-        case deliveryTimeDays = "delivery_time_days"
-        case coverUrl = "cover_url"
-        case avgRating = "avg_rating"
-        case reviewCount = "review_count"
-        case createdAt = "created_at"
-        case sellerReputation = "seller_reputation"
-    }
 }
 
 // MARK: - Playlist DTOs
@@ -1117,15 +753,6 @@ public struct ApiPlaylist: Codable, Sendable, Identifiable {
     public let createdAt: String?
     public let updatedAt: String?
     public let trackCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case playlistId = "playlist_id"
-        case title, description, visibility
-        case coverUrl = "cover_url"
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-        case trackCount = "track_count"
-    }
 }
 
 public struct ApiPlaylistTrack: Codable, Sendable, Identifiable {
@@ -1141,18 +768,6 @@ public struct ApiPlaylistTrack: Codable, Sendable, Identifiable {
     public let artistAvatarUrl: String?
     public let position: Int?
     public let addedAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case trackId = "track_id"
-        case title, genre, position
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case durationMs = "duration_ms"
-        case createdBy = "created_by"
-        case artistUsername = "artist_username"
-        case artistAvatarUrl = "artist_avatar_url"
-        case addedAt = "added_at"
-    }
 }
 
 public struct ApiPlaylistDetail: Codable, Sendable, Identifiable {
@@ -1168,32 +783,9 @@ public struct ApiPlaylistDetail: Codable, Sendable, Identifiable {
     public let createdAt: String?
     public let updatedAt: String?
     public let tracks: [ApiPlaylistTrack]?
-
-    enum CodingKeys: String, CodingKey {
-        case playlistId = "playlist_id"
-        case title, description, visibility, tracks
-        case coverUrl = "cover_url"
-        case ownerId = "owner_id"
-        case ownerUsername = "owner_username"
-        case ownerAvatarUrl = "owner_avatar_url"
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-    }
 }
 
 // MARK: - User Likes DTOs
-
-public struct ApiLikeArtist: Codable, Sendable {
-    public let userId: String
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
 
 /// Used for both liked tracks (`get_user_likes`) and the saved library
 /// (`get_user_library`) — their shapes overlap; fields absent in one decode to nil.
@@ -1208,20 +800,7 @@ public struct ApiUserLike: Codable, Sendable, Identifiable {
     public let savedAt: String?
     public let genre: String?
     public let durationMs: Int?
-    public let artist: ApiLikeArtist?
-
-    enum CodingKeys: String, CodingKey {
-        case trackId = "track_id"
-        case title
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case streams
-        case createdAt = "created_at"
-        case savedAt = "saved_at"
-        case genre
-        case durationMs = "duration_ms"
-        case artist
-    }
+    public let artist: ApiUserSummary?
 }
 
 // MARK: - Track Detail DTO
@@ -1231,13 +810,6 @@ public struct ApiTrackDetailArtist: Codable, Sendable {
     public let username: String?
     public let profileImageUrl: String?
     public let accountType: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case accountType = "account_type"
-    }
 }
 
 public struct ApiTrackDetail: Codable, Sendable, Identifiable {
@@ -1260,17 +832,6 @@ public struct ApiTrackDetail: Codable, Sendable, Identifiable {
     public let metadata: ApiTrackMetadata?
     public let createdAt: String?
     public let artist: ApiTrackDetailArtist?
-
-    enum CodingKeys: String, CodingKey {
-        case trackId = "track_id"
-        case title, description, genre, visibility, location, occupation
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case visualUrl = "visual_url"
-        case streams, likes, saves, comments, credits, metadata
-        case createdAt = "created_at"
-        case artist
-    }
 }
 
 /// A collaborator credited on a track. `get_track_metadata` returns these as a
@@ -1283,45 +844,15 @@ public struct ApiTrackCredit: Codable, Sendable, Identifiable {
     public let role: String?
 
     public var id: String { "\(userId ?? "")|\(role ?? "")" }
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case accountType = "account_type"
-        case role
-    }
 }
 
 /// Free-form track metadata (`tracks.metadata` jsonb). Only `tags` is modeled;
 /// any other keys are ignored.
 public struct ApiTrackMetadata: Codable, Sendable {
     public let tags: [String]?
-
-    enum CodingKeys: String, CodingKey {
-        case tags
-    }
 }
 
 // MARK: - Track Comments DTOs
-
-public struct ApiCommentUser: Codable, Sendable {
-    public let userId: String
-    public let username: String?
-    public let profileImageUrl: String?
-
-    public init(userId: String, username: String?, profileImageUrl: String?) {
-        self.userId = userId
-        self.username = username
-        self.profileImageUrl = profileImageUrl
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
 
 public struct ApiTrackComment: Codable, Sendable, Identifiable {
     public var id: String { commentId }
@@ -1331,14 +862,14 @@ public struct ApiTrackComment: Codable, Sendable, Identifiable {
     /// nil for file comments (which carry `file_id` instead).
     public let trackId: String?
     public let parentId: String?
-    public let user: ApiCommentUser
+    public let user: ApiUserSummary
     public var replies: [ApiTrackComment]?
     /// Playback position (seconds) this comment is pinned to, if any.
     public let timestampSeconds: Double?
     /// Optional end of a timestamped range.
     public let timestampEndSeconds: Double?
 
-    public init(commentId: String, content: String, createdAt: String, trackId: String?, parentId: String?, user: ApiCommentUser, replies: [ApiTrackComment]?, timestampSeconds: Double? = nil, timestampEndSeconds: Double? = nil) {
+    public init(commentId: String, content: String, createdAt: String, trackId: String?, parentId: String?, user: ApiUserSummary, replies: [ApiTrackComment]?, timestampSeconds: Double? = nil, timestampEndSeconds: Double? = nil) {
         self.commentId = commentId
         self.content = content
         self.createdAt = createdAt
@@ -1348,17 +879,5 @@ public struct ApiTrackComment: Codable, Sendable, Identifiable {
         self.replies = replies
         self.timestampSeconds = timestampSeconds
         self.timestampEndSeconds = timestampEndSeconds
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case commentId = "comment_id"
-        case content
-        case createdAt = "created_at"
-        case trackId = "track_id"
-        case parentId = "parent_id"
-        case user
-        case replies
-        case timestampSeconds = "timestamp_seconds"
-        case timestampEndSeconds = "timestamp_end_seconds"
     }
 }

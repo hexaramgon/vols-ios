@@ -18,8 +18,11 @@ public extension ViewConst {
     static let gridPaddings: CGFloat = 8
     /// Header action-icon glyph size (bell / search / messages / "…"), used app-wide.
     static let headerIconSize: CGFloat = 24
-    /// Back-chevron glyph size in pushed-screen nav bars.
-    static let backIconSize: CGFloat = 16
+    /// Back-chevron glyph size in pushed-screen nav bars. NB: the shared
+    /// BackButton draws a Lucide chevron, whose inner viewBox padding makes it
+    /// read ~25% smaller than an SF symbol at the same point size — this value
+    /// is chosen for the Lucide rendering.
+    static let backIconSize: CGFloat = 32
     static let compactNowPlayingHeight: CGFloat = 56
 
     static var safeAreaInsets: EdgeInsets {

@@ -61,6 +61,9 @@ struct NewServiceScreen: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .tapToDismissKeyboard()
+            // Hoisted from the package cards — attached per card, every extra
+            // tier duplicated the Done button in the keyboard accessory.
+            .doneKeyboardToolbar($numberFieldFocused)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomBar
             }
@@ -108,13 +111,7 @@ struct NewServiceScreen: View {
     }
 
     private var bottomBar: some View {
-        VStack(spacing: 10) {
-            if case .error(let message) = viewModel.uploadState {
-                statusRow(message, color: UploadTheme.errorText)
-            } else if let hint = viewModel.validationHint {
-                statusRow(hint, color: Color.vText3)
-            }
-
+        UploadBottomBar(error: viewModel.uploadState.errorMessage, hint: viewModel.validationHint) {
             PrimaryButton(
                 viewModel.isEditing ? "Save Changes" : "Publish Service",
                 busy: isSaving,
@@ -123,29 +120,6 @@ struct NewServiceScreen: View {
                 Task { await viewModel.publish() }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-        .background {
-            Color.vBar
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.vBorder)
-                        .frame(height: 1)
-                }
-                .ignoresSafeArea()
-        }
-    }
-
-    private func statusRow(_ message: String, color: Color) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            LucideIcon(.triangleAlert, .sm)
-                .foregroundStyle(color)
-            Text(message)
-                .font(.appFootnote)
-                .foregroundStyle(color)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Identity
@@ -158,30 +132,15 @@ struct NewServiceScreen: View {
                 Button {
                     showCoverPicker = true
                 } label: {
-                    coverBox
+                    UploadCoverBox(image: viewModel.coverImage)
                 }
                 .buttonStyle(.plain)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Optional cover image. When uploaded it replaces the gradient on tiles and the service page.")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vText3)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if viewModel.coverImage != nil {
-                        Button {
-                            viewModel.clearCover()
-                        } label: {
-                            HStack(spacing: 6) {
-                                LucideIcon(.x, .xs)
-                                Text("Remove cover")
-                                    .font(.appFootnote)
-                            }
-                            .foregroundStyle(Color.vText3)
-                            .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                    }
+                UploadCoverCaption(
+                    text: "Optional cover image. When uploaded it replaces the gradient on tiles and the service page.",
+                    hasCover: viewModel.coverImage != nil
+                ) {
+                    viewModel.clearCover()
                 }
             }
 
@@ -205,36 +164,6 @@ struct NewServiceScreen: View {
         }
     }
 
-    private var coverBox: some View {
-        ZStack {
-            if let img = viewModel.coverImage {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                UploadTheme.fieldFill
-                VStack(spacing: 6) {
-                    LucideIcon(.image, .lg)
-                        .foregroundStyle(Color.vText3)
-                    Text("Cover art")
-                        .font(.appCaption)
-                        .foregroundStyle(Color.vText3)
-                }
-            }
-        }
-        .frame(width: 96, height: 96)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            if viewModel.coverImage == nil {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
-            } else {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
-            }
-        }
-    }
-
     // MARK: - Details
 
     private var detailsSection: some View {
@@ -252,36 +181,14 @@ struct NewServiceScreen: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
             .uploadFieldShell()
-            .onChange(of: viewModel.title) { _, newValue in
-                if newValue.count > 80 {
-                    viewModel.title = String(newValue.prefix(80))
-                }
-            }
+            .charLimited($viewModel.title, 80)
 
-            VStack(alignment: .trailing, spacing: 4) {
-                TextField(
-                    "",
-                    text: $viewModel.longDescription,
-                    prompt: Text("Describe your process, your sound, what makes your service stand out…")
-                        .foregroundStyle(Color.vText3),
-                    axis: .vertical
-                )
-                .font(.appBody)
-                .foregroundStyle(.white)
-                .lineLimit(4...8)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 13)
-                .uploadFieldShell()
-                .onChange(of: viewModel.longDescription) { _, newValue in
-                    if newValue.count > 1000 {
-                        viewModel.longDescription = String(newValue.prefix(1000))
-                    }
-                }
-
-                Text("\(viewModel.longDescription.count)/1000")
-                    .font(.appCaption)
-                    .foregroundStyle(Color.vText3)
-            }
+            UploadDescriptionField(
+                text: $viewModel.longDescription,
+                prompt: "Describe your process, your sound, what makes your service stand out…",
+                limit: 1000,
+                lines: 4...8
+            )
         }
     }
 
@@ -322,24 +229,9 @@ struct NewServiceScreen: View {
                 packageCard($pkg)
             }
 
-            Button {
+            UploadDashedAddButton("Add another tier") {
                 viewModel.packages.append(.init(name: "Standard"))
-            } label: {
-                HStack(spacing: 8) {
-                    LucideIcon(.plus, .sm)
-                    Text("Add another tier")
-                        .font(.appCallout)
-                }
-                .foregroundStyle(Color.vText3)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
-                )
-                .contentShape(.rect)
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -386,10 +278,7 @@ struct NewServiceScreen: View {
                         .foregroundStyle(Color.vText3)
                     TextField(
                         "",
-                        text: Binding(
-                            get: { pkg.wrappedValue.price },
-                            set: { pkg.wrappedValue.price = $0.filter { "0123456789.".contains($0) } }
-                        ),
+                        text: pkg.price.decimalFiltered(),
                         prompt: Text("Price").foregroundStyle(Color.vText3)
                     )
                     .font(.appBody)
@@ -439,74 +328,17 @@ struct NewServiceScreen: View {
                     .contentShape(.rect)
                 }
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") {
-                        numberFieldFocused = false
-                    }
-                    .font(.appCallout)
-                }
-            }
 
             Text("Price · delivery days · revision rounds")
                 .font(.appCaption)
                 .foregroundStyle(Color.vText3)
 
-            VStack(spacing: 8) {
-                ForEach(Array(row.features.enumerated()), id: \.offset) { index, _ in
-                    HStack(spacing: 10) {
-                        LucideIcon(.circleCheck, .xs)
-                            .foregroundStyle(Color.vText3)
-                        TextField(
-                            "",
-                            text: Binding(
-                                get: {
-                                    guard index < pkg.wrappedValue.features.count else { return "" }
-                                    return pkg.wrappedValue.features[index]
-                                },
-                                set: {
-                                    guard index < pkg.wrappedValue.features.count else { return }
-                                    pkg.wrappedValue.features[index] = $0
-                                }
-                            ),
-                            prompt: Text("Feature…").foregroundStyle(Color.vText3)
-                        )
-                        .font(.appBody)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .uploadFieldShell()
-
-                        if row.features.count > 1 {
-                            Button {
-                                pkg.wrappedValue.features.remove(at: index)
-                            } label: {
-                                LucideIcon(.x, .xs)
-                                    .foregroundStyle(Color.vText3)
-                                    .frame(width: 32, height: 32)
-                                    .contentShape(.rect)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                Button {
-                    pkg.wrappedValue.features.append("")
-                } label: {
-                    HStack(spacing: 6) {
-                        LucideIcon(.plus, .xs)
-                        Text("Add feature")
-                            .font(.appFootnote)
-                    }
-                    .foregroundStyle(Color.vText3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.leading, 23)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-            }
+            UploadEditableList(
+                items: pkg.features,
+                placeholder: "Feature…",
+                addLabel: "Add feature",
+                compact: true
+            )
         }
         .padding(14)
         .background(
@@ -525,56 +357,11 @@ struct NewServiceScreen: View {
         VStack(alignment: .leading, spacing: 12) {
             UploadSectionDivider("What's Included")
 
-            ForEach(Array(viewModel.deliverables.enumerated()), id: \.offset) { index, _ in
-                HStack(spacing: 10) {
-                    LucideIcon(.circleCheck, .sm)
-                        .foregroundStyle(Color.vText3)
-                    TextField(
-                        "",
-                        text: Binding(
-                            get: {
-                                guard index < viewModel.deliverables.count else { return "" }
-                                return viewModel.deliverables[index]
-                            },
-                            set: {
-                                guard index < viewModel.deliverables.count else { return }
-                                viewModel.deliverables[index] = $0
-                            }
-                        ),
-                        prompt: Text("e.g. Full stereo mix (WAV 24-bit)").foregroundStyle(Color.vText3)
-                    )
-                    .font(.appBody)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 11)
-                    .uploadFieldShell()
-
-                    if viewModel.deliverables.count > 1 {
-                        Button {
-                            viewModel.deliverables.remove(at: index)
-                        } label: {
-                            LucideIcon(.x, .sm)
-                                .foregroundStyle(Color.vText3)
-                                .frame(width: 36, height: 36)
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-
-            Button {
-                viewModel.deliverables.append("")
-            } label: {
-                HStack(spacing: 6) {
-                    LucideIcon(.plus, .xs)
-                    Text("Add item")
-                        .font(.appFootnote)
-                }
-                .foregroundStyle(Color.vText3)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
+            UploadEditableList(
+                items: $viewModel.deliverables,
+                placeholder: "e.g. Full stereo mix (WAV 24-bit)",
+                addLabel: "Add item"
+            )
         }
     }
 
@@ -600,79 +387,35 @@ struct NewServiceScreen: View {
                     .frame(width: 26, height: 26)
                     .padding(.top, 8)
 
-                    VStack(spacing: 8) {
-                        TextField(
-                            "",
-                            text: Binding(
-                                get: { viewModel.processSteps.first { $0.id == step.id }?.step ?? "" },
-                                set: { newValue in
-                                    if let i = viewModel.processSteps.firstIndex(where: { $0.id == step.id }) {
-                                        viewModel.processSteps[i].step = newValue
-                                    }
+                    UploadTwoFieldRow(
+                        title: Binding(
+                            get: { viewModel.processSteps.first { $0.id == step.id }?.step ?? "" },
+                            set: { newValue in
+                                if let i = viewModel.processSteps.firstIndex(where: { $0.id == step.id }) {
+                                    viewModel.processSteps[i].step = newValue
                                 }
-                            ),
-                            prompt: Text("Step title…").foregroundStyle(Color.vText3)
-                        )
-                        .font(.appBody)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .uploadFieldShell()
-
-                        TextField(
-                            "",
-                            text: Binding(
-                                get: { viewModel.processSteps.first { $0.id == step.id }?.description ?? "" },
-                                set: { newValue in
-                                    if let i = viewModel.processSteps.firstIndex(where: { $0.id == step.id }) {
-                                        viewModel.processSteps[i].description = newValue
-                                    }
+                            }
+                        ),
+                        detail: Binding(
+                            get: { viewModel.processSteps.first { $0.id == step.id }?.description ?? "" },
+                            set: { newValue in
+                                if let i = viewModel.processSteps.firstIndex(where: { $0.id == step.id }) {
+                                    viewModel.processSteps[i].description = newValue
                                 }
-                            ),
-                            prompt: Text("Describe what happens in this step…").foregroundStyle(Color.vText3),
-                            axis: .vertical
-                        )
-                        .font(.appFootnote)
-                        .foregroundStyle(.white)
-                        .lineLimit(2...4)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .uploadFieldShell()
-                    }
-
-                    if viewModel.processSteps.count > 1 {
-                        Button {
-                            viewModel.processSteps.removeAll { $0.id == step.id }
-                        } label: {
-                            LucideIcon(.x, .sm)
-                                .foregroundStyle(Color.vText3)
-                                .frame(width: 36, height: 36)
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 2)
-                    }
+                            }
+                        ),
+                        titlePlaceholder: "Step title…",
+                        detailPlaceholder: "Describe what happens in this step…",
+                        onRemove: viewModel.processSteps.count > 1
+                            ? { viewModel.processSteps.removeAll { $0.id == step.id } }
+                            : nil
+                    )
                 }
             }
 
-            Button {
+            UploadDashedAddButton("Add Step") {
                 viewModel.processSteps.append(.init())
-            } label: {
-                HStack(spacing: 8) {
-                    LucideIcon(.plus, .sm)
-                    Text("Add Step")
-                        .font(.appCallout)
-                }
-                .foregroundStyle(Color.vText3)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
-                )
-                .contentShape(.rect)
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -717,60 +460,20 @@ struct NewServiceScreen: View {
                 .foregroundStyle(Color.vText2)
 
             ForEach($viewModel.faqs) { $faq in
-                HStack(alignment: .top, spacing: 10) {
-                    VStack(spacing: 8) {
-                        TextField(
-                            "",
-                            text: $faq.question,
-                            prompt: Text("Question…").foregroundStyle(Color.vText3)
-                        )
-                        .font(.appBody)
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .uploadFieldShell()
-
-                        TextField(
-                            "",
-                            text: $faq.answer,
-                            prompt: Text("Answer…").foregroundStyle(Color.vText3),
-                            axis: .vertical
-                        )
-                        .font(.appFootnote)
-                        .foregroundStyle(.white)
-                        .lineLimit(2...4)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .uploadFieldShell()
-                    }
-
-                    if viewModel.faqs.count > 1 {
-                        Button {
-                            viewModel.faqs.removeAll { $0.id == faq.id }
-                        } label: {
-                            LucideIcon(.x, .sm)
-                                .foregroundStyle(Color.vText3)
-                                .frame(width: 36, height: 36)
-                                .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.top, 2)
-                    }
-                }
+                UploadTwoFieldRow(
+                    title: $faq.question,
+                    detail: $faq.answer,
+                    titlePlaceholder: "Question…",
+                    detailPlaceholder: "Answer…",
+                    onRemove: viewModel.faqs.count > 1
+                        ? { viewModel.faqs.removeAll { $0.id == faq.id } }
+                        : nil
+                )
             }
 
-            Button {
+            UploadInlineAddButton("Add FAQ") {
                 viewModel.faqs.append(.init())
-            } label: {
-                HStack(spacing: 6) {
-                    LucideIcon(.plus, .xs)
-                    Text("Add FAQ")
-                        .font(.appFootnote)
-                }
-                .foregroundStyle(Color.vText3)
-                .contentShape(.rect)
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -780,22 +483,11 @@ struct NewServiceScreen: View {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Visibility")
 
-            HStack(spacing: 8) {
-                UploadPill("Public", icon: .globe, expands: true, selected: viewModel.visibility == "public") {
-                    viewModel.visibility = "public"
-                }
-                UploadPill("Private", icon: .lock, expands: true, selected: viewModel.visibility == "private") {
-                    viewModel.visibility = "private"
-                }
-            }
-
-            Text(
-                viewModel.visibility == "public"
-                    ? "Public — appears in the marketplace and on your profile."
-                    : "Private — hidden from the marketplace. You can make it public later from the service page."
+            UploadVisibilityPicker(
+                visibility: $viewModel.visibility,
+                publicHint: "Public — appears in the marketplace and on your profile.",
+                privateHint: "Private — hidden from the marketplace. You can make it public later from the service page."
             )
-            .font(.appFootnote)
-            .foregroundStyle(Color.vText3)
         }
     }
 }

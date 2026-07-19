@@ -106,7 +106,7 @@ struct LoginScreen: View {
                 }
 
                 if let error = authManager.errorMessage {
-                    AuthErrorBanner(message: error)
+                    ErrorBanner(error)
                         .padding(.top, 14)
                 }
 
@@ -159,43 +159,20 @@ struct LoginScreen: View {
         // No rubber-band on a form that fits the screen — keyboard-driven
         // scroll adjustments stay pinned instead of bouncing the page.
         .scrollBounceBehavior(.basedOnSize)
-        // Overlay (not safeAreaInset): the link stays anchored to the screen
-        // bottom and the keyboard simply covers it, instead of riding up.
-        // The overlay content must be FULL-HEIGHT for the keyboard opt-out to
-        // work — ignoresSafeArea only expands views whose bounds touch the
-        // ignored region, so a bare link would still be pushed up.
+        // Pinned bottom link — AuthBottomLink carries the overlay/keyboard
+        // opt-out rationale.
         .overlay {
-            createAccountLink
-                .frame(maxWidth: .infinity)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-                .ignoresSafeArea(.keyboard, edges: .bottom)
-        }
-    }
-
-    private var createAccountLink: some View {
-        Button {
-            authManager.setError(nil)
-            // Fresh wizard state each visit, built before the transition
-            // so the slide animates real content.
-            registerViewModel = RegisterViewModel(
-                authManager: authManager,
-                supabaseService: dependencies.supabaseService
-            )
-            withAnimation(.smooth(duration: 0.35)) { showRegister = true }
-        } label: {
-            HStack(spacing: 4) {
-                Text("New to Volspire?")
-                    .foregroundStyle(Color.vText3)
-                Text("Create account")
-                    .foregroundStyle(.white)
-                    .fontWeight(.semibold)
+            AuthBottomLink(prompt: "New to Volspire?", action: "Create account") {
+                authManager.setError(nil)
+                // Fresh wizard state each visit, built before the transition
+                // so the slide animates real content.
+                registerViewModel = RegisterViewModel(
+                    authManager: authManager,
+                    supabaseService: dependencies.supabaseService
+                )
+                withAnimation(.smooth(duration: 0.35)) { showRegister = true }
             }
-            .font(.appCalloutRegular)
-            .frame(maxWidth: .infinity)
-            .contentShape(.rect)
         }
-        .buttonStyle(.plain)
-        .padding(.vertical, 14)
     }
 }
 
@@ -227,9 +204,14 @@ private struct ForgotPasswordFlow: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
+            // No back once the code is verified — the reset finishes forward.
+            AuthWizardBackBar(canGoBack: step < 2, disabled: isLoading) {
+                if step == 0 {
+                    onClose()
+                } else {
+                    go(to: 0)
+                }
+            }
 
             ZStack {
                 Group {
@@ -246,65 +228,15 @@ private struct ForgotPasswordFlow: View {
         .onAppear { email = initialEmail }
     }
 
-    private var topBar: some View {
-        HStack {
-            // No back once the code is verified — the reset finishes forward.
-            if step < 2 {
-                Button {
-                    if step == 0 {
-                        onClose()
-                    } else {
-                        go(to: 0)
-                    }
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                        .imageScale(.large)
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .disabled(isLoading)
-            }
-            Spacer()
-        }
-        .frame(height: 44)
-    }
-
     private func go(to newStep: Int) {
         forward = newStep > step
         withAnimation(.smooth(duration: 0.35)) { step = newStep }
     }
 
     private func page(_ title: String, _ subtitle: String, @ViewBuilder content: () -> some View) -> some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title)
-                    .font(.appTitleXXL)
-                    .foregroundStyle(.white)
-                    .padding(.top, 12)
-
-                Text(subtitle)
-                    .font(.appCalloutRegular)
-                    .foregroundStyle(Color.vText2)
-                    .padding(.top, 6)
-
-                content()
-                    .padding(.top, 28)
-
-                if let error = authManager.errorMessage {
-                    AuthErrorBanner(message: error)
-                        .padding(.top, 14)
-                }
-            }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 32)
-            .frame(maxWidth: 440)
-            .frame(maxWidth: .infinity)
+        AuthStepPage(title: title, subtitle: subtitle, error: authManager.errorMessage) {
+            content()
         }
-        .scrollDismissesKeyboard(.interactively)
-        .scrollBounceBehavior(.basedOnSize)
     }
 
     // Step 0: email
@@ -345,14 +277,9 @@ private struct ForgotPasswordFlow: View {
         page("Enter the code", "We sent a 6-digit code to \(email).") {
             VStack(spacing: 24) {
                 AuthCodeField(
-                    code: Binding(
-                        get: { code },
-                        set: { newValue in
-                            code = String(newValue.filter(\.isNumber).prefix(6))
-                            if code.count == 6 { Task { await verify() } }
-                        }
-                    ),
-                    disabled: isLoading
+                    code: $code,
+                    disabled: isLoading,
+                    onFilled: { Task { await verify() } }
                 )
 
                 AuthCTA(
@@ -364,30 +291,12 @@ private struct ForgotPasswordFlow: View {
                     Task { await verify() }
                 }
 
-                Button {
+                AuthResendButton(state: resent ? .sent : .idle) {
                     Task {
                         resent = true
                         _ = await authManager.sendPasswordReset(email: email)
                     }
-                } label: {
-                    Group {
-                        if resent {
-                            HStack(spacing: 6) {
-                                LucideIcon(.check, .xs)
-                                Text("New code sent — check your inbox")
-                            }
-                            .foregroundStyle(Color.green)
-                        } else {
-                            Text("Didn't get a code? \(Text("Resend").foregroundStyle(.white).underline())")
-                                .foregroundStyle(Color.vText3)
-                        }
-                    }
-                    .font(.appSubheadline)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
-                .disabled(resent)
             }
         }
     }
@@ -417,9 +326,7 @@ private struct ForgotPasswordFlow: View {
                 }
 
                 if !confirmPassword.isEmpty, newPassword != confirmPassword {
-                    Text("Passwords must match")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vError)
+                    AuthPasswordMismatchLabel()
                 }
 
                 AuthCTA(

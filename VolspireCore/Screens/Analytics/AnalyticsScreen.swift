@@ -18,10 +18,7 @@ struct AnalyticsScreen: View {
     /// Index of the day pinned by dragging across the chart (nil when idle).
     @State private var scrubIndex: Int?
 
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     var body: some View {
         ScrollView {
@@ -48,7 +45,13 @@ struct AnalyticsScreen: View {
                 overviewCard
                 statsRow
                 audienceCard
-                if !viewModel.topSources.isEmpty { sourcesCard }
+                if !viewModel.topSources.isEmpty {
+                    AnalyticsSourcesCard(
+                        subtitle: "How listeners reached your tracks",
+                        sources: viewModel.topSources,
+                        totalPlays: viewModel.totalSourcePlays
+                    )
+                }
                 tracksCard
             }
             .padding(.horizontal, ViewConst.screenPaddings)
@@ -64,7 +67,7 @@ private extension AnalyticsScreen {
         return VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    sectionLabel("Total streams")
+                    AnalyticsSectionLabel("Total streams")
                     Text(viewModel.totalStreams.formatted())
                         .font(.appDisplay)
                         .foregroundStyle(.white)
@@ -86,7 +89,8 @@ private extension AnalyticsScreen {
                             .font(.appFootnote).foregroundStyle(Color.vText2)
                     }
                     Spacer()
-                    trendPill.opacity(scrubIndex == nil ? 1 : 0)
+                    AnalyticsTrendPill(trend: viewModel.trend(days: chartDays))
+                        .opacity(scrubIndex == nil ? 1 : 0)
                 }
                 .animation(.easeInOut(duration: 0.15), value: scrubIndex == nil)
 
@@ -94,11 +98,7 @@ private extension AnalyticsScreen {
                     .frame(height: 90)
                     .id(chartDays) // fresh chart (and geometry) when the window changes
 
-                HStack {
-                    Text("\(chartDays) days ago").font(.appCaption).foregroundStyle(Color.vText3)
-                    Spacer()
-                    Text("Today").font(.appCaption).foregroundStyle(Color.vText3)
-                }
+                AnalyticsChartFooter(days: chartDays)
             }
         }
         .padding(18)
@@ -127,21 +127,6 @@ private extension AnalyticsScreen {
         }
     }
 
-    var trendPill: some View {
-        let trend = viewModel.trend(days: chartDays)
-        let up = trend >= 0
-        let tint = up ? Color.green : Color.red
-        return HStack(spacing: 3) {
-            LucideIcon(.arrowUpRight, .xs)
-                .rotationEffect(.degrees(up ? 0 : 90))
-            Text("\(abs(trend))%").font(.appCaption).fontWeight(.semibold)
-        }
-        .foregroundStyle(tint)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.16), in: Capsule())
-    }
-
     /// "Jul 3"-style label for a scrubbed chart index (oldest → today series).
     func scrubDate(index: Int, count: Int) -> String {
         let daysAgo = count - 1 - index
@@ -155,20 +140,9 @@ private extension AnalyticsScreen {
 private extension AnalyticsScreen {
     var statsRow: some View {
         HStack(spacing: 12) {
-            statTile(value: viewModel.totalListeners.compactCount, label: "Unique listeners", icon: .users)
-            statTile(value: formatTime(viewModel.avgListenSeconds), label: "Avg. listen time", icon: .clock)
+            AnalyticsStatTile(value: viewModel.totalListeners.compactCount, label: "Unique listeners", icon: .users)
+            AnalyticsStatTile(value: formatTime(viewModel.avgListenSeconds), label: "Avg. listen time", icon: .clock)
         }
-    }
-
-    func statTile(value: String, label: String, icon: LucideIcon.Name) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LucideIcon(icon, .sm).foregroundStyle(Color.brand)
-            Text(value).font(.appTitle).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
-            Text(label).font(.appCaption).foregroundStyle(Color.vText3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 16))
     }
 }
 
@@ -186,7 +160,7 @@ private extension AnalyticsScreen {
         if let engagement = viewModel.engagement {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 4) {
-                    sectionLabel("Audience")
+                    AnalyticsSectionLabel("Audience")
                     Text("Engagement across your profile and tracks · +N is the last 30 days")
                         .font(.appCaption).foregroundStyle(Color.vText3)
                 }
@@ -242,48 +216,12 @@ private extension AnalyticsScreen {
     }
 }
 
-// MARK: - Where plays come from
-
-private extension AnalyticsScreen {
-    var sourcesCard: some View {
-        let total = max(viewModel.totalSourcePlays, 1)
-        return VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                sectionLabel("Where plays come from")
-                Text("How listeners reached your tracks")
-                    .font(.appCaption).foregroundStyle(Color.vText3)
-            }
-            ForEach(viewModel.topSources, id: \.label) { source in
-                let pct = Int((Double(source.count) / Double(total) * 100).rounded())
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(source.label).font(.appFootnote).foregroundStyle(.white)
-                        Spacer()
-                        Text("\(pct)%").font(.appCaption).foregroundStyle(Color.vText2).monospacedDigit()
-                    }
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(.white.opacity(0.06))
-                            Capsule().fill(Color.brand.opacity(0.85))
-                                .frame(width: max(6, geo.size.width * CGFloat(source.count) / CGFloat(total)))
-                        }
-                    }
-                    .frame(height: 6)
-                }
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
-    }
-}
-
 // MARK: - Top tracks (ranked)
 
 private extension AnalyticsScreen {
     var tracksCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            sectionLabel("Top tracks")
+            AnalyticsSectionLabel("Top tracks")
             VStack(spacing: 14) {
                 ForEach(Array(viewModel.tracks.enumerated()), id: \.element.id) { index, track in
                     NavigationLink {
@@ -305,7 +243,7 @@ private extension AnalyticsScreen {
             Text("\(rank)")
                 .font(.appFootnote).foregroundStyle(Color.vText3)
                 .frame(width: 16)
-            ArtworkView(track.coverURL.map { .webImage($0) } ?? .placeholder(name: track.title), cornerRadius: 8)
+            ArtworkView(.placeholder(track.coverURL, name: track.title), cornerRadius: 8)
                 .frame(width: 46, height: 46)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
@@ -327,13 +265,6 @@ private extension AnalyticsScreen {
 // MARK: - Helpers
 
 private extension AnalyticsScreen {
-    func sectionLabel(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(.appLabel)
-            .tracking(0.8)
-            .foregroundStyle(Color.vText3)
-    }
-
     func formatTime(_ seconds: Int) -> String { seconds.durationLabel }
 
     var emptyState: some View {
@@ -399,136 +330,6 @@ private extension AnalyticsScreen {
         }
         .padding(.horizontal, ViewConst.screenPaddings)
         .shimmering()
-    }
-}
-
-// MARK: - Trend chart (filled area + line)
-
-struct AnalyticsTrendChart: View {
-    let values: [Int]
-
-    var body: some View {
-        GeometryReader { geo in
-            let maxValue = max(values.max() ?? 0, 1)
-            let w = geo.size.width
-            let h = geo.size.height
-            let points = points(in: CGSize(width: w, height: h), maxValue: maxValue)
-
-            ZStack {
-                if let first = points.first, let last = points.last {
-                    // Filled area under the line.
-                    Path { path in
-                        path.move(to: CGPoint(x: first.x, y: h))
-                        path.addLine(to: first)
-                        for point in points.dropFirst() { path.addLine(to: point) }
-                        path.addLine(to: CGPoint(x: last.x, y: h))
-                        path.closeSubpath()
-                    }
-                    .fill(LinearGradient(
-                        colors: [Color.brand.opacity(0.35), Color.brand.opacity(0)],
-                        startPoint: .top, endPoint: .bottom
-                    ))
-
-                    // The line itself.
-                    Path { path in
-                        path.move(to: first)
-                        for point in points.dropFirst() { path.addLine(to: point) }
-                    }
-                    .stroke(Color.brand, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                }
-            }
-        }
-    }
-
-    private func points(in size: CGSize, maxValue: Int) -> [CGPoint] {
-        guard values.count > 1 else { return [] }
-        return values.enumerated().map { index, value in
-            CGPoint(
-                x: size.width * CGFloat(index) / CGFloat(values.count - 1),
-                y: size.height - (CGFloat(value) / CGFloat(maxValue)) * size.height
-            )
-        }
-    }
-}
-
-// MARK: - Scrubbable trend chart (drag to inspect a day)
-
-/// The dashboard trend chart with touch scrubbing: drag across it to pin a day
-/// (dashed rule + dot) and report its index up via `scrubIndex` — the overview
-/// header swaps to that day's date + plays while held; release clears it.
-struct ScrubbableTrendChart: View {
-    let values: [Int]
-    @Binding var scrubIndex: Int?
-
-    var body: some View {
-        GeometryReader { geo in
-            let maxValue = max(values.max() ?? 0, 1)
-            let size = geo.size
-            let points = points(in: size, maxValue: maxValue)
-
-            ZStack {
-                if let first = points.first, let last = points.last {
-                    // Filled area under the line.
-                    Path { path in
-                        path.move(to: CGPoint(x: first.x, y: size.height))
-                        path.addLine(to: first)
-                        for point in points.dropFirst() { path.addLine(to: point) }
-                        path.addLine(to: CGPoint(x: last.x, y: size.height))
-                        path.closeSubpath()
-                    }
-                    .fill(LinearGradient(
-                        colors: [Color.brand.opacity(0.35), Color.brand.opacity(0)],
-                        startPoint: .top, endPoint: .bottom
-                    ))
-
-                    // The line itself.
-                    Path { path in
-                        path.move(to: first)
-                        for point in points.dropFirst() { path.addLine(to: point) }
-                    }
-                    .stroke(Color.brand, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-
-                    // Scrub rule + pinned-day dot.
-                    if let index = scrubIndex, points.indices.contains(index) {
-                        let point = points[index]
-                        Path { path in
-                            path.move(to: CGPoint(x: point.x, y: 0))
-                            path.addLine(to: CGPoint(x: point.x, y: size.height))
-                        }
-                        .stroke(Color.white.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                        Circle()
-                            .fill(Color.brand)
-                            .frame(width: 9, height: 9)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
-                            .position(point)
-                    }
-                }
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { gesture in
-                        guard values.count > 1 else { return }
-                        let fraction = min(max(gesture.location.x / max(size.width, 1), 0), 1)
-                        let index = Int((fraction * CGFloat(values.count - 1)).rounded())
-                        if index != scrubIndex {
-                            scrubIndex = index
-                            Haptics.impact(.soft)
-                        }
-                    }
-                    .onEnded { _ in scrubIndex = nil }
-            )
-        }
-    }
-
-    private func points(in size: CGSize, maxValue: Int) -> [CGPoint] {
-        guard values.count > 1 else { return [] }
-        return values.enumerated().map { index, value in
-            CGPoint(
-                x: size.width * CGFloat(index) / CGFloat(values.count - 1),
-                y: size.height - (CGFloat(value) / CGFloat(maxValue)) * size.height
-            )
-        }
     }
 }
 

@@ -131,7 +131,7 @@ final class ListenAnalyticsTracker {
             metadata: [
                 "source": .null,
                 "duration": .double(duration),
-                "timestamp": .string(ISO8601DateFormatter().string(from: Date())),
+                "timestamp": .string(MessageTime.isoNow()),
             ]
         )
     }

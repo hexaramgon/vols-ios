@@ -26,10 +26,7 @@ struct MessagesScreen: View {
     @State private var showSearchField = false
     @State private var archivedOpen = false
 
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -77,53 +74,15 @@ struct MessagesScreen: View {
             // Inside the header chrome so the bar background sits behind the
             // field — not floating over the page content.
             if showSearchField {
-                searchRow
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                HeaderSearchField(
+                    prompt: "Search messages…",
+                    text: $viewModel.searchText,
+                    isRevealed: $showSearchField,
+                    focus: $searchFocused
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-    }
-
-    /// Search field revealed by the header search icon. Cancel hides it + clears.
-    private var searchRow: some View {
-        HStack(spacing: 12) {
-            searchField
-            Button("Cancel") {
-                searchFocused = false
-                withAnimation(.easeInOut(duration: 0.2)) { showSearchField = false }
-                viewModel.searchText = ""
-            }
-            .font(.appCallout)
-            .foregroundStyle(.white)
-        }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.bottom, 12)
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 10) {
-            LucideIcon(.search, .md).foregroundStyle(Color.vText3)
-            TextField("", text: $viewModel.searchText, prompt: Text("Search messages…").foregroundColor(Color.vText3))
-                .font(.appCallout)
-                .foregroundStyle(.white)
-                .tint(.white)
-                .focused($searchFocused)
-                .autocorrectionDisabled()
-            if !viewModel.searchText.isEmpty {
-                Button { viewModel.searchText = "" } label: {
-                    LucideIcon(.circleX, .md)
-                        .foregroundStyle(Color.vText3)
-                        .frame(width: 28, height: 28)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12)
-        // Fixed height — the clear button (28pt) appearing once you type must
-        // not grow the field.
-        .frame(height: 42)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.vBorder, lineWidth: 1))
     }
 
     // MARK: - Content
@@ -317,22 +276,20 @@ private struct MessagesSkeleton: View {
                 .padding(.horizontal, ViewConst.screenPaddings)
                 .padding(.bottom, 10)
 
-            ForEach(0..<8, id: \.self) { _ in
-                HStack(spacing: 12) {
-                    Circle().fill(bone).frame(width: 46, height: 46)
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack {
-                            Capsule().fill(bone).frame(width: 130, height: 13)
-                            Spacer()
-                            Capsule().fill(bone).frame(width: 36, height: 10)
-                        }
-                        Capsule().fill(bone).frame(width: 200, height: 11)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 11)
-                .padding(.horizontal, 8)
-            }
+            SkeletonRows(
+                count: 8,
+                thumb: .circle(size: 46),
+                line1: CGSize(width: 130, height: 13),
+                line2: CGSize(width: 200, height: 11),
+                line1Trailing: CGSize(width: 36, height: 10),
+                lineSpacing: 7,
+                thumbSpacing: 12,
+                rowSpacing: 2,
+                horizontalPadding: 20,
+                verticalPadding: 11,
+                boneOpacity: 0.08,
+                shimmers: false
+            )
         }
         .shimmering()
     }

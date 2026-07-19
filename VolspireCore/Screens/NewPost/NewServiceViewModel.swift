@@ -10,6 +10,7 @@
 import DesignSystem
 import Foundation
 import Services
+import SharedUtilities
 import SwiftUI
 
 struct ServiceTypeOption: Identifiable, Sendable {
@@ -95,9 +96,11 @@ final class NewServiceViewModel {
     var portfolio: [AudioClipDraft] = []
     var visibility: String = "public"
 
-    var coverData: Data?
-    var coverFileName: String?
-    var coverImage: UIImage?
+    // Cover (optional) — staged via the shared CoverDraft.
+    private var cover = CoverDraft()
+    var coverImage: UIImage? { cover.image }
+    var coverData: Data? { cover.data }
+    var coverFileName: String? { cover.fileName }
 
     var uploadState: UploadState = .idle
 
@@ -193,25 +196,20 @@ final class NewServiceViewModel {
     }
 
     func handleCoverImage(_ image: UIImage) {
-        coverImage = image
-        coverData = image.jpegData(compressionQuality: 0.85)
-        coverFileName = "cover_\(UUID().uuidString).jpg"
+        cover.set(image)
     }
 
     func clearCover() {
-        coverImage = nil
-        coverData = nil
-        coverFileName = nil
+        cover.clear()
     }
 
     func handlePortfolioFile(rowId: UUID, result: Result<URL, Error>) {
         guard let index = portfolio.firstIndex(where: { $0.id == rowId }) else { return }
         switch result {
         case .success(let url):
-            guard url.startAccessingSecurityScopedResource() else { return }
-            defer { url.stopAccessingSecurityScopedResource() }
             do {
-                portfolio[index].data = try Data(contentsOf: url)
+                guard let data = try SecurityScopedFile.read(url) else { return }
+                portfolio[index].data = data
                 portfolio[index].fileName = url.lastPathComponent
             } catch {
                 uploadState = .error("Failed to read audio file")

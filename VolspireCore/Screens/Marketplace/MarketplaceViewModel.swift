@@ -14,7 +14,6 @@ import SharedUtilities
 
 @Observable @MainActor
 final class MarketplaceViewModel {
-    enum LoadState: Equatable { case idle, loading, loaded, error(String) }
     enum Category: String, CaseIterable, Hashable { case all = "All", packs = "Packs", services = "Services" }
 
     enum Listing: Identifiable {

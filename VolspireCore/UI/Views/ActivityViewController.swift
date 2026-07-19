@@ -4,6 +4,7 @@
 //
 //
 
+import Services
 import SwiftUI
 import UIKit
 
@@ -41,5 +42,24 @@ extension UIApplication {
         let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
         vc.popoverPresentationController?.sourceView = presenter.view
         presenter.present(vc, animated: true)
+    }
+}
+
+enum ShareActions {
+    /// THE share-a-track flow: canonical copy + the track's web link + the
+    /// analytics event. (Three hand-rolled variants had drifted — one shared
+    /// without the link, one without logging the event.)
+    @MainActor
+    static func shareTrack(title: String, trackId: String?) {
+        AnalyticsService.shared?.log(
+            .shareClicked,
+            trackId: trackId,
+            metadata: ["kind": "track", "method": "share_sheet"]
+        )
+        var text = "Check out \"\(title)\" on Volspire!"
+        if let trackId {
+            text += " https://volspire.com/track/\(trackId)"
+        }
+        UIApplication.presentActivitySheet([text])
     }
 }

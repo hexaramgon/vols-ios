@@ -38,35 +38,58 @@ extension HomeScreen {
 
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 ForEach(AllSection.allCases.filter { $0 != .everything }, id: \.self) { section in
-                    filterTile(section)
+                    filterSheetTile(.grid, icon: section.icon, label: section.label,
+                                    isOn: allSection == section) { allSection = section }
                 }
             }
 
-            everythingTile
+            // The no-filter state, styled like the tiles but full-width and slimmer.
+            filterSheetTile(.row, icon: .zap, label: "Everything",
+                            isOn: allSection == .everything) { allSection = .everything }
         }
         .padding(.horizontal, 20)
         .padding(.top, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
         .presentationDetents([.height(384)])
-        .presentationDragIndicator(.visible)
         .sheetBackground()
     }
 
-    func filterTile(_ section: AllSection) -> some View {
-        let isOn = allSection == section
-        return Button {
-            withAnimation(.easeInOut(duration: 0.18)) { allSection = section }
+    /// The two shapes a filter-sheet tile comes in: the icon-over-label grid
+    /// tile, and the slim full-width "no filter" row.
+    enum FilterTileLayout { case grid, row }
+
+    /// One recipe for every filter-sheet tile — white fill with black content
+    /// when selected, faint fill + hairline stroke when not. Picking a tile
+    /// applies `select` (animated) and dismisses the sheet.
+    func filterSheetTile(_ layout: FilterTileLayout, icon: LucideIcon.Name, label: String,
+                         isOn: Bool, select: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) { select() }
             showFilterSheet = false
         } label: {
-            VStack(spacing: 8) {
-                LucideIcon(section.icon, .lg)
-                Text(section.label)
-                    .font(.appFootnoteMedium)
+            Group {
+                switch layout {
+                case .grid:
+                    VStack(spacing: 8) {
+                        LucideIcon(icon, .lg)
+                        Text(label)
+                            .font(.appFootnoteMedium)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                    .padding(.vertical, 18)
+                    .padding(.horizontal, 4)
+                case .row:
+                    HStack(spacing: 8) {
+                        LucideIcon(icon, .sm)
+                        Text(label)
+                            .font(.appFootnoteMedium)
+                    }
+                    .padding(.vertical, 14)
+                }
             }
             .foregroundStyle(isOn ? .black : .white.opacity(0.85))
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 18)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(isOn ? Color.white : Color.white.opacity(0.05))
@@ -103,11 +126,15 @@ extension HomeScreen {
                     spacing: 10
                 ) {
                     ForEach(listingCategories) { option in
-                        collabFilterTile(option)
+                        filterSheetTile(.grid, icon: option.icon, label: option.label,
+                                        isOn: collabCategory == option.id) { collabCategory = option.id }
                     }
                 }
 
-                allListingsTile
+                // The no-filter state for listings, styled like the All feed's
+                // Everything tile.
+                filterSheetTile(.row, icon: .zap, label: "All Listings",
+                                isOn: collabCategory == nil) { collabCategory = nil }
             }
             .padding(.horizontal, 20)
             .padding(.top, 24)
@@ -116,98 +143,11 @@ extension HomeScreen {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
         // Sized to exactly fit the tiles — no empty tail.
         .presentationDetents([.height(collabFilterSheetHeight + ViewConst.safeAreaInsets.bottom + 8)])
-        .presentationDragIndicator(.visible)
         .sheetBackground()
     }
 
-    func collabFilterTile(_ option: ListingCategoryOption) -> some View {
-        let isOn = collabCategory == option.id
-        return Button {
-            withAnimation(.easeInOut(duration: 0.18)) { collabCategory = option.id }
-            showFilterSheet = false
-        } label: {
-            VStack(spacing: 8) {
-                LucideIcon(option.icon, .lg)
-                Text(option.label)
-                    .font(.appFootnoteMedium)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-            }
-            .foregroundStyle(isOn ? .black : .white.opacity(0.85))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 18)
-            .padding(.horizontal, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isOn ? Color.white : Color.white.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(isOn ? 0 : 0.08), lineWidth: 1)
-            )
-            .contentShape(.rect(cornerRadius: 16))
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// The no-filter state for listings, styled like the All feed's Everything tile.
-    var allListingsTile: some View {
-        let isOn = collabCategory == nil
-        return Button {
-            withAnimation(.easeInOut(duration: 0.18)) { collabCategory = nil }
-            showFilterSheet = false
-        } label: {
-            HStack(spacing: 8) {
-                LucideIcon(.zap, .sm)
-                Text("All Listings")
-                    .font(.appFootnoteMedium)
-            }
-            .foregroundStyle(isOn ? .black : .white.opacity(0.85))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isOn ? Color.white : Color.white.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(isOn ? 0 : 0.08), lineWidth: 1)
-            )
-            .contentShape(.rect(cornerRadius: 16))
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// The no-filter state, styled like the tiles but full-width and slimmer.
-    var everythingTile: some View {
-        let isOn = allSection == .everything
-        return Button {
-            withAnimation(.easeInOut(duration: 0.18)) { allSection = .everything }
-            showFilterSheet = false
-        } label: {
-            HStack(spacing: 8) {
-                LucideIcon(.zap, .sm)
-                Text("Everything")
-                    .font(.appFootnoteMedium)
-            }
-            .foregroundStyle(isOn ? .black : .white.opacity(0.85))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(isOn ? Color.white : Color.white.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(isOn ? 0 : 0.08), lineWidth: 1)
-            )
-            .contentShape(.rect(cornerRadius: 16))
-        }
-        .buttonStyle(.plain)
-    }
 }
 
 @Observable final class ExploreHeaderState {
@@ -558,19 +498,7 @@ extension HomeScreen {
             Text("Folders").font(.appFont.sectionTitle).foregroundStyle(.white)
             Spacer()
             if !viewModel.folders.isEmpty {
-                Button { viewModel.showCreateFolder = true } label: {
-                    HStack(spacing: 5) {
-                        LucideIcon(.plus, .sm)
-                        Text("New")
-                    }
-                    .font(.appFootnoteMedium)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(LinearGradient.sendAccent, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                    .contentShape(.rect(cornerRadius: 11))
-                }
-                .buttonStyle(.plain)
+                AccentPillButton(title: "New") { viewModel.showCreateFolder = true }
             }
         }
         .padding(.horizontal, pad)
@@ -589,19 +517,7 @@ extension HomeScreen {
                     .foregroundStyle(Color.vText3)
             }
             Spacer(minLength: 8)
-            Button { viewModel.showCreateFolder = true } label: {
-                HStack(spacing: 5) {
-                    LucideIcon(.plus, .sm)
-                    Text("Create")
-                }
-                .font(.appFootnoteMedium)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(LinearGradient.sendAccent, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                .contentShape(.rect(cornerRadius: 11))
-            }
-            .buttonStyle(.plain)
+            AccentPillButton(title: "Create") { viewModel.showCreateFolder = true }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)

@@ -45,7 +45,7 @@ struct NewPostView: View {
             }
         }
         .padding(.bottom, 20)
-        .sheetBackground()
+        .sheetBackground(dragIndicator: false)
         .background(
             GeometryReader { geometry in
                 Color.clear.preference(key: ContentHeightKey.self, value: geometry.size.height)

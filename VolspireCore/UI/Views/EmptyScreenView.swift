@@ -13,6 +13,9 @@ struct EmptyStateView: View {
     let icon: LucideIcon.Name
     let title: String
     var message: String? = nil
+    /// Expands to fill and centers vertically — replaces the per-screen
+    /// wrapper frames some callers added around this view.
+    var centered: Bool = false
 
     var body: some View {
         VStack(spacing: 10) {
@@ -25,7 +28,7 @@ struct EmptyStateView: View {
                     .multilineTextAlignment(.center)
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: centered ? .infinity : nil)
         .padding(.horizontal, 40)
     }
 }

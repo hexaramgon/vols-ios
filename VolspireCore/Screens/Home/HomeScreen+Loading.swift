@@ -7,7 +7,6 @@
 
 import Combine
 import DesignSystem
-import Kingfisher
 import MediaLibrary
 import Services
 import SwiftUI
@@ -152,30 +151,6 @@ extension HomeScreen {
 
 /// Animated 5-bar equalizer shown over the cover of the active track, mirroring the
 /// web app's "Now Playing" overlay. Bars pulse while playing and rest while paused.
-struct EqualizerBars: View {
-    var isAnimating: Bool
-    @State var raised = false
-    private let heights: [CGFloat] = [12, 22, 9, 18, 14]
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 3) {
-            ForEach(heights.indices, id: \.self) { i in
-                Capsule(style: .continuous)
-                    .fill(.white)
-                    .frame(width: 3, height: heights[i])
-                    .scaleEffect(y: raised ? 1 : 0.4, anchor: .center)
-                    .animation(
-                        isAnimating
-                            ? .easeInOut(duration: 0.46 + Double(i) * 0.12).repeatForever(autoreverses: true)
-                            : .default,
-                        value: raised
-                    )
-            }
-        }
-        .frame(height: 24)
-        .onAppear { raised = true }
-    }
-}
 
 extension View {
     /// Web-style active-track treatment for a cover: dark scrim, equalizer + "Now
@@ -187,7 +162,7 @@ extension View {
                 ZStack {
                     Color.black.opacity(0.4)
                     VStack(spacing: 6) {
-                        EqualizerBars(isAnimating: isPlaying)
+                        EqualizerBars(isAnimating: isPlaying).frame(height: 24)
                         Text("Now Playing")
                             .font(.appNanoSemibold)
                             .tracking(0.8)
@@ -437,15 +412,7 @@ extension HomeScreen {
             router.navigateToProfile(userId: item.id)
         } label: {
             HStack(spacing: 12) {
-                Group {
-                    if let url = item.avatarURL {
-                        KFImage(url).downsampled(to: 44).resizable().scaledToFill()
-                    } else {
-                        ZStack { Color.vSurface; LucideIcon(.user, .md).foregroundStyle(Color.vText2) }
-                    }
-                }
-                .frame(width: 44, height: 44)
-                .clipShape(Circle())
+                AvatarView(url: item.avatarURL, name: item.username, size: 44)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("@\(item.username)").font(.appCalloutSemibold).foregroundStyle(.white).lineLimit(1)

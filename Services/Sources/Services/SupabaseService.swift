@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import SharedUtilities
 import Supabase
 
 // MARK: - Supabase Configuration
@@ -116,14 +117,13 @@ public final class SupabaseService: Sendable {
     /// Uploads a message attachment to the private `message-attachments` bucket and
     /// returns its storage path (mirrors the web app's path scheme).
     public func uploadMessageAttachment(convoId: String, userId: String, fileName: String, data: Data, fileType: String) async throws -> String {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        let safeExt = ext.isEmpty ? "bin" : ext
         let stamp = Int(Date().timeIntervalSince1970 * 1000)
-        let path = "\(convoId)/\(userId)/\(stamp)-\(UUID().uuidString).\(safeExt)"
-        try await client.storage
-            .from(.messageAttachments)
-            .upload(path, data: data, options: .init(contentType: fileType))
-        return path
+        return try await uploadToStorage(
+            .messageAttachments,
+            path: "\(convoId)/\(userId)/\(stamp)-\(UUID().uuidString).\(Self.safeStorageExt(fileName))",
+            data: data,
+            contentType: fileType
+        )
     }
 
     /// Sends a message carrying an attachment (stored at `fileUrl`); returns the new id.
@@ -339,7 +339,6 @@ public final class SupabaseService: Sendable {
 
     private struct CreatedPlaylist: Decodable {
         let playlistId: String
-        enum CodingKeys: String, CodingKey { case playlistId = "playlist_id" }
     }
 
     /// Updates a playlist's metadata (`update_playlist`). Owner-only; nil fields are left unchanged.
@@ -365,10 +364,12 @@ public final class SupabaseService: Sendable {
     /// each save's URL unique so caches refetch the new image.
     public func uploadPlaylistCover(playlistId: String, userId: String, imageData: Data) async throws -> String {
         let stamp = Int(Date().timeIntervalSince1970)
-        let path = "Playlists/\(userId.lowercased())/\(playlistId)-\(stamp).jpg"
-        try await client.storage
-            .from(.postUploads)
-            .upload(path, data: imageData, options: .init(contentType: "image/jpeg"))
+        let path = try await uploadToStorage(
+            .postUploads,
+            path: "Playlists/\(userId.lowercased())/\(playlistId)-\(stamp).jpg",
+            data: imageData,
+            contentType: "image/jpeg"
+        )
         return try client.storage
             .from(.postUploads)
             .getPublicURL(path: path)
@@ -430,9 +431,7 @@ public final class SupabaseService: Sendable {
     /// Toggles follow/unfollow for a user
     public func toggleFollow(targetUser: String) async throws {
         try await executeRpc("toggle_user_follow", params: ["target_user": targetUser])
-        // Invalidate cached profile for this user
-        let cacheKey = APICache.key("get_user_profile", params: ["profile_id": targetUser])
-        await cache.remove(cacheKey)
+        await invalidateProfile(userId: targetUser)
     }
 
     // MARK: - Reporting & blocking (UGC safety, App Store 1.2)
@@ -471,7 +470,7 @@ public final class SupabaseService: Sendable {
     }
 
     /// Users the current account has blocked (`get_blocked_users`).
-    public func getBlockedUsers() async throws -> [ApiBlockedUser] {
+    public func getBlockedUsers() async throws -> [ApiUserSummary] {
         return try await performRpc("get_blocked_users")
     }
 
@@ -485,18 +484,11 @@ public final class SupabaseService: Sendable {
             "p_message": message,
             "p_track_ids": (trackIds?.isEmpty == false ? trackIds! : NSNull()) as Any
         ]
-        do {
-            let jsonData = try JSONSerialization.data(withJSONObject: params)
-            let anyJSON = try JSONDecoder().decode(AnyJSON.self, from: jsonData)
-            _ = try await client.rpc("send_collab_request", params: anyJSON).execute()
-        } catch {
-            // Keep the raw error text (PostgrestError includes its `message`) so the
-            // caller can detect specific guards like `collab_rate_limited`.
-            debugLog("[SupabaseService] send_collab_request ERROR: \(error)")
-            throw SupabaseError.serverError("\(error)")
-        }
+        // mapError keeps the raw error text (PostgrestError includes its
+        // `message`), so the caller can detect guards like `collab_rate_limited`.
+        try await executeRpc("send_collab_request", params: params)
         // The viewer's collaborator status changed — drop the cached profile.
-        await cache.remove(APICache.key("get_user_profile", params: ["profile_id": targetId]))
+        await invalidateProfile(userId: targetId)
     }
 
     /// Live collaborator status with another user — 'none' / 'pending' /
@@ -514,7 +506,7 @@ public final class SupabaseService: Sendable {
     public func removeCollaborator(userId: String) async throws {
         try await executeRpc("remove_collaborator", params: ["p_target_id": userId])
         // The viewer's collaborator status changed — drop the cached profile.
-        await cache.remove(APICache.key("get_user_profile", params: ["profile_id": userId]))
+        await invalidateProfile(userId: userId)
     }
 
     /// Creates a new folder and returns its id — `create_folder` returns
@@ -535,7 +527,6 @@ public final class SupabaseService: Sendable {
 
     private struct CreatedFolder: Decodable {
         let folderId: String
-        enum CodingKeys: String, CodingKey { case folderId = "folder_id" }
     }
 
     /// Renames/updates a folder (`update_folder`). Owner-only; `description` is
@@ -580,13 +571,13 @@ public final class SupabaseService: Sendable {
     }
 
     /// Searches users by username prefix (`search_users`).
-    public func searchUsers(query: String, limit: Int = 8) async throws -> [ApiUserSearchResult] {
+    public func searchUsers(query: String, limit: Int = 8) async throws -> [ApiUserSummary] {
         try await performRpc("search_users", params: ["p_query": query, "p_limit": limit])
     }
 
     /// Your collaborators — people you've worked with — for the folder member
     /// picker (mirrors the web's `get_my_collaborators`, used by the share-folder modal).
-    public func getMyCollaborators() async throws -> [ApiUserSearchResult] {
+    public func getMyCollaborators() async throws -> [ApiUserSummary] {
         try await performRpc("get_my_collaborators")
     }
 
@@ -596,48 +587,21 @@ public final class SupabaseService: Sendable {
         try await performRpc("search_all", params: ["p_query": query, "p_limit": limit])
     }
 
-    /// Uploads a file to Supabase Storage then saves metadata via RPC.
-    /// The storage key is a fresh UUID — the same scheme as
-    /// `addAttachmentToFolder` and the web. Raw display names made invalid or
-    /// colliding storage keys (spaces/brackets/$; re-uploading a name 409'd),
-    /// and the `files` bucket is private anyway: the bare path is stored and
-    /// signed at display time, while the display name lives in metadata.
-    public func uploadFile(folderId: String, fileName: String, fileData: Data, fileType: String, fileSize: Int) async throws {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        let storagePath = "\(folderId)/\(UUID().uuidString.lowercased()).\(ext.isEmpty ? "bin" : ext)"
-
-        try await client.storage
-            .from(.files)
-            .upload(storagePath, data: fileData, options: .init(contentType: fileType))
-
-        let params: [String: Any?] = [
-            "p_folder_id": folderId,
-            "p_name": fileName,
-            "p_file_url": storagePath,
-            "p_file_type": fileType,
-            "p_file_size": fileSize,
-            "p_timespan": nil
-        ]
-        try await executeRpc("upload_file_metadata", params: params as [String: Any])
-
-        // Invalidate cached folder files
-        let cacheKey = APICache.key("get_folder_files", params: ["p_folder_id": folderId])
-        await cache.remove(cacheKey)
-    }
-
-    /// Copies a message attachment into a workspace folder: uploads the bytes to
-    /// the `files` bucket under a fresh UUID path, then registers the metadata
-    /// via `upload_file_metadata` — the same path the web's chat "Add to
-    /// workspace" takes. Stores the bare storage path (resolved at display
-    /// time, like the web) and keeps the original attachment name as the
-    /// file's display name.
-    public func addAttachmentToFolder(folderId: String, fileName: String, fileData: Data, fileType: String) async throws {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        let storagePath = "\(folderId)/\(UUID().uuidString.lowercased()).\(ext.isEmpty ? "bin" : ext)"
-
-        try await client.storage
-            .from(.files)
-            .upload(storagePath, data: fileData, options: .init(contentType: fileType))
+    /// Uploads a file into a workspace folder then saves metadata via RPC —
+    /// used both for direct uploads and for copying a message attachment into a
+    /// folder (the same path the web's chat "Add to workspace" takes).
+    /// The storage key is a fresh UUID, same scheme as the web: raw display
+    /// names made invalid or colliding storage keys (spaces/brackets/$;
+    /// re-uploading a name 409'd), and the `files` bucket is private anyway —
+    /// the bare path is stored and signed at display time, while the display
+    /// name lives in metadata.
+    public func uploadFile(folderId: String, fileName: String, fileData: Data, fileType: String) async throws {
+        let storagePath = try await uploadToStorage(
+            .files,
+            path: "\(folderId)/\(UUID().uuidString.lowercased()).\(Self.safeStorageExt(fileName))",
+            data: fileData,
+            contentType: fileType
+        )
 
         let params: [String: Any?] = [
             "p_folder_id": folderId,
@@ -759,33 +723,29 @@ public final class SupabaseService: Sendable {
     ) async throws -> String {
         let uid = userId.lowercased()
 
-        var coverPath: String?
-        if let coverData, let coverFileName {
-            let path = "Visuals/\(uid)/\(UUID().uuidString)_cover.\(Self.safeStorageExt(coverFileName))"
-            try await client.storage
-                .from(.postUploads)
-                .upload(path, data: coverData, options: .init(contentType: "image/jpeg"))
-            coverPath = path
+        let coverPath = try await uploadCoverIfPicked(coverData, fileName: coverFileName) {
+            "Visuals/\(uid)/\(UUID().uuidString)_cover.\($0)"
         }
 
         // The streamable master — always lands in p_audio_url; videos live
         // under Visuals/ and flip p_has_visual.
         let folder = isVideo ? "Visuals" : "Posts"
-        let mediaPath = "\(folder)/\(uid)/\(UUID().uuidString)_\(Self.safeStorageName(mediaFileName))"
-        let mediaMime = isVideo ? "video/mp4" : Self.audioMimeType(forExt: Self.safeStorageExt(mediaFileName))
-        try await client.storage
-            .from(.postUploads)
-            .upload(mediaPath, data: mediaData, options: .init(contentType: mediaMime))
+        let mediaPath = try await uploadToStorage(
+            .postUploads,
+            path: "\(folder)/\(uid)/\(UUID().uuidString)_\(Self.safeStorageName(mediaFileName))",
+            data: mediaData,
+            contentType: isVideo ? "video/mp4" : Self.audioMimeType(forExt: Self.safeStorageExt(mediaFileName))
+        )
 
         // Tier assets — private bucket, path starts with the uploader's id
         // to match the bucket's RLS policy.
         var assetPaths: [String: String] = [:]
         for asset in assets {
-            let path = "\(uid)/\(UUID().uuidString)_\(asset.kind)_\(Self.safeStorageName(asset.fileName))"
-            try await client.storage
-                .from(.trackAssets)
-                .upload(path, data: asset.data)
-            assetPaths[asset.kind] = path
+            assetPaths[asset.kind] = try await uploadToStorage(
+                .trackAssets,
+                path: "\(uid)/\(UUID().uuidString)_\(asset.kind)_\(Self.safeStorageName(asset.fileName))",
+                data: asset.data
+            )
         }
 
         // Per-tier asset bundles — same kind mapping as the web form.
@@ -831,7 +791,6 @@ public final class SupabaseService: Sendable {
         // freshly-posted track (expanded player).
         struct Created: Decodable {
             let trackId: String
-            enum CodingKeys: String, CodingKey { case trackId = "track_id" }
         }
         let created: Created = try await performRpc("create_track_v2", params: params)
         // The new track should appear on the author's profile immediately —
@@ -854,7 +813,7 @@ public final class SupabaseService: Sendable {
             "p_visibility": visibility,
         ]
         try await executeRpc("update_track", params: params)
-        await cache.remove(APICache.key("get_user_profile", params: ["profile_id": userId]))
+        await invalidateProfile(userId: userId)
         await cache.remove(APICache.key("get_track_metadata", params: ["p_track_id": trackId]))
     }
 
@@ -862,7 +821,7 @@ public final class SupabaseService: Sendable {
     /// storage files aren't removed). Every read RPC filters `deprecated = false`.
     public func deleteTrack(trackId: String, userId: String) async throws {
         try await executeRpc("delete_track", params: ["p_track_id": trackId])
-        await cache.remove(APICache.key("get_user_profile", params: ["profile_id": userId]))
+        await invalidateProfile(userId: userId)
     }
 
     /// Author-only: edits a track's metadata via `update_track` — mirrors the web's
@@ -885,20 +844,15 @@ public final class SupabaseService: Sendable {
         coverFileName: String?,
         userId: String
     ) async throws {
-        var coverArg: Any = NSNull()
-        if let coverData, let coverFileName {
-            let path = "Visuals/\(userId.lowercased())/\(UUID().uuidString)_cover.\(Self.safeStorageExt(coverFileName))"
-            try await client.storage
-                .from(.postUploads)
-                .upload(path, data: coverData, options: .init(contentType: "image/jpeg"))
-            coverArg = path
+        let coverPath = try await uploadCoverIfPicked(coverData, fileName: coverFileName) {
+            "Visuals/\(userId.lowercased())/\(UUID().uuidString)_cover.\($0)"
         }
 
         var params: [String: Any] = [
             "p_track_id": trackId,
             "p_title": title,
             "p_audio_url": NSNull(),
-            "p_cover_url": coverArg,
+            "p_cover_url": coverPath ?? NSNull(),
             "p_description": description ?? NSNull(),
             "p_visibility": visibility,
             "p_genre": genre,
@@ -908,7 +862,7 @@ public final class SupabaseService: Sendable {
         }
 
         try await executeRpc("update_track", params: params)
-        await cache.remove(APICache.key("get_user_profile", params: ["profile_id": userId]))
+        await invalidateProfile(userId: userId)
         await cache.remove(APICache.key("get_track_metadata", params: ["p_track_id": trackId]))
     }
 
@@ -946,13 +900,8 @@ public final class SupabaseService: Sendable {
         let uid = userId.lowercased()
         let packId = UUID().uuidString.lowercased()
 
-        var coverPath: String?
-        if let coverData, let coverFileName {
-            let path = "PackCovers/\(uid)/\(packId).\(Self.safeStorageExt(coverFileName))"
-            try await client.storage
-                .from(.postUploads)
-                .upload(path, data: coverData, options: .init(contentType: "image/jpeg", upsert: true))
-            coverPath = path
+        let coverPath = try await uploadCoverIfPicked(coverData, fileName: coverFileName, upsert: true) {
+            "PackCovers/\(uid)/\(packId).\($0)"
         }
 
         var fileRows: [[String: Any]] = []
@@ -960,10 +909,11 @@ public final class SupabaseService: Sendable {
             // uid-prefixed so the `packs_insert_authenticated` storage policy can pin
             // writes to the caller's own path (foldername[1] = auth.uid()); without the
             // prefix any authed user could write anywhere in the public-read bucket.
-            let path = "\(uid)/\(packId)/\(UUID().uuidString)_\(Self.safeStorageName(file.name))"
-            try await client.storage
-                .from(.packs)
-                .upload(path, data: file.data)
+            let path = try await uploadToStorage(
+                .packs,
+                path: "\(uid)/\(packId)/\(UUID().uuidString)_\(Self.safeStorageName(file.name))",
+                data: file.data
+            )
             fileRows.append([
                 "name": file.name,
                 "category": NSNull(),
@@ -1018,13 +968,8 @@ public final class SupabaseService: Sendable {
         coverFileName: String?,
         userId: String
     ) async throws {
-        var coverArg: Any = NSNull()
-        if let coverData, let coverFileName {
-            let path = "PackCovers/\(userId.lowercased())/\(packId).\(Self.safeStorageExt(coverFileName))"
-            try await client.storage
-                .from(.postUploads)
-                .upload(path, data: coverData, options: .init(contentType: "image/jpeg", upsert: true))
-            coverArg = path
+        let coverPath = try await uploadCoverIfPicked(coverData, fileName: coverFileName, upsert: true) {
+            "PackCovers/\(userId.lowercased())/\(packId).\($0)"
         }
         let params: [String: Any] = [
             "p_pack_id": packId,
@@ -1035,7 +980,7 @@ public final class SupabaseService: Sendable {
             "p_gradient": gradient,
             "p_tags": tags,
             "p_is_published": isPublished,
-            "p_cover_url": coverArg,
+            "p_cover_url": coverPath ?? NSNull(),
         ]
         try await executeRpc("update_pack", params: params)
     }
@@ -1104,24 +1049,11 @@ public final class SupabaseService: Sendable {
     ) async throws {
         let uid = userId.lowercased()
 
-        var coverPath: String?
-        if let coverData, let coverFileName {
-            let path = "ServiceCovers/\(uid)/\(UUID().uuidString).\(Self.safeStorageExt(coverFileName))"
-            try await client.storage
-                .from(.postUploads)
-                .upload(path, data: coverData, options: .init(contentType: "image/jpeg", upsert: true))
-            coverPath = path
+        let coverPath = try await uploadCoverIfPicked(coverData, fileName: coverFileName, upsert: true) {
+            "ServiceCovers/\(uid)/\(UUID().uuidString).\($0)"
         }
 
-        var portfolioRows: [[String: Any]] = []
-        for clip in portfolio {
-            let ext = Self.safeStorageExt(clip.fileName)
-            let path = "ServicePortfolios/\(uid)/\(UUID().uuidString).\(ext)"
-            try await client.storage
-                .from(.postUploads)
-                .upload(path, data: clip.data, options: .init(contentType: Self.audioMimeType(forExt: ext), upsert: true))
-            portfolioRows.append(["title": clip.title, "file_url": path])
-        }
+        let portfolioRows = try await uploadClipRows(portfolio, folder: "ServicePortfolios", userId: userId)
 
         let packagesJSON: [[String: Any]] = packages.map {
             [
@@ -1182,22 +1114,7 @@ public final class SupabaseService: Sendable {
         portfolio: [ListingAttachmentEdit],
         faqs: [ServiceFaqInput]
     ) async throws {
-        let uid = userId.lowercased()
-        var portfolioRows: [[String: Any]] = []
-        for clip in portfolio {
-            guard let data = clip.data, let fileName = clip.fileName else {
-                if let existing = clip.existingFileUrl {
-                    portfolioRows.append(["title": clip.title, "file_url": existing])
-                }
-                continue
-            }
-            let ext = Self.safeStorageExt(fileName)
-            let path = "ServicePortfolios/\(uid)/\(UUID().uuidString).\(ext)"
-            try await client.storage
-                .from(.postUploads)
-                .upload(path, data: data, options: .init(contentType: Self.audioMimeType(forExt: ext), upsert: true))
-            portfolioRows.append(["title": clip.title, "file_url": path])
-        }
+        let portfolioRows = try await uploadClipRows(portfolio, folder: "ServicePortfolios", userId: userId)
 
         let packagesJSON: [[String: Any]] = packages.map {
             ["name": $0.name, "price": $0.price, "delivery": $0.delivery, "revisions": $0.revisions, "features": $0.features]
@@ -1225,6 +1142,86 @@ public final class SupabaseService: Sendable {
             "p_is_active": NSNull(),
         ]
         try await executeRpc("update_service", params: params)
+    }
+
+    // MARK: - Storage upload helpers
+
+    /// The one storage-upload call: uploads bytes and returns the bare storage
+    /// path (paths are resolved to URLs at display time via StorageService).
+    @discardableResult
+    private func uploadToStorage(
+        _ bucket: StorageBucket,
+        path: String,
+        data: Data,
+        contentType: String? = nil,
+        upsert: Bool = false
+    ) async throws -> String {
+        try await client.storage
+            .from(bucket)
+            .upload(path, data: data, options: .init(contentType: contentType, upsert: upsert))
+        return path
+    }
+
+    /// Shared cover-image upload (covers are JPEG re-encodes from the picker).
+    /// Returns the bare path, or nil when no cover was picked. `path` receives
+    /// the sanitised extension and builds the bucket path.
+    private func uploadCoverIfPicked(
+        _ data: Data?,
+        fileName: String?,
+        upsert: Bool = false,
+        path: (_ ext: String) -> String
+    ) async throws -> String? {
+        guard let data, let fileName else { return nil }
+        return try await uploadToStorage(
+            .postUploads,
+            path: path(Self.safeStorageExt(fileName)),
+            data: data,
+            contentType: "image/jpeg",
+            upsert: upsert
+        )
+    }
+
+    /// The shared `{ title, file_url }` row builder for listing attachments and
+    /// service portfolios: uploads new clips to `<folder>/<uid>/<uuid>.<ext>`
+    /// and passes kept ones' existing paths straight through.
+    private func uploadClipRows(
+        _ clips: [ListingAttachmentEdit],
+        folder: String,
+        userId: String
+    ) async throws -> [[String: String]] {
+        var rows: [[String: String]] = []
+        for clip in clips {
+            // A newly-attached file (data) wins, so replacing a clip's audio takes;
+            // otherwise keep the existing path.
+            guard let data = clip.data, let fileName = clip.fileName else {
+                if let existing = clip.existingFileUrl {
+                    rows.append(["title": clip.title, "file_url": existing])
+                }
+                continue
+            }
+            let ext = Self.safeStorageExt(fileName)
+            let path = try await uploadToStorage(
+                .postUploads,
+                path: "\(folder)/\(userId.lowercased())/\(UUID().uuidString).\(ext)",
+                data: data,
+                contentType: Self.audioMimeType(forExt: ext),
+                upsert: true
+            )
+            rows.append(["title": clip.title, "file_url": path])
+        }
+        return rows
+    }
+
+    private func uploadClipRows(
+        _ clips: [ListingAttachmentUpload],
+        folder: String,
+        userId: String
+    ) async throws -> [[String: String]] {
+        try await uploadClipRows(
+            clips.map { ListingAttachmentEdit(title: $0.title, existingFileUrl: nil, data: $0.data, fileName: $0.fileName) },
+            folder: folder,
+            userId: userId
+        )
     }
 
     /// JSON-encodes a JSONSerialization-compatible value to text, for jsonb
@@ -1274,18 +1271,7 @@ public final class SupabaseService: Sendable {
         tags: [String],
         attachments: [ListingAttachmentUpload]
     ) async throws -> String {
-        var attachmentRows: [[String: String]] = []
-        for clip in attachments {
-            let rawExt = (clip.fileName as NSString).pathExtension
-                .lowercased()
-                .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
-            let ext = rawExt.isEmpty ? "bin" : String(rawExt.prefix(8))
-            let path = "ListingPortfolios/\(userId.lowercased())/\(UUID().uuidString).\(ext)"
-            try await client.storage
-                .from(.postUploads)
-                .upload(path, data: clip.data, options: .init(contentType: Self.audioMimeType(forExt: ext), upsert: true))
-            attachmentRows.append(["title": clip.title, "file_url": path])
-        }
+        let attachmentRows = try await uploadClipRows(attachments, folder: "ListingPortfolios", userId: userId)
 
         // p_attachments is a jsonb *array* — pass the native array of
         // { title, file_url } objects so it serializes to a JSON array. Do NOT
@@ -1302,7 +1288,6 @@ public final class SupabaseService: Sendable {
         // open the freshly-posted listing's detail page.
         struct Created: Decodable {
             let listingId: String
-            enum CodingKeys: String, CodingKey { case listingId = "listing_id" }
         }
         let created: Created = try await performRpc("create_listing", params: params)
         return created.listingId
@@ -1335,26 +1320,7 @@ public final class SupabaseService: Sendable {
         tags: [String],
         attachments: [ListingAttachmentEdit]
     ) async throws {
-        var attachmentRows: [[String: String]] = []
-        for clip in attachments {
-            // A newly-attached file (data) wins, so replacing a clip's audio takes;
-            // otherwise keep the existing path.
-            guard let data = clip.data, let fileName = clip.fileName else {
-                if let existing = clip.existingFileUrl {
-                    attachmentRows.append(["title": clip.title, "file_url": existing])
-                }
-                continue
-            }
-            let rawExt = (fileName as NSString).pathExtension
-                .lowercased()
-                .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
-            let ext = rawExt.isEmpty ? "bin" : String(rawExt.prefix(8))
-            let path = "ListingPortfolios/\(userId.lowercased())/\(UUID().uuidString).\(ext)"
-            try await client.storage
-                .from(.postUploads)
-                .upload(path, data: data, options: .init(contentType: Self.audioMimeType(forExt: ext), upsert: true))
-            attachmentRows.append(["title": clip.title, "file_url": path])
-        }
+        let attachmentRows = try await uploadClipRows(attachments, folder: "ListingPortfolios", userId: userId)
 
         let params: [String: Any] = [
             "p_listing_id": listingId,
@@ -1439,8 +1405,7 @@ public final class SupabaseService: Sendable {
         let result: ApiUpdateProfileResponse = try await performRpc("update_user", params: params)
 
         // Invalidate cached profile so next load fetches fresh data
-        let cacheKey = APICache.key("get_user_profile", params: ["profile_id": userId])
-        await cache.remove(cacheKey)
+        await invalidateProfile(userId: userId)
 
         return result
     }
@@ -1448,33 +1413,26 @@ public final class SupabaseService: Sendable {
     /// Uploads a user avatar to Supabase Storage and returns the public URL
     /// (version-stamped — see `versioned`).
     public func uploadAvatar(userId: String, imageData: Data) async throws -> URL {
-        let storagePath = "\(userId).png"
-
-        try await client.storage
-            .from(.userAvatars)
-            .upload(storagePath, data: imageData, options: .init(contentType: "image/png", upsert: true))
-
-        let publicURL = try client.storage
-            .from(.userAvatars)
-            .getPublicURL(path: storagePath)
-
-        return Self.versioned(publicURL)
+        try await uploadUserImage(.userAvatars, userId: userId, imageData: imageData)
     }
 
     /// Uploads a user banner to Supabase Storage and returns the public URL
     /// (version-stamped — see `versioned`).
     public func uploadBanner(userId: String, imageData: Data) async throws -> URL {
-        let storagePath = "\(userId).png"
+        try await uploadUserImage(.userBanners, userId: userId, imageData: imageData)
+    }
 
-        try await client.storage
-            .from(.userBanners)
-            .upload(storagePath, data: imageData, options: .init(contentType: "image/png", upsert: true))
-
-        let publicURL = try client.storage
-            .from(.userBanners)
-            .getPublicURL(path: storagePath)
-
-        return Self.versioned(publicURL)
+    /// Avatar + banner share one flow: a fixed per-user PNG path (upsert), then
+    /// a version-stamped public URL so caches refetch the new image.
+    private func uploadUserImage(_ bucket: StorageBucket, userId: String, imageData: Data) async throws -> URL {
+        let path = try await uploadToStorage(
+            bucket,
+            path: "\(userId).png",
+            data: imageData,
+            contentType: "image/png",
+            upsert: true
+        )
+        return Self.versioned(try client.storage.from(bucket).getPublicURL(path: path))
     }
 
     /// Appends `?v=<timestamp>` to an upserted object's public URL. The storage
@@ -1563,12 +1521,12 @@ public final class SupabaseService: Sendable {
 
         // Serialize params up front (Sendable) so the fetch closure can cross into the
         // cache actor; concurrent misses for this key then share one round-trip.
-        let paramsData = try params.map { try JSONSerialization.data(withJSONObject: $0) }
+        let paramsData = try rpcParamsData(params)
         let data = try await cache.coalescedData(cacheKey, ttl: ttl) { [self] in
             try await performRpcData(functionName, paramsData: paramsData)
         }
         let value: T
-        do { value = try JSONDecoder().decode(T.self, from: data) }
+        do { value = try JSONDecoder.api.decode(T.self, from: data) }
         catch {
             // Log decode failures — a 200 whose body doesn't match the DTO would
             // otherwise be SILENT (performRpcData already logged the 200 status), which
@@ -1582,43 +1540,35 @@ public final class SupabaseService: Sendable {
 
     // MARK: - Private
 
+    /// Decodes an RPC's response into a DTO via the shared `.api` decoder.
     private func performRpc<T: Decodable>(_ functionName: String, params: [String: Any]? = nil) async throws -> T {
+        let data = try await performRpcData(functionName, paramsData: rpcParamsData(params))
         do {
-            if let params = params {
-                let jsonData = try JSONSerialization.data(withJSONObject: params)
-                let anyJSON = try JSONDecoder().decode(AnyJSON.self, from: jsonData)
-
-                let response = try await client.rpc(functionName, params: anyJSON)
-                    .execute()
-                debugLog("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
-                return try JSONDecoder().decode(T.self, from: response.data)
-            } else {
-                let response = try await client.rpc(functionName)
-                    .execute()
-                debugLog("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
-                return try JSONDecoder().decode(T.self, from: response.data)
-            }
+            return try JSONDecoder.api.decode(T.self, from: data)
         } catch {
-            debugLog("[SupabaseService] rpc(\(functionName)) ERROR: \(error)")
+            // A 200 whose body doesn't match the DTO would otherwise be silent.
+            debugLog("[SupabaseService] rpc(\(functionName)) DECODE ERROR: \(error)")
             throw mapError(error)
         }
     }
 
-    /// Runs an RPC and returns the raw response body WITHOUT decoding — the coalesced
-    /// cache path (`cachedRpc` → `APICache.coalescedData`) decodes once afterward, so
-    /// concurrent misses for a key share one network round-trip.
+    /// Runs an RPC and returns the raw response body WITHOUT decoding — the one
+    /// network core every RPC variant funnels through. The coalesced cache path
+    /// (`cachedRpc` → `APICache.coalescedData`) calls this directly with
+    /// pre-serialized params (Data is Sendable across the cache actor's closure)
+    /// and decodes once afterward, so concurrent misses share one round-trip.
     private func performRpcData(_ functionName: String, paramsData: Data?) async throws -> Data {
         do {
-            if let paramsData {
-                let anyJSON = try JSONDecoder().decode(AnyJSON.self, from: paramsData)
-                let response = try await client.rpc(functionName, params: anyJSON).execute()
-                debugLog("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
-                return response.data
+            let query = if let paramsData {
+                // Plain JSONDecoder on purpose: `.api`'s key strategy would
+                // mangle the params' snake_case keys.
+                try client.rpc(functionName, params: JSONDecoder().decode(AnyJSON.self, from: paramsData))
             } else {
-                let response = try await client.rpc(functionName).execute()
-                debugLog("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
-                return response.data
+                try client.rpc(functionName)
             }
+            let response = try await query.execute()
+            debugLog("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
+            return response.data
         } catch {
             debugLog("[SupabaseService] rpc(\(functionName)) ERROR: \(error)")
             throw mapError(error)
@@ -1629,18 +1579,14 @@ public final class SupabaseService: Sendable {
     /// functions reply with an empty body, and decoding `AnyJSON` from empty data
     /// throws — so these calls must run the request without decoding the response.
     private func executeRpc(_ functionName: String, params: [String: Any]? = nil) async throws {
-        do {
-            if let params = params {
-                let jsonData = try JSONSerialization.data(withJSONObject: params)
-                let anyJSON = try JSONDecoder().decode(AnyJSON.self, from: jsonData)
-                _ = try await client.rpc(functionName, params: anyJSON).execute()
-            } else {
-                _ = try await client.rpc(functionName).execute()
-            }
-        } catch {
-            debugLog("[SupabaseService] rpc(\(functionName)) ERROR: \(error)")
-            throw mapError(error)
-        }
+        _ = try await performRpcData(functionName, paramsData: rpcParamsData(params))
+    }
+
+    /// Serializes an RPC params dict for the wire (failures map like any other
+    /// RPC error).
+    private func rpcParamsData(_ params: [String: Any]?) throws -> Data? {
+        do { return try params.map { try JSONSerialization.data(withJSONObject: $0) } }
+        catch { throw mapError(error) }
     }
 
     private func mapError(_ error: Error) -> SupabaseError {
@@ -1650,7 +1596,12 @@ public final class SupabaseService: Sendable {
         if error is DecodingError {
             return .decodingError(error)
         }
-        return .serverError(error.localizedDescription)
+        if let alreadyMapped = error as? SupabaseError { return alreadyMapped }
+        // Keep the FULL error dump: PostgrestError's message/code carry server
+        // signatures (`collab_rate_limited`, `listing_closed`, …) that
+        // `serverRawDetail` matchers depend on. `friendly()` still gates what
+        // users ever see.
+        return .serverError("\(error)")
     }
 }
 
@@ -1703,9 +1654,8 @@ public enum SupabaseError: Error, LocalizedError {
     /// `debugLog` (logged at the call site before mapping).
     static func friendly(rawDetail raw: String) -> String {
         let s = raw.lowercased()
-        if s.contains("network error") || s.contains("offline") || s.contains("connection")
-            || s.contains("timed out") || s.contains("could not connect") || s.contains("internet") {
-            return "Can't reach Volspire. Check your connection and try again."
+        if let offline = connectionFriendly(fromLowercased: s) {
+            return offline
         }
         if s.contains("rate limit") || s.contains("too many") || s.contains("rate_limited") || s.contains("once every") {
             return "You're doing that a bit too fast — give it a moment and try again."
@@ -1736,6 +1686,16 @@ public enum SupabaseError: Error, LocalizedError {
             return "That content is no longer available."
         }
         return "Something went wrong. Please try again."
+    }
+
+    /// Connection-outage detection + copy — shared with `AuthManager`'s
+    /// auth-error mapping so the offline sentence exists exactly once.
+    public static func connectionFriendly(fromLowercased s: String) -> String? {
+        if s.contains("network") || s.contains("offline") || s.contains("connection")
+            || s.contains("timed out") || s.contains("could not connect") || s.contains("internet") {
+            return "Can't reach Volspire. Check your connection and try again."
+        }
+        return nil
     }
 }
 

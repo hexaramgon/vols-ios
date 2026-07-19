@@ -32,10 +32,7 @@ struct FolderContentsScreen: View {
         )
     }
 
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     var body: some View {
         ScrollView {
@@ -86,13 +83,12 @@ struct FolderContentsScreen: View {
         .sheet(isPresented: $viewModel.showOptions, onDismiss: runFolderAction) { optionsSheet }
         .sheet(isPresented: $viewModel.showEdit) { editSheet }
         .sheet(isPresented: $viewModel.showMembers) { ManageMembersSheet(viewModel: viewModel) }
-        .confirmationDialog("Delete this folder?", isPresented: $viewModel.showDeleteConfirm, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                Task { if await viewModel.deleteFolder() { dismiss() } }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This permanently deletes the folder and its files.")
+        .destructiveConfirm(
+            "Delete this folder?",
+            isPresented: $viewModel.showDeleteConfirm,
+            message: "This permanently deletes the folder and its files."
+        ) {
+            Task { if await viewModel.deleteFolder() { dismiss() } }
         }
         .task {
             await viewModel.loadFiles()
@@ -123,7 +119,10 @@ private extension FolderContentsScreen {
             LoadErrorView { Task { await viewModel.refresh() } }
                 .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.6)
         case .loaded where viewModel.files.isEmpty && viewModel.pendingUploads.isEmpty:
-            stateView(icon: .folder, title: "No files yet", message: "Upload files to share them in this folder.")
+            // minHeight (not `centered:`) — inside a ScrollView a max-height fill
+            // collapses, so the empty state centers via a fixed minimum instead.
+            EmptyStateView(icon: .folder, title: "No files yet", message: "Upload files to share them in this folder.")
+                .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.55)
         case .loaded:
             LazyVStack(spacing: 0) {
                 // Transient file-action errors (e.g. deleting someone else's
@@ -200,24 +199,14 @@ private extension FolderContentsScreen {
     /// Shimmering placeholder rows shown while the folder's files load —
     /// mirrors `fileRow`'s 46pt thumbnail + two text lines.
     var filesSkeleton: some View {
-        let bone = Color.white.opacity(0.06)
-        return LazyVStack(spacing: 0) {
-            ForEach(0 ..< 8, id: \.self) { _ in
-                HStack(spacing: 13) {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous).fill(bone)
-                        .frame(width: 46, height: 46)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Capsule().fill(bone).frame(width: 170, height: 13)
-                        Capsule().fill(bone).frame(width: 110, height: 11)
-                    }
-                    Spacer(minLength: 8)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-            }
-        }
+        SkeletonRows(
+            count: 8,
+            thumb: .rounded(size: 46, radius: 11),
+            line1: CGSize(width: 170, height: 13),
+            line2: CGSize(width: 110, height: 11),
+            horizontalPadding: 14
+        )
         .padding(.top, 4)
-        .shimmering()
     }
 
     func fileRow(_ file: ApiFolderFile, isLast: Bool) -> some View {
@@ -332,10 +321,6 @@ private extension FolderContentsScreen {
         .lineLimit(1)
     }
 
-    func stateView(icon: LucideIcon.Name, title: String, message: String) -> some View {
-        EmptyStateView(icon: icon, title: title, message: message)
-            .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.55)
-    }
 }
 
 // MARK: - Folder options (… menu) + rename sheet
@@ -350,43 +335,20 @@ private extension FolderContentsScreen {
             ) { viewModel.showOptions = false }
 
             VStack(spacing: 0) {
-                folderRow(icon: .squarePen, title: "Edit folder") {
+                OptionSheetRow(icon: .squarePen, title: "Edit folder") {
                     pendingAction = .edit; viewModel.showOptions = false
                 }
-                folderRow(icon: .users, title: "Manage members") {
+                OptionSheetRow(icon: .users, title: "Manage members") {
                     pendingAction = .members; viewModel.showOptions = false
                 }
-                folderRow(icon: .trash2, title: "Delete folder", tint: Color.vDestructive) {
+                OptionSheetRow(icon: .trash2, title: "Delete folder", tint: .vDestructive) {
                     pendingAction = .delete; viewModel.showOptions = false
                 }
             }
             .padding(.top, 6)
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(272)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
-    }
-
-    func folderRow(icon: LucideIcon.Name, title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                LucideIcon(icon, .lg)
-                    .foregroundStyle(tint)
-                    .frame(width: 26)
-                Text(title)
-                    .font(.appBody)
-                    .foregroundStyle(tint)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 15)
-            .contentShape(.rect)
-        }
-        .buttonStyle(FolderRowStyle())
     }
 
     /// Slide-up options for a single file/track (mirrors the track sheet pattern).
@@ -400,10 +362,10 @@ private extension FolderContentsScreen {
             }
 
             VStack(spacing: 2) {
-                folderRow(icon: .share2, title: "Share") {
+                OptionSheetRow(icon: .share2, title: "Share") {
                     shareFile(file)
                 }
-                folderRow(icon: .trash2, title: "Delete", tint: Color.vDestructive) {
+                OptionSheetRow(icon: .trash2, title: "Delete", tint: .vDestructive) {
                     // Stage + close the sheet; the confirmation dialog presents
                     // from the screen once the sheet is gone (see onDismiss).
                     fileToDelete = file
@@ -411,13 +373,8 @@ private extension FolderContentsScreen {
                 }
             }
             .padding(.top, 6)
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(240)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
     }
 
@@ -471,17 +428,6 @@ private extension FolderContentsScreen {
     }
 }
 
-/// Subtle press highlight for the flat folder-menu rows.
-private struct FolderRowStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.08 : 0))
-            )
-    }
-}
-
 // MARK: - Manage Members (folder collaboration)
 
 private struct ManageMembersSheet: View {
@@ -508,9 +454,7 @@ private struct ManageMembersSheet: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .environment(\.colorScheme, .dark)
         .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
         .sheetBackground()
         .task {
             await viewModel.loadCollaborators()
@@ -543,7 +487,7 @@ private struct ManageMembersSheet: View {
         }
     }
 
-    private func searchResultRow(_ user: ApiUserSearchResult) -> some View {
+    private func searchResultRow(_ user: ApiUserSummary) -> some View {
         Button { Task { await viewModel.addMember(user) } } label: {
             HStack(spacing: 12) {
                 avatar(viewModel.avatarURL(user.profileImageUrl))

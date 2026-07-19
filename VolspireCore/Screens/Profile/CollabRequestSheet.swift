@@ -44,9 +44,7 @@ struct CollabRequestSheet: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
         .presentationDetents([.large])
-        .presentationDragIndicator(.visible)
         .sheetBackground()
         .task { await viewModel.loadMyTracksForCollab(currentUserId: currentUserId) }
     }

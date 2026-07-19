@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import SharedUtilities
 import Supabase
 
 public final class SupabaseAnalyticsSink: AnalyticsSink {
@@ -28,13 +29,9 @@ public final class SupabaseAnalyticsSink: AnalyticsSink {
                     p_metadata: .object(event.metadata)
                 ))
                 .execute()
-            #if DEBUG
             debugLog("[analytics] ✓ \(event.type.rawValue) track=\(event.trackId ?? "-")")
-            #endif
         } catch {
-            #if DEBUG
             debugLog("[analytics] ✗ \(event.type.rawValue) failed: \(error)")
-            #endif
         }
     }
 
@@ -47,13 +44,9 @@ public final class SupabaseAnalyticsSink: AnalyticsSink {
                     p_metadata: .object(metadata)
                 ))
                 .execute()
-            #if DEBUG
             debugLog("[analytics] ✓ stream_counted track=\(trackId)")
-            #endif
         } catch {
-            #if DEBUG
             debugLog("[analytics] ✗ increment_track_stream failed: \(error)")
-            #endif
         }
     }
 }

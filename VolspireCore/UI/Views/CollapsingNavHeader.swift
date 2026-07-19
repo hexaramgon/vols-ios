@@ -79,8 +79,7 @@ private struct AppNavBar<Trailing: View>: ViewModifier {
             ZStack {
                 HStack(spacing: 0) {
                     Button(action: onBack) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: ViewConst.backIconSize, weight: .semibold))
+                        LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
                             .foregroundStyle(.white)
                             .frame(width: 44, height: 44)
                             .contentShape(.rect)

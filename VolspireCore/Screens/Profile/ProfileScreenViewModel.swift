@@ -68,13 +68,6 @@ struct ProfileService: Identifiable, Hashable {
     let isActive: Bool
 }
 
-enum ProfileLoadingState: Equatable {
-    case idle
-    case loading
-    case loaded
-    case error(String)
-}
-
 // MARK: - ViewModel
 
 @Observable @MainActor
@@ -104,7 +97,7 @@ final class ProfileScreenViewModel {
     /// Dominant colours pulled from the banner (or avatar) to tint the hero —
     /// the same treatment the expanded player applies to album art.
     var heroColors: [Color] = []
-    var loadingState: ProfileLoadingState = .idle
+    var loadingState: LoadState = .idle
     var isFollowing: Bool = false
     var isTogglingFollow: Bool = false
     /// Blocked (either direction) or suspended — the screen shows a
@@ -151,7 +144,6 @@ final class ProfileScreenViewModel {
         Array(tracks.dropFirst())
     }
 
-    weak var mediaState: MediaState?
     var playerState: MediaPlayerState = .paused(media: .none)
     var cancellables = Set<AnyCancellable>()
     weak var player: MediaPlayer? {
@@ -209,19 +201,23 @@ final class ProfileScreenViewModel {
         viewerHasBlocked = profile.viewerHasBlocked ?? false
         collaboratorStatus = profile.collaboratorStatus ?? "none"
         collabConvoId = profile.collabConvoId
-        tracks = profile.tracks.map { track in
-            // Resolve bare `post-uploads` paths to full public URLs.
-            ProfileTrack(
-                id: track.id,
-                title: track.title,
-                coverURL: storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) },
-                audioURL: storageService.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) },
-                streams: track.streams ?? 0,
-                isPrivate: (track.visibility ?? "public") != "public"
-            )
-        }
+        tracks = profile.tracks.map(profileTrack)
         apiServices = profile.services
         services = profile.services.map { mapService($0) }
+    }
+
+    /// Maps a profile API track row to the UI model, resolving bare
+    /// `post-uploads` paths to full public URLs. (Was written twice —
+    /// `apply` and `loadMyTracksForCollab`.)
+    private func profileTrack(_ track: ApiProfileTrack) -> ProfileTrack {
+        ProfileTrack(
+            id: track.id,
+            title: track.title,
+            coverURL: storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) },
+            audioURL: storageService.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) },
+            streams: track.streams ?? 0,
+            isPrivate: (track.visibility ?? "public") != "public"
+        )
     }
 
     /// Loads "Featured On" — tracks by other artists that credit this user.
@@ -425,16 +421,7 @@ final class ProfileScreenViewModel {
             let profile = try await supabaseService.getUserProfile(userId: currentUserId)
             myCollabTracks = profile.tracks
                 .filter { ($0.visibility ?? "public") == "public" }
-                .map { track in
-                    ProfileTrack(
-                        id: track.id,
-                        title: track.title,
-                        coverURL: storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) },
-                        audioURL: storageService.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) },
-                        streams: track.streams ?? 0,
-                        isPrivate: false
-                    )
-                }
+                .map(profileTrack)
         } catch {
             debugLog("[ProfileVM] loadMyTracksForCollab failed: \(error)")
         }
@@ -527,16 +514,10 @@ final class ProfileScreenViewModel {
 
     func play(_ track: ProfileTrack) {
         guard let player, track.audioURL != nil else { return }
-        // Register every playable track with the library and AWAIT that before
-        // starting playback. `MediaPlayer.play` rejects a queue whose items
-        // aren't in `MediaState` — calling it before `addTrack` resolves is why
-        // a fresh tap (no prior playback) did nothing.
-        Task {
-            var seen = Set<String>()
-            let queue = tracks.filter { $0.audioURL != nil && seen.insert($0.id).inserted }
-            for t in queue { await mediaState?.addTrack(mediaFor(t)) }
-            player.play(MediaID(track.id), of: queue.map { MediaID($0.id) })
-        }
+        // `MediaPlayer.play(_:queue:)` registers the queue with MediaState
+        // first (deduped, nil-audio dropped) — the invariant this view model
+        // used to hand-roll.
+        Task { await player.play(MediaID(track.id), queue: tracks.map(mediaFor)) }
     }
 
     private func mediaFor(_ track: ProfileTrack) -> Media {
@@ -554,21 +535,13 @@ final class ProfileScreenViewModel {
     /// Plays a "Featured On" track, queueing the remaining available credits.
     func playCredited(_ track: CreditedTrack) {
         guard let player, !track.isUnavailable else { return }
-        // Same fix as `play`: add the whole queue to the library and await it
-        // before starting playback.
-        Task {
-            var seen = Set<String>()
-            let queue = creditedTracks.filter { !$0.isUnavailable && seen.insert($0.id).inserted }
-            for t in queue {
-                await mediaState?.addTrack(
-                    Media(
-                        id: MediaID(t.id),
-                        meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL)
-                    )
-                )
-            }
-            player.play(MediaID(track.id), of: queue.map { MediaID($0.id) })
+        let queue = creditedTracks.filter { !$0.isUnavailable }.map { t in
+            Media(
+                id: MediaID(t.id),
+                meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL)
+            )
         }
+        Task { await player.play(MediaID(track.id), queue: queue) }
     }
 
     var profileUpdateError: String? = nil

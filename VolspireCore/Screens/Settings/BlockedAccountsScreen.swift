@@ -15,7 +15,7 @@ struct BlockedAccountsScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
 
-    @State private var blocked: [ApiBlockedUser] = []
+    @State private var blocked: [ApiUserSummary] = []
     @State private var loading = true
     @State private var unblocking: Set<String> = []
 
@@ -43,7 +43,7 @@ struct BlockedAccountsScreen: View {
         .task { await load() }
     }
 
-    private func row(_ user: ApiBlockedUser) -> some View {
+    private func row(_ user: ApiUserSummary) -> some View {
         HStack(spacing: 13) {
             AvatarView(urlString: user.profileImageUrl, name: user.username, size: 44)
 
@@ -77,7 +77,7 @@ struct BlockedAccountsScreen: View {
         loading = false
     }
 
-    private func unblock(_ user: ApiBlockedUser) {
+    private func unblock(_ user: ApiUserSummary) {
         unblocking.insert(user.id)
         Task {
             do {

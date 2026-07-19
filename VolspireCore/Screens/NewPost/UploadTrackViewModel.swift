@@ -11,6 +11,7 @@ import AVFoundation
 import Foundation
 import PhotosUI
 import Services
+import SharedUtilities
 import SwiftUI
 
 enum UploadMediaType: String, CaseIterable {
@@ -123,21 +124,22 @@ final class UploadTrackViewModel {
     /// available for that step); ticks 0...1 once on-device compression starts.
     var videoProcessingProgress: Double = 0
 
-    // Cover art (required, like the web)
-    var coverData: Data?
-    var coverFileName: String?
-    var coverImage: UIImage?
+    // Cover art (required, like the web) — staged via the shared CoverDraft.
+    private var cover = CoverDraft()
+    var coverImage: UIImage? { cover.image }
+    var coverData: Data? { cover.data }
+    var coverFileName: String? { cover.fileName }
 
     var tags: [String] = []
 
     // Credits — picked from your collaborators, role editable inline per row.
     var credits: [TrackCredit] = []
     var collabQuery: String = ""
-    var collabResults: [ApiUserSearchResult] = []
+    var collabResults: [ApiUserSummary] = []
     var isSearchingCollabs = false
     /// People you've actually worked with (`get_my_collaborators` — the same
     /// source as the folder member picker). Loaded once, filtered locally.
-    private var allCollaborators: [ApiUserSearchResult]?
+    private var allCollaborators: [ApiUserSummary]?
     private var collabFieldFocused = false
 
     // Buyer-download assets, uploaded once and bundled per tier.
@@ -256,7 +258,7 @@ final class UploadTrackViewModel {
     /// One-shot add — picking a result credits them immediately with a default
     /// role; the role is edited inline on the row (web behaviour). The list
     /// re-filters (rather than clearing) so several people can be added in a row.
-    func addCredit(_ user: ApiUserSearchResult) {
+    func addCredit(_ user: ApiUserSummary) {
         collabQuery = ""
         filterCollaborators()
         guard !credits.contains(where: { $0.userId == user.userId }) else { return }
@@ -290,10 +292,9 @@ final class UploadTrackViewModel {
     func handleAudioFile(result: Result<URL, Error>) {
         switch result {
         case .success(let url):
-            guard url.startAccessingSecurityScopedResource() else { return }
-            defer { url.stopAccessingSecurityScopedResource() }
             do {
-                audioData = try Data(contentsOf: url)
+                guard let data = try SecurityScopedFile.read(url) else { return }
+                audioData = data
                 audioFileName = url.lastPathComponent
             } catch {
                 uploadState = .error("Failed to read audio file")
@@ -307,10 +308,8 @@ final class UploadTrackViewModel {
     func handleAssetFile(kind: String, result: Result<URL, Error>) {
         switch result {
         case .success(let url):
-            guard url.startAccessingSecurityScopedResource() else { return }
-            defer { url.stopAccessingSecurityScopedResource() }
             do {
-                let data = try Data(contentsOf: url)
+                guard let data = try SecurityScopedFile.read(url) else { return }
                 switch kind {
                 case "mp3":
                     mp3Data = data
@@ -431,9 +430,7 @@ final class UploadTrackViewModel {
     }
 
     func handleCoverImage(_ image: UIImage) {
-        coverImage = image
-        coverData = image.jpegData(compressionQuality: 0.85)
-        coverFileName = "cover_\(UUID().uuidString).jpg"
+        cover.set(image)
     }
 
     // MARK: - Upload

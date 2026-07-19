@@ -85,23 +85,3 @@ struct ProfileEmptyState: View {
 
 // MARK: - Now-playing equaliser (matches LibraryScreen)
 
-struct ProfileEqualizerBars: View {
-    @State private var animating = false
-    private let heights: [CGFloat] = [7, 13, 9]
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 2) {
-            ForEach(heights.indices, id: \.self) { i in
-                Capsule()
-                    .fill(.white.opacity(0.9))
-                    .frame(width: 2.5, height: animating ? heights[i] : 3)
-                    .animation(
-                        .easeInOut(duration: 0.45).repeatForever().delay(Double(i) * 0.13),
-                        value: animating
-                    )
-            }
-        }
-        .frame(width: 14, height: 13, alignment: .center)
-        .onAppear { animating = true }
-    }
-}

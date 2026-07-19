@@ -14,7 +14,6 @@ import SharedUtilities
 
 @Observable @MainActor
 final class PlaylistDetailViewModel {
-    enum LoadState: Equatable { case loading, loaded, error(String) }
 
     var detail: ApiPlaylistDetail?
     var state: LoadState = .loading

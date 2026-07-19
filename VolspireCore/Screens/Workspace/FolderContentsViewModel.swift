@@ -12,13 +12,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 import SharedUtilities
 
-enum FolderContentsLoadingState {
-    case idle
-    case loading
-    case loaded
-    case error(String)
-}
-
 /// A file picked for upload — rendered as an optimistic row at the top of the
 /// list while it uploads, flipping to an inline failed state (with retry)
 /// instead of a modal alert.
@@ -40,7 +33,7 @@ struct PendingUpload: Identifiable, Equatable {
 @Observable @MainActor
 final class FolderContentsViewModel {
     var files: [ApiFolderFile] = []
-    var loadingState: FolderContentsLoadingState = .idle
+    var loadingState: LoadState = .idle
     var showFilePicker = false
     /// In-flight / failed uploads, shown above the real file rows.
     var pendingUploads: [PendingUpload] = []
@@ -65,10 +58,10 @@ final class FolderContentsViewModel {
     var members: [ApiFolderMember] = []
     var isLoadingMembers = false
     var memberSearch = ""
-    var searchResults: [ApiUserSearchResult] = []
+    var searchResults: [ApiUserSummary] = []
     var isSearchingUsers = false
     /// Your collaborators, loaded once — the add field filters this list locally.
-    var allCollaborators: [ApiUserSearchResult] = []
+    var allCollaborators: [ApiUserSummary] = []
     /// The user id of a member currently being added/removed/updated.
     var memberActionId: String?
 
@@ -183,7 +176,7 @@ final class FolderContentsViewModel {
         searchResults = q.isEmpty ? base : base.filter { ($0.username ?? "").lowercased().contains(q) }
     }
 
-    func addMember(_ user: ApiUserSearchResult, role: String = "editor") async {
+    func addMember(_ user: ApiUserSummary, role: String = "editor") async {
         guard let username = user.username else { return }
         memberActionId = user.userId
         do {
@@ -287,20 +280,19 @@ final class FolderContentsViewModel {
         do {
             // Read off the main thread — a big file's Data(contentsOf:) would
             // freeze the UI (same lesson as the upload-track video staging).
+            // The scoped-access dance itself is the shared helper's job.
             let fileData = try await Task.detached(priority: .userInitiated) { [url = item.url] in
-                guard url.startAccessingSecurityScopedResource() else {
+                guard let data = try SecurityScopedFile.read(url) else {
                     throw NSError(domain: "FolderContents", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot access this file."])
                 }
-                defer { url.stopAccessingSecurityScopedResource() }
-                return try Data(contentsOf: url)
+                return data
             }.value
 
             try await supabaseService.uploadFile(
                 folderId: folderId,
                 fileName: item.fileName,
                 fileData: fileData,
-                fileType: item.fileType,
-                fileSize: fileData.count
+                fileType: item.fileType
             )
             // The real row replaces the optimistic one in a single update.
             await refresh()
@@ -341,10 +333,10 @@ final class FolderContentsViewModel {
     }
 
     func formattedSize(for file: ApiFolderFile) -> String? {
-        guard let bytes = file.fileSize else { return nil }
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: Int64(bytes))
+        // The app-wide decimal KB/MB convention (`Int.byteLabel`), matching the
+        // upload forms. (Sub-KB sizes read "0 KB" where ByteCountFormatter spelled
+        // out bytes — real uploads are KB+.)
+        file.fileSize?.byteLabel
     }
 
     func relativeTime(from dateString: String) -> String {

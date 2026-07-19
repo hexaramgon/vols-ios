@@ -39,31 +39,21 @@ struct TrackOptionsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showReport = false
     @State private var loadingID: UUID?
-    /// Measured natural height of the header + rows: the sheet detents to
-    /// exactly fit its content instead of a fixed `.medium`, which left a
-    /// half-screen sheet with dead space under two or three rows.
-    @State private var contentHeight: CGFloat = 300
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                SheetHeader(title: title, subtitle: headerSubtitle) { dismiss() } leading: {
-                    ArtworkView(artwork, cornerRadius: 8)
-                        .frame(width: 40, height: 40)
-                }
-
-                VStack(spacing: 0) {
-                    ForEach(actions) { row($0) }
-                    if reportTargetId != nil { reportRow }
-                }
-                .padding(.top, 8)
+            SheetHeader(title: title, subtitle: headerSubtitle) { dismiss() } leading: {
+                ArtworkView(artwork, cornerRadius: 8)
+                    .frame(width: 40, height: 40)
             }
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
 
-            Spacer(minLength: 0)
+            VStack(spacing: 0) {
+                ForEach(actions) { row($0) }
+                if reportTargetId != nil { reportRow }
+            }
+            .padding(.top, 8)
         }
-        .presentationDetents([.height(contentHeight + ViewConst.safeAreaInsets.bottom + 8)])
-        .environment(\.colorScheme, .dark)
+        .selfSizedDetent()
         .sheet(isPresented: $showReport) {
             ReportSheet(targetType: .track, targetId: reportTargetId ?? "", subject: title)
         }
@@ -71,17 +61,8 @@ struct TrackOptionsSheet: View {
 
     /// Appended "Report" row — presents the report sheet over this one.
     private var reportRow: some View {
-        Button { showReport = true } label: {
-            HStack(spacing: 14) {
-                LucideIcon(.flag, .lg).foregroundStyle(.primary).frame(width: 24)
-                Text("Report").font(.appBody).foregroundStyle(.primary)
-                Spacer()
-            }
-            .padding(.horizontal, 20).padding(.vertical, 14)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(loadingID != nil)
+        OptionSheetRow(icon: .flag, title: "Report") { showReport = true }
+            .disabled(loadingID != nil)
     }
 
     /// Artist and meta collapsed onto the single subtitle line the header allows.
@@ -91,7 +72,12 @@ struct TrackOptionsSheet: View {
     }
 
     private func row(_ action: Action) -> some View {
-        Button {
+        OptionSheetRow(
+            icon: action.icon,
+            title: action.title,
+            subtitle: action.subtitle,
+            tint: action.isDestructive ? Color.red : .white
+        ) {
             if action.awaitsCompletion {
                 Task {
                     loadingID = action.id
@@ -110,34 +96,11 @@ struct TrackOptionsSheet: View {
                 // Present over this sheet (e.g. share) — don't dismiss.
                 Task { await action.perform() }
             }
-        } label: {
-            HStack(spacing: 14) {
-                LucideIcon(action.icon, .lg)
-                    .foregroundStyle(action.isDestructive ? Color.red : .primary)
-                    .frame(width: 24)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(action.title)
-                        .font(.appBody)
-                        .foregroundStyle(action.isDestructive ? Color.red : .primary)
-                    if let subtitle = action.subtitle {
-                        Text(subtitle)
-                            .font(.appFootnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                if loadingID == action.id {
-                    ProgressView().controlSize(.small)
-                }
+        } trailing: {
+            if loadingID == action.id {
+                ProgressView().controlSize(.small)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
         .disabled(loadingID != nil)
     }
 }

@@ -57,7 +57,6 @@ struct ConversationItem: Identifiable, Hashable {
 @Observable
 @MainActor
 final class MessagesScreenViewModel {
-    enum LoadState: Equatable { case idle, loading, loaded, error(String) }
 
     /// All conversations (including archived) — buckets are derived below.
     var conversations: [ConversationItem] = []

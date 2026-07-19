@@ -10,16 +10,9 @@
 
 import DesignSystem
 import MediaLibrary
-import PhotosUI
 import Services
 import SharedUtilities
 import SwiftUI
-
-/// A picked image awaiting crop — drives the full-screen cropper presentation.
-private struct CropTarget: Identifiable {
-    let id = UUID()
-    let image: UIImage
-}
 
 struct PlaylistDetailScreen: View {
     @Environment(\.dismiss) private var dismiss
@@ -56,11 +49,8 @@ struct PlaylistDetailScreen: View {
             }
             .sheet(isPresented: $showOptions) { optionsSheet }
             .sheet(isPresented: $viewModel.showEdit) { editSheet }
-            .confirmationDialog("Delete this playlist?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-                Button("Delete", role: .destructive) {
-                    Task { if await viewModel.deletePlaylist() { dismiss() } }
-                }
-                Button("Cancel", role: .cancel) {}
+            .destructiveConfirm("Delete this playlist?", isPresented: $showDeleteConfirm) {
+                Task { if await viewModel.deletePlaylist() { dismiss() } }
             }
     }
 
@@ -112,22 +102,8 @@ struct PlaylistDetailScreen: View {
                 .padding(.horizontal, ViewConst.screenPaddings)
                 .padding(.top, 4)
 
-                VStack(spacing: 0) {
-                    ForEach(0 ..< 8, id: \.self) { _ in
-                        HStack(spacing: 13) {
-                            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(bone)
-                                .frame(width: 50, height: 50)
-                            VStack(alignment: .leading, spacing: 6) {
-                                Capsule().fill(bone).frame(width: 160, height: 13)
-                                Capsule().fill(bone).frame(width: 90, height: 11)
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 9)
-                    }
-                }
-                .padding(.top, 6)
+                SkeletonRows(count: 8, horizontalPadding: 14, boneOpacity: 0.08, shimmers: false)
+                    .padding(.top, 6)
             }
             .padding(.top, ViewConst.safeAreaInsets.top + 18)
             .frame(maxWidth: .infinity)
@@ -154,8 +130,7 @@ private extension PlaylistDetailScreen {
     /// pixel-identical to the track options sheet (same header, rows, and metrics).
     var optionsSheet: some View {
         TrackOptionsSheet(
-            artwork: viewModel.cover(viewModel.detail?.coverUrl).map { .webImage($0) }
-                ?? .placeholder(name: displayTitle),
+            artwork: .placeholder(viewModel.cover(viewModel.detail?.coverUrl), name: displayTitle),
             title: displayTitle,
             meta: footer,
             actions: [
@@ -168,7 +143,6 @@ private extension PlaylistDetailScreen {
             ]
         )
         // Detents come from TrackOptionsSheet itself (sized to its rows).
-        .presentationDragIndicator(.visible)
         .sheetBackground()
     }
 }
@@ -177,147 +151,18 @@ private extension PlaylistDetailScreen {
 
 private extension PlaylistDetailScreen {
     var editSheet: some View {
-        PlaylistFormSheet(
+        ItemFormSheet(
             icon: .squarePen,
             title: "Edit Playlist",
             subtitle: "Update its cover, name, and description",
+            namePrompt: "Playlist name",
             name: $viewModel.editTitle,
             description: $viewModel.editDescription,
-            coverData: $viewModel.pickedCoverData,
-            savedCoverURL: viewModel.cover(viewModel.detail?.coverUrl),
+            cover: .init(data: $viewModel.pickedCoverData, savedURL: viewModel.cover(viewModel.detail?.coverUrl)),
             actionTitle: "Save Changes",
             busy: viewModel.isSaving,
             onSubmit: { await viewModel.saveEdit() }
         )
-    }
-}
-
-/// Tappable 104×104 cover preview with a camera badge — shows the freshly
-/// picked image, else the saved cover, else a neutral placeholder. Takes plain
-/// values so it can be built inside PhotosPicker's `@Sendable` label closure.
-private struct EditCoverPreview: View {
-    let pickedData: Data?
-    let savedURL: URL?
-
-    var body: some View {
-        Group {
-            if let data = pickedData, let img = UIImage(data: data) {
-                Image(uiImage: img).resizable().scaledToFill()
-            } else if let url = savedURL {
-                ArtworkView(.webImage(url), cornerRadius: 18)
-            } else {
-                ZStack {
-                    Color.white.opacity(0.07)
-                    LucideIcon(.listMusic, .xxl).foregroundStyle(.white.opacity(0.55))
-                }
-            }
-        }
-        .frame(width: 104, height: 104)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(alignment: .bottomTrailing) {
-            Image(systemName: "camera.fill")
-                .font(.system(size: 12))
-                .foregroundStyle(.black)
-                .frame(width: 30, height: 30)
-                .background(.white, in: Circle())
-                .offset(x: 5, y: 5)
-        }
-    }
-}
-
-// MARK: - Shared playlist form sheet
-
-/// Create/edit-playlist form — `SheetHeader` + cover picker (with cropper) + name
-/// + description, themed like the folder/collab sheets. Used by the Library and
-/// Playlists tabs (New Playlist) and the playlist detail (Edit Playlist).
-struct PlaylistFormSheet: View {
-    var icon: LucideIcon.Name = .listMusic
-    let title: String
-    let subtitle: String
-    @Binding var name: String
-    @Binding var description: String
-    @Binding var coverData: Data?
-    /// Existing cover (edit) shown when no new image has been picked.
-    var savedCoverURL: URL? = nil
-    let actionTitle: String
-    let busy: Bool
-    let onSubmit: () async -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var coverItem: PhotosPickerItem?
-    @State private var cropTarget: CropTarget?
-
-    private var valid: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
-
-    var body: some View {
-        // Hoisted: the PhotosPicker label closure is `@Sendable`, so it can't read
-        // the main-actor `coverData` binding directly — capture plain values first.
-        let pickedCover = coverData
-        let savedCover = savedCoverURL
-        return VStack(alignment: .leading, spacing: 0) {
-            SheetHeader(icon: icon, title: title, subtitle: subtitle) { dismiss() }
-
-            VStack(spacing: 16) {
-                PhotosPicker(selection: $coverItem, matching: .images) {
-                    EditCoverPreview(pickedData: pickedCover, savedURL: savedCover)
-                }
-                .buttonStyle(.plain)
-
-                VStack(spacing: 12) {
-                    field(prompt: "Playlist name", text: $name)
-                    field(prompt: "Description (optional)", text: $description)
-                }
-
-                Spacer(minLength: 0)
-
-                Button { Task { await onSubmit() } } label: {
-                    Group {
-                        if busy { ProgressView().tint(.black) }
-                        else { Text(actionTitle).font(.appHeadline).foregroundStyle(.black) }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(valid && !busy ? Color.white : Color.white.opacity(0.3), in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .disabled(!valid || busy)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 18)
-            .padding(.bottom, 16)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(452)])
-        .presentationDragIndicator(.visible)
-        .sheetBackground()
-        .onChange(of: coverItem) { _, item in
-            guard let item else { return }
-            Task {
-                if let data = try? await item.loadTransferable(type: Data.self),
-                   let ui = UIImage(data: data) {
-                    cropTarget = CropTarget(image: ui.normalizedUp())
-                }
-            }
-        }
-        .fullScreenCover(item: $cropTarget) { target in
-            ImageCropperView(
-                image: target.image,
-                onCrop: { data in coverData = data; cropTarget = nil },
-                onCancel: { cropTarget = nil }
-            )
-        }
-    }
-
-    private func field(prompt: String, text: Binding<String>) -> some View {
-        TextField("", text: text, prompt: Text(prompt).foregroundColor(Color.vText3))
-            .font(.appBody)
-            .foregroundStyle(.white)
-            .tint(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.vBorder))
     }
 }
 

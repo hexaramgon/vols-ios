@@ -38,9 +38,9 @@ struct CollabListingRow: View {
                             .multilineTextAlignment(.leading)
                     }
                     if let tags = listing.tags, !tags.isEmpty {
-                        tagRow(tags)
+                        ListingTagRow(tags: tags)
                     }
-                    engagement
+                    ListingStatsRow(listing: listing)
                         .padding(.top, 2)
                 }
             }
@@ -65,48 +65,9 @@ struct CollabListingRow: View {
                 .foregroundStyle(Color.vText3)
                 .lineLimit(1)
             Spacer(minLength: 8)
-            categoryChip
-        }
-    }
-
-    private var categoryChip: some View {
-        Text(listing.category.replacingOccurrences(of: "_", with: " ").capitalized)
-            .font(.appCaption2Semibold)
-            .foregroundStyle(.white)
-            .lineLimit(1)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
             // Brand accent — matches the listing detail's category chip.
-            .background(LinearGradient.sendAccent, in: Capsule())
-    }
-
-    private func tagRow(_ tags: [String]) -> some View {
-        HStack(spacing: 8) {
-            ForEach(tags.prefix(3), id: \.self) { tag in
-                Text("#\(tag)")
-                    .font(.appCaptionMedium)
-                    .foregroundStyle(Color.vText3)
-                    .lineLimit(1)
-            }
+            AccentChip(text: listing.categoryLabel)
         }
-    }
-
-    private var engagement: some View {
-        HStack(spacing: 20) {
-            stat(.users, listing.responseCount)        // responders
-            stat(.messageCircle, listing.commentCount) // comments
-            stat(.bookmark, listing.saveCount)         // saves
-        }
-    }
-
-    private func stat(_ icon: LucideIcon.Name, _ count: Int?) -> some View {
-        HStack(spacing: 5) {
-            LucideIcon(icon, .sm)
-            Text("\(count ?? 0)")
-                .font(.appCaptionMedium)
-                .monospacedDigit()
-        }
-        .foregroundStyle(Color.vText3)
     }
 
     private var avatar: some View {

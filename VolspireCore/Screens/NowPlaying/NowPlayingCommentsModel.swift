@@ -23,7 +23,7 @@ final class NowPlayingCommentsModel {
     /// Set when a post fails, so the composer can surface why instead of silently
     /// restoring the text. Cleared on the next send.
     var sendError: String?
-    var currentUser: ApiCommentUser?
+    var currentUser: ApiUserSummary?
     /// Playback position (seconds) to pin the next comment to; nil = no timestamp.
     var commentTimestamp: Double?
     /// Optional end of a timestamp range (set by pressing the clock a 2nd time).
@@ -74,7 +74,7 @@ final class NowPlayingCommentsModel {
     func loadCurrentUser() async {
         guard currentUser == nil, let uid = supabaseService.currentUserId else { return }
         if let profile = try? await supabaseService.getUserProfile(userId: uid) {
-            currentUser = ApiCommentUser(
+            currentUser = ApiUserSummary(
                 userId: uid,
                 username: profile.username,
                 profileImageUrl: profile.profileImageUrl
@@ -105,7 +105,7 @@ final class NowPlayingCommentsModel {
             let newComment = ApiTrackComment(
                 commentId: tempId,
                 content: content,
-                createdAt: ISO8601DateFormatter().string(from: Date()),
+                createdAt: MessageTime.isoNow(),
                 trackId: trackId,
                 parentId: parentId,
                 user: user,

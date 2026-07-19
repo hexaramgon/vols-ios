@@ -27,9 +27,6 @@ struct ReportSheet: View {
     @State private var submitting = false
     @State private var submitted = false
     @State private var errorText: String?
-    /// Measured content height so the sheet detents to exactly fit its rows
-    /// (and shrinks to the confirmation state after submitting).
-    @State private var contentHeight: CGFloat = 480
     @FocusState private var detailsFocused: Bool
 
     var body: some View {
@@ -47,14 +44,13 @@ struct ReportSheet: View {
                     form
                 }
             }
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
+            // Sized to its content — shrinks to the confirmation state after
+            // submitting.
+            .selfSizedDetent()
         }
         .scrollBounceBehavior(.basedOnSize)
         .scrollDismissesKeyboard(.interactively)
         .frame(maxWidth: .infinity)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(contentHeight + ViewConst.safeAreaInsets.bottom + 8)])
-        .presentationDragIndicator(.visible)
         .sheetBackground()
     }
 

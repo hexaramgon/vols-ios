@@ -45,21 +45,12 @@ struct ExploreArtistItem: Identifiable {
     var isFollowing: Bool
 }
 
-// MARK: - Loading State
-
-enum HomeLoadingState: Equatable {
-    case idle
-    case loading
-    case loaded
-    case error(String)
-}
-
 // MARK: - ViewModel
 
 @Observable
 @MainActor
 class HomeScreenViewModel {
-    var loadingState: HomeLoadingState = .idle
+    var loadingState: LoadState = .idle
 
     // Sections — mirror the web app's home buckets (`get_home_tracks`).
     var popularTracks: [HomeTrack] = []
@@ -117,7 +108,6 @@ class HomeScreenViewModel {
     /// Top popular tracks shown in the Featured carousel.
     var featuredTracks: [HomeTrack] { Array(popularTracks.prefix(5)) }
 
-    weak var mediaState: MediaState?
     weak var player: MediaPlayer?
 
     private let supabaseService: SupabaseService
@@ -131,11 +121,11 @@ class HomeScreenViewModel {
         self.storageService = storageService
     }
 
-    /// Play a track from the home screen by adding it to the media library and starting playback.
     /// Plays `track` and queues the rest of the section it came from (`context`)
     /// in its natural order, so Next/Previous move through *that* section — not a
     /// concatenation of every home rail (which is why Next used to jump to the
-    /// top "Popular" tracks).
+    /// top "Popular" tracks). Registration in MediaState, id dedupe and dropping
+    /// nil-audio items all live in the shared `MediaPlayer.play(_:queue:)`.
     func playTrack(_ track: HomeTrack, in context: [HomeTrack]) async {
         guard track.audioURL != nil else { return }
 
@@ -144,19 +134,12 @@ class HomeScreenViewModel {
         var ordered = context
         if !ordered.contains(where: { $0.id == track.id }) { ordered = [track] }
 
-        var seen = Set<String>()
-        let queue = ordered.filter { $0.audioURL != nil && seen.insert($0.id).inserted }
-
-        for t in queue {
-            await mediaState?.addTrack(
-                Media(
-                    id: MediaID(t.id),
-                    meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL)
-                )
+        await player?.play(MediaID(track.id), queue: ordered.map { t in
+            Media(
+                id: MediaID(t.id),
+                meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL)
             )
-        }
-
-        player?.play(MediaID(track.id), of: queue.map { MediaID($0.id) })
+        })
     }
 
     /// Load home data from Supabase
@@ -437,6 +420,10 @@ class HomeScreenViewModel {
     func toggleFollow(_ item: ExploreArtistItem) async {
         guard let idx = artists.firstIndex(where: { $0.id == item.id }) else { return }
         artists[idx].isFollowing.toggle()
+        let next = artists[idx].isFollowing
+        // Same event + metadata shape as the profile's toggleFollow, so follows
+        // made from Home's Artists tab/rail reach analytics too.
+        AnalyticsService.shared?.log(next ? .userFollowed : .userUnfollowed, metadata: ["target_user_id": .string(item.id)])
         do { try await supabaseService.toggleFollow(targetUser: item.id) }
         catch { artists[idx].isFollowing.toggle() }
     }
@@ -463,15 +450,7 @@ class HomeScreenViewModel {
                 let results = try await supabaseService.searchAll(query: q, limit: 8)
                 guard !Task.isCancelled else { return }
                 searchTracks = mapSearchTracks(results.tracks)
-                searchArtists = results.artists.map {
-                    ExploreArtistItem(
-                        id: $0.userId,
-                        username: $0.username ?? "unknown",
-                        avatarURL: $0.profileImageUrl.flatMap { URL(string: $0) },
-                        monthlyListeners: $0.monthlyListeners ?? 0,
-                        isFollowing: $0.isFollowing ?? false
-                    )
-                }
+                searchArtists = mapArtists(results.artists)
                 isSearching = false
             } catch {
                 guard !Task.isCancelled else { return }

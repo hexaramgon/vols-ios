@@ -8,7 +8,6 @@
 import DesignSystem
 import Services
 import SwiftUI
-import UIKit
 
 struct LibraryTrackSheet: View {
     let track: ApiUserLike
@@ -19,7 +18,7 @@ struct LibraryTrackSheet: View {
 
     var body: some View {
         TrackOptionsSheet(
-            artwork: viewModel.coverURL(for: track).map { .webImage($0) } ?? .placeholder(name: track.title),
+            artwork: .placeholder(viewModel.coverURL(for: track), name: track.title),
             title: track.title,
             artist: track.artist?.username,
             meta: track.streams.map { "\($0.formatted()) streams" },
@@ -36,7 +35,7 @@ struct LibraryTrackSheet: View {
             })
         }
         list.append(.init(icon: .share2, title: "Share Track", dismissesSheet: false) {
-            shareTrack()
+            ShareActions.shareTrack(title: track.title, trackId: track.trackId)
         })
         list.append(.init(icon: .circlePlus, title: "Add to Playlist") {
             onAddToPlaylist()
@@ -45,10 +44,5 @@ struct LibraryTrackSheet: View {
             await viewModel.removeFromLibrary(track)
         })
         return list
-    }
-
-    private func shareTrack() {
-        let shareText = "Check out \"\(track.title)\" on Volspire!"
-        UIApplication.presentActivitySheet([shareText])
     }
 }

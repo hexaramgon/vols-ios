@@ -70,12 +70,12 @@ private extension ProfileMarketTab {
                 }
 
                 if let tags = listing.tags, !tags.isEmpty {
-                    tagRow(tags)
+                    ListingTagRow(tags: tags)
                 }
 
                 // Engagement on the left, status · time on the bottom right.
                 HStack(spacing: 8) {
-                    engagement(listing)
+                    ListingStatsRow(listing: listing)
                     Spacer(minLength: 8)
                     statusBadge(listing)
                     Text("· \(MessageTime.ago(MessageTime.parse(listing.createdAt)))")
@@ -94,15 +94,11 @@ private extension ProfileMarketTab {
     }
 
     /// The brand category chip — same treatment as the home feed rows and the
-    /// listing detail (accent gradient, white label).
+    /// listing detail (accent gradient, white label). `.fixedSize()` so sharing
+    /// a line with the two-line title never compresses the pill.
     func categoryPill(_ listing: ApiListing) -> some View {
-        Text(categoryLabel(listing.category))
-            .font(.appCaption2Semibold)
-            .foregroundStyle(.white)
-            .lineLimit(1)
+        AccentChip(text: listing.categoryLabel)
             .fixedSize()
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .background(LinearGradient.sendAccent, in: Capsule())
     }
 
     func statusBadge(_ listing: ApiListing) -> some View {
@@ -117,41 +113,6 @@ private extension ProfileMarketTab {
         }
     }
 
-    func tagRow(_ tags: [String]) -> some View {
-        HStack(spacing: 8) {
-            ForEach(tags.prefix(3), id: \.self) { tag in
-                Text("#\(tag)")
-                    .font(.appCaptionMedium)
-                    .foregroundStyle(Color.vText3)
-                    .lineLimit(1)
-            }
-        }
-    }
-
-    func engagement(_ listing: ApiListing) -> some View {
-        HStack(spacing: 20) {
-            stat(.users, listing.responseCount)        // responders
-            stat(.messageCircle, listing.commentCount) // comments
-            stat(.bookmark, listing.saveCount)         // saves
-        }
-    }
-
-    func stat(_ icon: LucideIcon.Name, _ count: Int?) -> some View {
-        HStack(spacing: 5) {
-            LucideIcon(icon, .sm)
-            Text("\(count ?? 0)")
-                .font(.appCaptionMedium)
-                .monospacedDigit()
-                // Never compress the counts — sharing a line with the spacer +
-                // status + time squeezed them into clipped glyph slivers.
-                .fixedSize()
-        }
-        .foregroundStyle(Color.vText3)
-    }
-
-    func categoryLabel(_ id: String) -> String {
-        listingCategories.first { $0.id == id }?.label ?? id.capitalized
-    }
 }
 
 // MARK: - Pack card

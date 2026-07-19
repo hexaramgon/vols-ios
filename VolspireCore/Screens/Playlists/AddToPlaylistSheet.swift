@@ -49,9 +49,7 @@ struct AddToPlaylistSheet: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
         .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
         .sheetBackground()
         .task {
             // Load the playlists and which ones already contain this track in
@@ -123,7 +121,7 @@ struct AddToPlaylistSheet: View {
             Task { await toggle(playlist) }
         } label: {
             HStack(spacing: 12) {
-                ArtworkView(cover(playlist.coverUrl).map { .webImage($0) } ?? .placeholder(name: playlist.title), cornerRadius: 9)
+                ArtworkView(.placeholder(cover(playlist.coverUrl), name: playlist.title), cornerRadius: 9)
                     .frame(width: 48, height: 48)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(playlist.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)

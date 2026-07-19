@@ -12,12 +12,6 @@ import DesignSystem
 import PhotosUI
 import SwiftUI
 
-/// A picked image awaiting crop in the full-screen cropper.
-private struct CropTarget: Identifiable {
-    let id = UUID()
-    let image: UIImage
-}
-
 struct EditTrackScreen: View {
     @State var viewModel: EditTrackViewModel
     /// Fired once the save RPC succeeds, before the screen dismisses — lets the
@@ -30,11 +24,6 @@ struct EditTrackScreen: View {
     /// A freshly-picked cover awaiting crop in the full-screen cropper.
     @State private var coverCropTarget: CropTarget?
 
-    private let tagSuggestions = [
-        "808", "trap", "melodic", "dark", "drill", "r&b", "lo-fi",
-        "chill", "hype", "afro", "soulful", "vocal", "instrumental",
-    ]
-
     private var isSaving: Bool {
         viewModel.uploadState == .uploading
     }
@@ -46,7 +35,11 @@ struct EditTrackScreen: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 28) {
                     coverAndTitleRow
-                    descriptionField
+                    UploadDescriptionField(
+                        text: $viewModel.description,
+                        prompt: "What's the story behind this track?",
+                        limit: 500
+                    )
                     tagsSection
                     privacySection
                 }
@@ -96,40 +89,11 @@ struct EditTrackScreen: View {
     // MARK: - Bottom bar
 
     private var bottomBar: some View {
-        VStack(spacing: 10) {
-            if case .error(let message) = viewModel.uploadState {
-                statusRow(message, color: UploadTheme.errorText)
-            } else if let hint = viewModel.validationHint {
-                statusRow(hint, color: Color.vText3)
-            }
-
+        UploadBottomBar(error: viewModel.uploadState.errorMessage, hint: viewModel.validationHint) {
             PrimaryButton("Save Changes", busy: isSaving, enabled: viewModel.canSave) {
                 Task { await viewModel.save() }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-        .background {
-            Color.vBar
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.vBorder)
-                        .frame(height: 1)
-                }
-                .ignoresSafeArea()
-        }
-    }
-
-    private func statusRow(_ message: String, color: Color) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            LucideIcon(.triangleAlert, .sm)
-                .foregroundStyle(color)
-            Text(message)
-                .font(.appFootnote)
-                .foregroundStyle(color)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Cover + title + genre
@@ -139,102 +103,13 @@ struct EditTrackScreen: View {
             Button {
                 showCoverPicker = true
             } label: {
-                coverBox
+                UploadCoverBox(image: viewModel.coverImage, existingURL: viewModel.existingCoverURL)
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 10) {
-                TextField(
-                    "",
-                    text: $viewModel.title,
-                    prompt: Text("Track title").foregroundStyle(Color.vText3)
-                )
-                .font(.appBody)
-                .foregroundStyle(.white)
-                .submitLabel(.done)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 13)
-                .uploadFieldShell()
-                .onChange(of: viewModel.title) { _, newValue in
-                    if newValue.count > 100 {
-                        viewModel.title = String(newValue.prefix(100))
-                    }
-                }
-
-                Button {
-                    showGenrePicker = true
-                } label: {
-                    HStack {
-                        Text(viewModel.genre.isEmpty ? "Genre" : viewModel.genre)
-                            .font(.appBody)
-                            .foregroundStyle(viewModel.genre.isEmpty ? Color.vText3 : .white)
-                        Spacer()
-                        LucideIcon(.chevronDown, .sm)
-                            .foregroundStyle(Color.vText3)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 13)
-                    .uploadFieldShell()
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
+            UploadTitleGenreColumn(title: $viewModel.title, genre: $viewModel.genre) {
+                showGenrePicker = true
             }
-        }
-    }
-
-    @ViewBuilder
-    private var coverBox: some View {
-        ZStack {
-            if let img = viewModel.coverImage {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-            } else if let existingCoverURL = viewModel.existingCoverURL {
-                ArtworkView(.webImage(existingCoverURL), cornerRadius: 16)
-            } else {
-                UploadTheme.fieldFill
-                VStack(spacing: 6) {
-                    LucideIcon(.image, .lg)
-                        .foregroundStyle(Color.vText3)
-                    Text("Cover art")
-                        .font(.appCaption)
-                        .foregroundStyle(Color.vText3)
-                }
-            }
-        }
-        .frame(width: 96, height: 96)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
-        )
-    }
-
-    // MARK: - Description
-
-    private var descriptionField: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            TextField(
-                "",
-                text: $viewModel.description,
-                prompt: Text("What's the story behind this track?").foregroundStyle(Color.vText3),
-                axis: .vertical
-            )
-            .font(.appBody)
-            .foregroundStyle(.white)
-            .lineLimit(3...6)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .uploadFieldShell()
-            .onChange(of: viewModel.description) { _, newValue in
-                if newValue.count > 500 {
-                    viewModel.description = String(newValue.prefix(500))
-                }
-            }
-
-            Text("\(viewModel.description.count)/500")
-                .font(.appCaption)
-                .foregroundStyle(Color.vText3)
         }
     }
 
@@ -243,7 +118,7 @@ struct EditTrackScreen: View {
     private var tagsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Tags")
-            UploadTagInput(tags: $viewModel.tags, suggestions: tagSuggestions)
+            UploadTagInput(tags: $viewModel.tags, suggestions: trackTagSuggestions)
         }
     }
 
@@ -253,14 +128,7 @@ struct EditTrackScreen: View {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Privacy & Release")
 
-            HStack(spacing: 8) {
-                UploadPill("Public", icon: .globe, expands: true, selected: viewModel.visibility == "public") {
-                    viewModel.visibility = "public"
-                }
-                UploadPill("Private", icon: .lock, expands: true, selected: viewModel.visibility == "private") {
-                    viewModel.visibility = "private"
-                }
-            }
+            UploadVisibilityPicker(visibility: $viewModel.visibility)
         }
     }
 }

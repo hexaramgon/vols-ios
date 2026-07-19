@@ -21,46 +21,21 @@ struct UserOptionsSheet: View {
     let onBlock: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    /// Measured so the sheet detents to exactly fit its rows (no empty tail).
-    @State private var contentHeight: CGFloat = 220
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                SheetHeader(icon: .user, title: "@\(username)") { dismiss() }
+            SheetHeader(icon: .user, title: "@\(username)") { dismiss() }
 
-                VStack(spacing: 0) {
-                    if let onRemoveCollaborator {
-                        row(icon: .circleMinus, title: "Remove Collaborator", tint: .white, action: onRemoveCollaborator)
-                    }
-                    row(icon: .flag, title: "Report", tint: .white, action: onReport)
-                    row(icon: .ban, title: "Block @\(username)", tint: .vDestructive, action: onBlock)
+            VStack(spacing: 0) {
+                if let onRemoveCollaborator {
+                    OptionSheetRow(icon: .circleMinus, title: "Remove Collaborator", action: onRemoveCollaborator)
                 }
-                .padding(.top, 6)
+                OptionSheetRow(icon: .flag, title: "Report", action: onReport)
+                OptionSheetRow(icon: .ban, title: "Block @\(username)", tint: .vDestructive, action: onBlock)
             }
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
-
-            Spacer(minLength: 0)
+            .padding(.top, 6)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(contentHeight + ViewConst.safeAreaInsets.bottom + 8)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
-    }
-
-    private func row(icon: LucideIcon.Name, title: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                LucideIcon(icon, .lg)
-                    .foregroundStyle(tint)
-                    .frame(width: 26)
-                Text(title).font(.appBody).foregroundStyle(tint)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20).padding(.vertical, 15)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
     }
 }

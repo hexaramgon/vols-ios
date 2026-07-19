@@ -289,13 +289,165 @@ extension AppleSignInCoordinator: ASAuthorizationControllerDelegate, ASAuthoriza
     }
 }
 
+// MARK: - Wizard chrome (back bar + step scaffold + pinned bottom link)
+
+/// The auth wizards' top bar (register + password reset): the back chevron —
+/// same Lucide glyph + token as the shared `BackButton`, in a 44pt target.
+/// The bar keeps its height when the chevron is hidden (verify/done steps)
+/// so step transitions don't shift vertically.
+struct AuthWizardBackBar: View {
+    /// Shows the chevron; the bar itself always occupies its height.
+    var canGoBack = true
+    /// Disables the chevron mid-request.
+    var disabled = false
+    /// Step-0 exits vs. step-back stays with the caller.
+    let onBack: () -> Void
+
+    var body: some View {
+        HStack {
+            if canGoBack {
+                Button(action: onBack) {
+                    LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(disabled)
+            }
+            Spacer()
+        }
+        .frame(height: 44)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
+}
+
+/// One wizard step's scroll shell: left-aligned appTitleXXL heading + subtitle,
+/// the step's fields, an optional inline error, and an optional footer (notice
+/// + CTA), centered at a 440pt max width with the shared keyboard-friendly
+/// scroll behaviour. Shared by the register wizard and the password reset.
+struct AuthStepPage<Content: View, Footer: View>: View {
+    let title: String
+    let subtitle: String
+    var error: String?
+    /// First steps pass extra clearance for the pinned bottom link.
+    var bottomPadding: CGFloat = 32
+    @ViewBuilder var content: Content
+    @ViewBuilder var footer: Footer
+
+    init(
+        title: String,
+        subtitle: String,
+        error: String? = nil,
+        bottomPadding: CGFloat = 32,
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder footer: () -> Footer
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.error = error
+        self.bottomPadding = bottomPadding
+        self.content = content()
+        self.footer = footer()
+    }
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .font(.appTitleXXL)
+                    .foregroundStyle(.white)
+                    .padding(.top, 12)
+
+                Text(subtitle)
+                    .font(.appCalloutRegular)
+                    .foregroundStyle(Color.vText2)
+                    .padding(.top, 6)
+
+                content
+                    .padding(.top, 28)
+
+                if let error {
+                    ErrorBanner(error)
+                        .padding(.top, 14)
+                }
+
+                footer
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, bottomPadding)
+            .frame(maxWidth: 440)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        // No rubber-band on steps that fit the screen — keyboard-driven scroll
+        // adjustments stay pinned instead of bouncing the page.
+        .scrollBounceBehavior(.basedOnSize)
+    }
+}
+
+extension AuthStepPage where Footer == EmptyView {
+    init(
+        title: String,
+        subtitle: String,
+        error: String? = nil,
+        bottomPadding: CGFloat = 32,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.init(
+            title: title, subtitle: subtitle, error: error,
+            bottomPadding: bottomPadding, content: content, footer: { EmptyView() }
+        )
+    }
+}
+
+/// The bottom pinned prompt + action link ("New to Volspire? Create account"),
+/// for use inside a full-screen `.overlay` on an auth page.
+// Overlay (not safeAreaInset): the link stays anchored to the screen
+// bottom and the keyboard simply covers it, instead of riding up.
+// The content here is FULL-HEIGHT for the keyboard opt-out to work —
+// ignoresSafeArea only expands views whose bounds touch the ignored
+// region, so a bare link would still be pushed up.
+struct AuthBottomLink: View {
+    let prompt: String
+    let action: String
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 4) {
+                Text(prompt)
+                    .foregroundStyle(Color.vText3)
+                Text(action)
+                    .foregroundStyle(.white)
+                    .fontWeight(.semibold)
+            }
+            .font(.appCalloutRegular)
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity)
+        .frame(maxHeight: .infinity, alignment: .bottom)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+}
+
 // MARK: - Segmented 6-digit code field
 
 /// Six digit boxes over an invisible text field — autofill from Messages
-/// still works (`oneTimeCode`), and the active box brightens.
+/// still works (`oneTimeCode`), and the active box brightens. Input is
+/// digit-filtered and capped at 6 inside the field; `onFilled` fires when
+/// the sixth digit lands (the shared auto-submit).
 struct AuthCodeField: View {
     @Binding var code: String
     var disabled = false
+    /// Runs on every edit, before the fill check (e.g. clearing a stale error).
+    var onEdit: () -> Void = {}
+    /// The auto-submit hook — fires whenever an edit leaves all 6 digits set.
+    var onFilled: () -> Void = {}
 
     @FocusState private var focused: Bool
 
@@ -320,7 +472,7 @@ struct AuthCodeField: View {
         .animation(.easeInOut(duration: 0.15), value: focused)
         .overlay {
             // Invisible input driving the boxes.
-            TextField("", text: $code)
+            TextField("", text: sanitizedCode)
                 .keyboardType(.numberPad)
                 .textContentType(.oneTimeCode)
                 .foregroundStyle(.clear)
@@ -330,6 +482,55 @@ struct AuthCodeField: View {
         }
         .contentShape(.rect)
         .onTapGesture { focused = true }
+    }
+
+    /// Digits-only, capped at 6, firing the edit/auto-submit hooks.
+    private var sanitizedCode: Binding<String> {
+        Binding(
+            get: { code },
+            set: { newValue in
+                let digits = String(newValue.filter(\.isNumber).prefix(6))
+                code = digits
+                onEdit()
+                if digits.count == 6 { onFilled() }
+            }
+        )
+    }
+}
+
+// MARK: - Resend-code button
+
+/// The "Didn't get a code? Resend" button under a code field, with its
+/// "Sending…" and green "New code sent" states. Disabled once not idle.
+struct AuthResendButton: View {
+    enum ResendState { case idle, sending, sent }
+
+    let state: ResendState
+    let onResend: () -> Void
+
+    var body: some View {
+        Button(action: onResend) {
+            Group {
+                switch state {
+                case .sending:
+                    Text("Sending…").foregroundStyle(Color.vText3)
+                case .sent:
+                    HStack(spacing: 6) {
+                        LucideIcon(.check, .xs)
+                        Text("New code sent — check your inbox")
+                    }
+                    .foregroundStyle(Color.green)
+                case .idle:
+                    Text("Didn't get a code? \(Text("Resend").foregroundStyle(.white).underline())")
+                        .foregroundStyle(Color.vText3)
+                }
+            }
+            .font(.appSubheadline)
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(state != .idle)
     }
 }
 
@@ -345,8 +546,12 @@ struct AuthOrDivider: View {
     }
 }
 
-/// Auth-screen error — the shared `ErrorBanner`.
-struct AuthErrorBanner: View {
-    let message: String
-    var body: some View { ErrorBanner(message) }
+/// "Passwords must match" — the caption under confirm-password fields
+/// (register + password reset).
+struct AuthPasswordMismatchLabel: View {
+    var body: some View {
+        Text("Passwords must match")
+            .font(.appFootnote)
+            .foregroundStyle(Color.vError)
+    }
 }

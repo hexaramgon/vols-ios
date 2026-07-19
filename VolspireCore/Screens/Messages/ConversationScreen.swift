@@ -102,26 +102,21 @@ struct ConversationScreen: View {
                 onBlock: { pendingBlock = true; showUserOptions = false }
             )
         }
-        .confirmationDialog(
+        .destructiveConfirm(
             "Remove @\(conversation.username) as a collaborator?",
             isPresented: $showRemoveCollabConfirm,
-            titleVisibility: .visible
+            actionLabel: "Remove",
+            message: "You'll no longer be collaborators, and this conversation moves to your inbox's Archived section. You can send a new collab request anytime."
         ) {
-            Button("Remove", role: .destructive) { removeCollaborator() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You'll no longer be collaborators, and this conversation moves to your inbox's Archived section. You can send a new collab request anytime.")
+            removeCollaborator()
         }
         .sheet(isPresented: $showReportUser) {
             if let otherId = conversation.otherUserId {
                 ReportSheet(targetType: .user, targetId: otherId, subject: "@\(conversation.username)")
             }
         }
-        .confirmationDialog("Block @\(conversation.username)?", isPresented: $showBlockConfirm, titleVisibility: .visible) {
-            Button("Block", role: .destructive) { blockOtherUser() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("They won't be able to message you or see your content, and you won't see theirs. You can unblock from Settings.")
+        .blockUserDialog(username: conversation.username, isPresented: $showBlockConfirm) {
+            blockOtherUser()
         }
     }
 
@@ -135,12 +130,10 @@ struct ConversationScreen: View {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 dismiss()
             } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                    // Match the toolbar-rendered chevron (MessageCategoryScreen /
-                    // appNavBar): nav-bar bar-button symbols get the `.large` scale
-                    // by default, so a custom-drawn one needs it too to read the same.
-                    .imageScale(.large)
+                // Same Lucide glyph + token as the shared BackButton, so every
+                // screen's chevron reads identically (the old SF symbol rendered
+                // ~25% larger at the same point size).
+                LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
                     .foregroundStyle(.white)
                     .frame(width: 36, height: 40)
                     .contentShape(.rect)

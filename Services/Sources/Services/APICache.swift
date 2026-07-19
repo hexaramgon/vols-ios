@@ -58,7 +58,7 @@ public actor APICache {
         }
         // Skip the JSON decode when we've already decoded this exact payload.
         if let cached = decodedValues[key] as? T { return cached }
-        guard let value = try? JSONDecoder().decode(T.self, from: entry.data) else { return nil }
+        guard let value = try? JSONDecoder.api.decode(T.self, from: entry.data) else { return nil }
         decodedValues[key] = value
         return value
     }

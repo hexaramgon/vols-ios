@@ -11,13 +11,6 @@ import Observation
 import Services
 import SharedUtilities
 
-enum NotificationsLoadingState: Equatable {
-    case idle
-    case loading
-    case loaded
-    case error(String)
-}
-
 /// A recency bucket (Today / This Week / Earlier) for the grouped feed.
 struct NotificationGroup: Identifiable {
     let id: String
@@ -28,7 +21,7 @@ struct NotificationGroup: Identifiable {
 @Observable @MainActor
 final class NotificationsScreenViewModel {
     var notifications: [ApiNotification] = []
-    var loadingState: NotificationsLoadingState = .idle
+    var loadingState: LoadState = .idle
 
     /// Ids that were unread when the screen opened. The UI highlights against
     /// this snapshot so the unread treatment survives `markAllRead` (which flips

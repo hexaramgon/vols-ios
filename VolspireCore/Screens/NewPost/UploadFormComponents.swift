@@ -46,6 +46,67 @@ struct UploadFlowHeader: View {
     }
 }
 
+// MARK: - Bottom bar (pinned CTA + always-visible status)
+
+extension UploadState {
+    /// The message carried by `.error`, nil otherwise — for feeding the bar.
+    var errorMessage: String? {
+        if case .error(let message) = self { return message }
+        return nil
+    }
+}
+
+/// The pinned bar under every create/upload form: an optional error (red) or
+/// validation hint (muted) status row above the form's CTA, on the vBar fill
+/// with a top hairline. Only the CTA varies per form (PrimaryButton, AuthCTA,
+/// the track wizard's Back/Continue row) — everything else is fixed.
+struct UploadBottomBar<CTA: View>: View {
+    let error: String?
+    let hint: String?
+    let cta: CTA
+
+    init(error: String?, hint: String?, @ViewBuilder cta: () -> CTA) {
+        self.error = error
+        self.hint = hint
+        self.cta = cta()
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if let error {
+                statusRow(error, color: UploadTheme.errorText)
+            } else if let hint {
+                statusRow(hint, color: Color.vText3)
+            }
+
+            cta
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .background {
+            Color.vBar
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Color.vBorder)
+                        .frame(height: 1)
+                }
+                .ignoresSafeArea()
+        }
+    }
+
+    private func statusRow(_ message: String, color: Color) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            LucideIcon(.triangleAlert, .sm)
+                .foregroundStyle(color)
+            Text(message)
+                .font(.appFootnote)
+                .foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 // MARK: - Section heading (quiet auth-style label)
 
 struct UploadSectionDivider: View {
@@ -95,6 +156,391 @@ extension View {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(Color.vBorder)
             )
+    }
+}
+
+// MARK: - Field helpers (char caps, price filtering, keyboard Done)
+
+extension View {
+    /// Hard-caps a text binding at `limit` characters as the user types —
+    /// the clamp every form's title/description fields apply.
+    func charLimited(_ text: Binding<String>, _ limit: Int) -> some View {
+        onChange(of: text.wrappedValue) { _, newValue in
+            if newValue.count > limit {
+                text.wrappedValue = String(newValue.prefix(limit))
+            }
+        }
+    }
+
+    /// Keyboard accessory with a right-aligned "Done" that clears `focus` —
+    /// for the decimal/number pads, which have no return key.
+    func doneKeyboardToolbar(_ focus: FocusState<Bool>.Binding) -> some View {
+        toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    focus.wrappedValue = false
+                }
+                .font(.appCallout)
+            }
+        }
+    }
+}
+
+extension Binding where Value == String {
+    /// A write-filtered view of this binding that strips everything but digits
+    /// and the decimal point — for the price fields.
+    func decimalFiltered() -> Binding<String> {
+        Binding<String>(
+            get: { wrappedValue },
+            set: { wrappedValue = $0.filter { "0123456789.".contains($0) } }
+        )
+    }
+}
+
+// MARK: - Track title + genre column (create + edit track)
+
+/// The track-title field (100-char cap) + genre chooser that sit beside the
+/// cover tile on both the upload and edit forms.
+struct UploadTitleGenreColumn: View {
+    @Binding var title: String
+    @Binding var genre: String
+    let onPickGenre: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField(
+                "",
+                text: $title,
+                prompt: Text("Track title").foregroundStyle(Color.vText3)
+            )
+            .font(.appBody)
+            .foregroundStyle(.white)
+            .submitLabel(.done)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .uploadFieldShell()
+            .charLimited($title, 100)
+
+            Button(action: onPickGenre) {
+                HStack {
+                    Text(genre.isEmpty ? "Genre" : genre)
+                        .font(.appBody)
+                        .foregroundStyle(genre.isEmpty ? Color.vText3 : .white)
+                    Spacer()
+                    LucideIcon(.chevronDown, .sm)
+                        .foregroundStyle(Color.vText3)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+                .uploadFieldShell()
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+// MARK: - Description field (multiline + live counter, clamped at the limit)
+
+struct UploadDescriptionField: View {
+    @Binding var text: String
+    let prompt: String
+    let limit: Int
+    var lines: ClosedRange<Int> = 3...6
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            TextField(
+                "",
+                text: $text,
+                prompt: Text(prompt).foregroundStyle(Color.vText3),
+                axis: .vertical
+            )
+            .font(.appBody)
+            .foregroundStyle(.white)
+            .lineLimit(lines)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 13)
+            .uploadFieldShell()
+            .charLimited($text, limit)
+
+            Text("\(text.count)/\(limit)")
+                .font(.appCaption)
+                .foregroundStyle(Color.vText3)
+        }
+    }
+}
+
+// MARK: - Editable lists (single-field rows, two-field rows, add buttons)
+
+/// The quiet inline "+ Add …" footer under an editable list (deliverables,
+/// FAQs, package features). `fullWidth`/`indent` reproduce the features
+/// editor's stretched, field-aligned variant — hit area included.
+struct UploadInlineAddButton: View {
+    let label: String
+    /// Stretches the row to the full width (leading-aligned).
+    var fullWidth = false
+    /// Leading inset, to align the label under the text fields past the icon.
+    var indent: CGFloat = 0
+    let action: () -> Void
+
+    init(_ label: String, fullWidth: Bool = false, indent: CGFloat = 0, action: @escaping () -> Void) {
+        self.label = label
+        self.fullWidth = fullWidth
+        self.indent = indent
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                LucideIcon(.plus, .xs)
+                Text(label)
+                    .font(.appFootnote)
+            }
+            .foregroundStyle(Color.vText3)
+            .frame(maxWidth: fullWidth ? .infinity : nil, alignment: .leading)
+            .padding(.leading, indent)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The dashed full-width "add another" button (package tiers, process steps,
+/// audio clip rows).
+struct UploadDashedAddButton: View {
+    let label: String
+    let action: () -> Void
+
+    init(_ label: String, action: @escaping () -> Void) {
+        self.label = label
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                LucideIcon(.plus, .sm)
+                Text(label)
+                    .font(.appCallout)
+            }
+            .foregroundStyle(Color.vText3)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
+            )
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// One editable single-line string list: check icon + text field + a remove ✕
+/// that hides while only one row remains, plus the inline "+ Add …" footer.
+/// The deliverables and package-features editors are this same anatomy at two
+/// scales — `compact` selects the tighter one (nested inside a package card).
+/// Bindings are index-guarded so a row removal mid-edit can't crash a write.
+struct UploadEditableList: View {
+    @Binding var items: [String]
+    let placeholder: String
+    let addLabel: String
+    var compact = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 8 : 12) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, _ in
+                HStack(spacing: 10) {
+                    LucideIcon(.circleCheck, compact ? .xs : .sm)
+                        .foregroundStyle(Color.vText3)
+                    TextField(
+                        "",
+                        text: Binding(
+                            get: {
+                                guard index < items.count else { return "" }
+                                return items[index]
+                            },
+                            set: {
+                                guard index < items.count else { return }
+                                items[index] = $0
+                            }
+                        ),
+                        prompt: Text(placeholder).foregroundStyle(Color.vText3)
+                    )
+                    .font(.appBody)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, compact ? 9 : 11)
+                    .uploadFieldShell()
+
+                    if items.count > 1 {
+                        Button {
+                            items.remove(at: index)
+                        } label: {
+                            LucideIcon(.x, compact ? .xs : .sm)
+                                .foregroundStyle(Color.vText3)
+                                .frame(width: compact ? 32 : 36, height: compact ? 32 : 36)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            // Compact indents the add row under the fields (past the icon)
+            // with a stretched hit area, like the features editor always did.
+            UploadInlineAddButton(addLabel, fullWidth: compact, indent: compact ? 23 : 0) {
+                items.append("")
+            }
+        }
+    }
+}
+
+/// A "title + multiline detail" editor row (process steps, FAQs): two stacked
+/// fields with an optional trailing remove ✕ (pass nil while only one row
+/// remains). Row identity/add plumbing stays with the caller.
+struct UploadTwoFieldRow: View {
+    @Binding var title: String
+    @Binding var detail: String
+    let titlePlaceholder: String
+    let detailPlaceholder: String
+    var onRemove: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(spacing: 8) {
+                TextField(
+                    "",
+                    text: $title,
+                    prompt: Text(titlePlaceholder).foregroundStyle(Color.vText3)
+                )
+                .font(.appBody)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .uploadFieldShell()
+
+                TextField(
+                    "",
+                    text: $detail,
+                    prompt: Text(detailPlaceholder).foregroundStyle(Color.vText3),
+                    axis: .vertical
+                )
+                .font(.appFootnote)
+                .foregroundStyle(.white)
+                .lineLimit(2...4)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .uploadFieldShell()
+            }
+
+            if let onRemove {
+                Button(action: onRemove) {
+                    LucideIcon(.x, .sm)
+                        .foregroundStyle(Color.vText3)
+                        .frame(width: 36, height: 36)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+            }
+        }
+    }
+}
+
+// MARK: - Cover art (picker tile + caption cluster + staged draft)
+
+/// The square cover-art tile: the picked image, or (when editing) the track's
+/// existing remote cover, or the dashed "Cover art" placeholder.
+struct UploadCoverBox: View {
+    var image: UIImage?
+    var existingURL: URL? = nil
+    var size: CGFloat = 96
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else if let existingURL {
+                ArtworkView(.webImage(existingURL), cornerRadius: 16)
+            } else {
+                UploadTheme.fieldFill
+                VStack(spacing: 6) {
+                    LucideIcon(.image, .lg)
+                        .foregroundStyle(Color.vText3)
+                    Text("Cover art")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .overlay {
+            if image == nil, existingURL == nil {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
+            } else {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
+            }
+        }
+    }
+}
+
+/// The "Optional cover image…" caption + "Remove cover" button cluster shown
+/// beside the cover tile on the service and pack identity sections.
+struct UploadCoverCaption: View {
+    let text: String
+    let hasCover: Bool
+    let onRemove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(text)
+                .font(.appFootnote)
+                .foregroundStyle(Color.vText3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if hasCover {
+                Button(action: onRemove) {
+                    HStack(spacing: 6) {
+                        LucideIcon(.x, .xs)
+                        Text("Remove cover")
+                            .font(.appFootnote)
+                    }
+                    .foregroundStyle(Color.vText3)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+/// A staged cover image for the view models: the UIImage for display plus the
+/// JPEG bytes and generated file name the create/update RPCs take — one
+/// compression setting and naming scheme for every form.
+struct CoverDraft {
+    private(set) var image: UIImage?
+    private(set) var data: Data?
+    private(set) var fileName: String?
+
+    mutating func set(_ image: UIImage) {
+        self.image = image
+        data = image.jpegData(compressionQuality: 0.85)
+        fileName = "cover_\(UUID().uuidString).jpg"
+    }
+
+    mutating func clear() {
+        image = nil
+        data = nil
+        fileName = nil
     }
 }
 
@@ -360,24 +806,9 @@ struct UploadClipRows: View {
                 clipCard($clip)
             }
 
-            Button {
+            UploadDashedAddButton(addLabel) {
                 clips.append(AudioClipDraft())
-            } label: {
-                HStack(spacing: 8) {
-                    LucideIcon(.plus, .sm)
-                    Text(addLabel)
-                        .font(.appCallout)
-                }
-                .foregroundStyle(Color.vText3)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
-                )
-                .contentShape(.rect)
             }
-            .buttonStyle(.plain)
         }
     }
 
@@ -489,6 +920,12 @@ struct UploadSuccessOverlay: View {
 }
 
 // MARK: - Tag input (web TagInput: #chips inside the field + suggestion chips)
+
+/// Suggestion chips shared by the track upload + edit forms.
+let trackTagSuggestions = [
+    "808", "trap", "melodic", "dark", "drill", "r&b", "lo-fi",
+    "chill", "hype", "afro", "soulful", "vocal", "instrumental",
+]
 
 struct UploadTagInput: View {
     @Binding var tags: [String]
@@ -714,6 +1151,33 @@ struct UploadPill: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Visibility picker (Public/Private pill pair + optional hint)
+
+struct UploadVisibilityPicker: View {
+    @Binding var visibility: String
+    var publicHint: String? = nil
+    var privateHint: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                UploadPill("Public", icon: .globe, expands: true, selected: visibility == "public") {
+                    visibility = "public"
+                }
+                UploadPill("Private", icon: .lock, expands: true, selected: visibility == "private") {
+                    visibility = "private"
+                }
+            }
+
+            if let hint = visibility == "public" ? publicHint : privateHint {
+                Text(hint)
+                    .font(.appFootnote)
+                    .foregroundStyle(Color.vText3)
+            }
+        }
     }
 }
 

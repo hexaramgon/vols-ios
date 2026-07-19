@@ -32,7 +32,7 @@ struct OverlaidRootView: View {
     }
 
     private var showMiniPlayer: Bool {
-        playerController.display.title.isEmpty == false
+        playerController.hasMedia
     }
 
     private var isConversationActive: Bool {
@@ -40,8 +40,9 @@ struct OverlaidRootView: View {
     }
 
     private var collapsedFrame: CGRect {
-        // Position the collapsed mini-player above the tab bar
-        let tabBarHeight: CGFloat = 49
+        // Position the collapsed mini-player above the tab bar (measured —
+        // the bar's height varies with Dynamic Type).
+        let tabBarHeight = playerController.tabBarHeight
         let bottomPadding: CGFloat = 8
         let horizontalPadding: CGFloat = 8
         let height = ViewConst.compactNowPlayingHeight

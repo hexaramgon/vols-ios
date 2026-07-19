@@ -17,6 +17,14 @@ import DesignSystem
 import SwiftUI
 import UIKit
 
+/// A picked image awaiting crop — drives the full-screen cropper presentation.
+/// THE shared item type for `.fullScreenCover(item:)` + `ImageCropperView`
+/// (four screens had private copies of it).
+struct CropTarget: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
 struct ImageCropperView: View {
     /// Source image — pass `someImage.normalizedUp()` so pixel coords match display.
     let image: UIImage

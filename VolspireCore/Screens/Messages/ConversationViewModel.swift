@@ -75,7 +75,6 @@ extension ConversationViewModel {
 @Observable
 @MainActor
 final class ConversationViewModel {
-    enum LoadState: Equatable { case idle, loading, loaded, error(String) }
 
     var messages: [ChatMessage] = []
     var loadingState: LoadState = .idle

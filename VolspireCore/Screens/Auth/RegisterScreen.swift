@@ -40,8 +40,6 @@ struct RegisterScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             topBar
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
 
             ZStack {
                 Group {
@@ -58,17 +56,13 @@ struct RegisterScreen: View {
             }
         }
         .background(AuthCanvas())
-        // Overlay (not safeAreaInset): the link stays anchored to the screen
-        // bottom and the keyboard simply covers it, instead of riding up.
-        // The overlay content must be FULL-HEIGHT for the keyboard opt-out to
-        // work — ignoresSafeArea only expands views whose bounds touch the
-        // ignored region, so a bare link would still be pushed up.
+        // Pinned bottom link — AuthBottomLink carries the overlay/keyboard
+        // opt-out rationale.
         .overlay {
             if viewModel.step == 0 {
-                signInLink
-                    .frame(maxWidth: .infinity)
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .ignoresSafeArea(.keyboard, edges: .bottom)
+                AuthBottomLink(prompt: "Already have an account?", action: "Sign in") {
+                    leaveWizard()
+                }
             }
         }
         .sheet(isPresented: $showTermsDoc) { SettingsDocScreen(doc: .terms, inSheet: true) }
@@ -81,71 +75,39 @@ struct RegisterScreen: View {
     /// mid-verification (the verify step has its own "start over") and on the
     /// done step.
     private var topBar: some View {
-        HStack {
-            if viewModel.step != 3, viewModel.step < RegisterViewModel.totalSteps {
-                Button {
-                    if viewModel.step == 0 {
-                        leaveWizard()
-                    } else {
-                        viewModel.goBack()
-                    }
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                        .imageScale(.large)
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .disabled(viewModel.loading)
+        AuthWizardBackBar(
+            canGoBack: viewModel.step != 3 && viewModel.step < RegisterViewModel.totalSteps,
+            disabled: viewModel.loading
+        ) {
+            if viewModel.step == 0 {
+                leaveWizard()
+            } else {
+                viewModel.goBack()
             }
-            Spacer()
         }
-        .frame(height: 44)
     }
 
     /// Shared scroll shell for a step: left-aligned heading, the step's
     /// fields, error state, then its inline CTA.
     private func stepPage(_ step: Int, @ViewBuilder content: () -> some View) -> some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(RegisterViewModel.stepTitles[step])
-                    .font(.appTitleXXL)
-                    .foregroundStyle(.white)
-                    .padding(.top, 12)
-
-                Text(RegisterViewModel.stepSubtitles[step])
-                    .font(.appCalloutRegular)
-                    .foregroundStyle(Color.vText2)
-                    .padding(.top, 6)
-
-                content()
-                    .padding(.top, 28)
-
-                if let error = viewModel.error, !viewModel.existingAccount {
-                    AuthErrorBanner(message: error)
-                        .padding(.top, 14)
-                }
-
-                if viewModel.existingAccount {
-                    existingAccountNotice(viewModel)
-                        .padding(.top, 14)
-                }
-
-                stepPrimaryButton(step)
-                    .padding(.top, 24)
-            }
-            .padding(.horizontal, 24)
+        AuthStepPage(
+            title: RegisterViewModel.stepTitles[step],
+            subtitle: RegisterViewModel.stepSubtitles[step],
+            // The existing-account notice replaces the raw error message.
+            error: viewModel.existingAccount ? nil : viewModel.error,
             // Extra clearance on the first step for the pinned sign-in link.
-            .padding(.bottom, step == 0 ? 72 : 32)
-            .frame(maxWidth: 440)
-            .frame(maxWidth: .infinity)
+            bottomPadding: step == 0 ? 72 : 32
+        ) {
+            content()
+        } footer: {
+            if viewModel.existingAccount {
+                existingAccountNotice(viewModel)
+                    .padding(.top, 14)
+            }
+
+            stepPrimaryButton(step)
+                .padding(.top, 24)
         }
-        .scrollDismissesKeyboard(.interactively)
-        // No rubber-band on steps that fit the screen — keyboard-driven scroll
-        // adjustments stay pinned instead of bouncing the page.
-        .scrollBounceBehavior(.basedOnSize)
     }
 
     /// The step's inline CTA. The verify step auto-submits when the sixth
@@ -362,9 +324,7 @@ struct RegisterScreen: View {
                 }
 
                 if !viewModel.confirmPassword.isEmpty, !viewModel.passwordsMatch {
-                    Text("Passwords must match")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vError)
+                    AuthPasswordMismatchLabel()
                 }
             }
             .padding(.leading, 4)
@@ -542,49 +502,20 @@ struct RegisterScreen: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             AuthCodeField(
-                code: Binding(
-                    get: { viewModel.otpCode },
-                    set: { newValue in
-                        let digits = String(newValue.filter(\.isNumber).prefix(6))
-                        viewModel.otpCode = digits
-                        viewModel.verifyError = nil
-                        if digits.count == 6 {
-                            Task { await viewModel.verifyOtp() }
-                        }
-                    }
-                ),
-                disabled: viewModel.loading
+                code: Binding(get: { viewModel.otpCode }, set: { viewModel.otpCode = $0 }),
+                disabled: viewModel.loading,
+                onEdit: { viewModel.verifyError = nil },
+                onFilled: { Task { await viewModel.verifyOtp() } }
             )
 
             if let verifyError = viewModel.verifyError {
-                AuthErrorBanner(message: verifyError)
+                ErrorBanner(verifyError)
             }
 
             VStack(spacing: 14) {
-                Button {
+                AuthResendButton(state: resendState) {
                     Task { await viewModel.resend() }
-                } label: {
-                    Group {
-                        switch viewModel.resendStatus {
-                        case .sending:
-                            Text("Sending…").foregroundStyle(Color.vText3)
-                        case .sent:
-                            HStack(spacing: 6) {
-                                LucideIcon(.check, .xs)
-                                Text("New code sent — check your inbox")
-                            }
-                            .foregroundStyle(Color.green)
-                        case .idle:
-                            Text("Didn't get a code? \(Text("Resend").foregroundStyle(.white).underline())")
-                                .foregroundStyle(Color.vText3)
-                        }
-                    }
-                    .font(.appSubheadline)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(.rect)
                 }
-                .buttonStyle(.plain)
-                .disabled(viewModel.resendStatus != .idle)
 
                 Button {
                     viewModel.resetToStart()
@@ -597,6 +528,15 @@ struct RegisterScreen: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    /// The view model's resend status in the shared button's terms.
+    private var resendState: AuthResendButton.ResendState {
+        switch viewModel.resendStatus {
+        case .idle: .idle
+        case .sending: .sending
+        case .sent: .sent
         }
     }
 

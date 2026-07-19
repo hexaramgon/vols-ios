@@ -9,6 +9,7 @@
 //  the token server-side (best-effort) before the session is dropped.
 //
 
+import SharedUtilities
 import Supabase
 import UIKit
 import UserNotifications
@@ -99,9 +100,11 @@ public final class PushNotificationManager {
     /// precisely instead of just zeroing.
     public func refreshBadge() async {
         guard client.auth.currentSession != nil else { return }
-        struct Counts: Decodable { let notifications: Int; let messages: Int }
         do {
-            let counts: Counts = try await client.rpc("get_unread_counts").execute().value
+            // Decode with `.api` (snake_case strategy) — the SDK's own decoder
+            // wouldn't map `service_actions` now that DTOs carry no CodingKeys.
+            let response = try await client.rpc("get_unread_counts").execute()
+            let counts = try JSONDecoder.api.decode(ApiUnreadCounts.self, from: response.data)
             try await UNUserNotificationCenter.current().setBadgeCount(max(0, counts.notifications + counts.messages))
         } catch {
             debugLog("[Push] refreshBadge failed: \(error)")

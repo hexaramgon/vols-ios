@@ -43,7 +43,7 @@ struct ProfileMediaRow<Trailing: View>: View {
     var body: some View {
         let isActive = viewModel.mediaActivity(MediaID(id)) != nil
         HStack(spacing: 14) {
-            ArtworkView(coverURL.map { .webImage($0) } ?? .placeholder(name: title), cornerRadius: 8)
+            ArtworkView(.placeholder(coverURL, name: title), cornerRadius: 8)
                 .frame(width: 44, height: 44)
                 .grayscale(dimmed ? 1 : 0)
 
@@ -65,7 +65,11 @@ struct ProfileMediaRow<Trailing: View>: View {
 
             Spacer(minLength: 8)
 
-            if isActive { ProfileEqualizerBars().padding(.trailing, 2) }
+            if isActive {
+                EqualizerBars(heights: [7, 13, 9], barWidth: 2.5, spacing: 2, tint: .white.opacity(0.9))
+                    .frame(width: 14, height: 13)
+                    .padding(.trailing, 2)
+            }
             trailing
         }
         .padding(.leading, 6)

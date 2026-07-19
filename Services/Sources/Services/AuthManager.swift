@@ -8,6 +8,7 @@ import AuthenticationServices
 import Foundation
 import GoogleSignIn
 import Observation
+import SharedUtilities
 import Supabase
 import UIKit
 
@@ -65,10 +66,8 @@ public final class AuthManager {
         if lower.contains("rate limit") || lower.contains("once every") || lower.contains("too many") {
             return "Too many attempts — give it a minute and try again."
         }
-        if lower.contains("network") || lower.contains("offline")
-            || lower.contains("connection") || lower.contains("timed out")
-        {
-            return "Can't reach Volspire. Check your connection and try again."
+        if let offline = SupabaseError.connectionFriendly(fromLowercased: lower) {
+            return offline
         }
         if lower.contains("expired") {
             return "That code expired — request a new one."
@@ -98,10 +97,16 @@ public final class AuthManager {
     /// is rejected by the server.
     public func restoreSession() async {
         if let session = client.auth.currentSession {
-            state = .authenticated(userId: session.user.id.uuidString.lowercased())
+            setAuthenticated(session)
         } else {
             state = .unauthenticated
         }
+    }
+
+    /// The one place `state` flips to authenticated — the id is normalized to
+    /// DB casing (see `Session.lowercasedUserId`).
+    private func setAuthenticated(_ session: Session) {
+        state = .authenticated(userId: session.lowercasedUserId)
     }
 
     /// Listen for auth state changes
@@ -110,7 +115,7 @@ public final class AuthManager {
             switch event {
             case .signedIn:
                 if let session, !holdSessionForOnboarding {
-                    state = .authenticated(userId: session.user.id.uuidString.lowercased())
+                    setAuthenticated(session)
                 }
             case .signedOut:
                 // Covers server-driven sign-outs (revoked/rejected refresh)
@@ -180,9 +185,7 @@ public final class AuthManager {
     /// The current session's user id, even while the session is held for
     /// onboarding (when `state` hasn't flipped to authenticated yet).
     public func sessionUserId() async -> String? {
-        // Lowercased to match Postgres UUID text (Swift's `uuidString` is uppercase),
-        // so it compares equal to DB-sourced user ids.
-        (try? await client.auth.session)?.user.id.uuidString.lowercased()
+        (try? await client.auth.session)?.lowercasedUserId
     }
 
     /// Ends the register wizard — releases the hold and reveals the session
@@ -190,7 +193,7 @@ public final class AuthManager {
     public func finishOnboarding() async {
         holdSessionForOnboarding = false
         if let session = try? await client.auth.session {
-            state = .authenticated(userId: session.user.id.uuidString.lowercased())
+            setAuthenticated(session)
         }
     }
 
@@ -198,7 +201,7 @@ public final class AuthManager {
         errorMessage = nil
         do {
             let session = try await client.auth.signIn(email: email, password: password)
-            state = .authenticated(userId: session.user.id.uuidString.lowercased())
+            setAuthenticated(session)
         } catch {
             errorMessage = friendly(error)
         }
@@ -263,7 +266,7 @@ public final class AuthManager {
                     idToken: tokenString
                 )
             )
-            state = .authenticated(userId: session.user.id.uuidString.lowercased())
+            setAuthenticated(session)
         } catch {
             errorMessage = friendly(error)
         }
@@ -295,7 +298,7 @@ public final class AuthManager {
                     accessToken: result.user.accessToken.tokenString
                 )
             )
-            state = .authenticated(userId: session.user.id.uuidString.lowercased())
+            setAuthenticated(session)
         } catch {
             // GIDSignInError.canceled (-5): the user dismissed the sheet — no-op.
             if (error as NSError).code == -5 { return }
@@ -356,4 +359,10 @@ public final class AuthManager {
         if case let .authenticated(userId) = state { return userId }
         return nil
     }
+}
+
+private extension Session {
+    /// Postgres UUID text is lowercase; Swift's `uuidString` is uppercase — user
+    /// ids live in DB casing everywhere in the app, so normalize at the source.
+    var lowercasedUserId: String { user.id.uuidString.lowercased() }
 }

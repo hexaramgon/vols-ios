@@ -41,10 +41,7 @@ struct MediaCollectionScreen: View {
 
     /// Bottom inset so the final rows clear the tab bar + (when present) the
     /// mini-player docked above it.
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     init(items: [Media], listMeta: MediaList.Meta? = nil, trailingToolbar: AnyView? = nil, showSave: Bool = true, currentPlaylistId: String? = nil, onRemoveFromPlaylist: ((Media) async -> Void)? = nil) {
         _viewModel = State(wrappedValue: MediaListScreenViewModel(items: items, listMeta: listMeta))
@@ -84,9 +81,7 @@ struct MediaCollectionScreen: View {
         }
         .enableSwipeBack()
         .task {
-            viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
-            await viewModel.registerItems() // so tapping a row can resolve its audio URL
             await viewModel.loadHeroColors()
         }
         .sheet(item: $optionsMedia) { media in trackOptionsSheet(media) }
@@ -224,33 +219,14 @@ private extension MediaCollectionScreen {
     }
 
     func row(index: Int, item: Media) -> some View {
-        let activity = viewModel.mediaActivity(item.id)
-        let isActive = activity != nil
-        return HStack(spacing: 13) {
-            ArtworkView(item.meta.artwork.map { .webImage($0) } ?? .album, cornerRadius: 9)
-                .frame(width: 50, height: 50)
-                .overlay {
-                    if let activity {
-                        ZStack {
-                            Color.black.opacity(0.45)
-                            MediaActivityIndicator(state: activity).foregroundStyle(.white)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    }
-                }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.meta.title)
-                    .font(.appFont.trackTitle)
-                    .foregroundStyle(isActive ? .white : .white.opacity(0.95))
-                    .lineLimit(1)
-                if let artist = item.meta.artist, !artist.isEmpty {
-                    Text("@\(artist)").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
-                }
-            }
-
-            Spacer(minLength: 8)
-
+        TrackListRow(
+            artwork: item.meta.artwork.map { .webImage($0) } ?? .album,
+            title: item.meta.title,
+            subtitle: item.meta.artist.flatMap { $0.isEmpty ? nil : "@\($0)" },
+            activity: viewModel.mediaActivity(item.id),
+            showsSeparator: index < viewModel.items.count - 1,
+            onTap: { viewModel.onSelect(media: item.id) }
+        ) {
             if showSave {
                 Button {
                     Task { await viewModel.toggleSave(item.id) }
@@ -272,17 +248,6 @@ private extension MediaCollectionScreen {
             }
             .buttonStyle(.plain)
         }
-        .padding(.vertical, 9)
-        .overlay(alignment: .bottom) {
-            if index < viewModel.items.count - 1 {
-                Rectangle()
-                    .fill(Color.white.opacity(0.06))
-                    .frame(height: 0.5)
-                    .padding(.leading, 63) // align under the title (artwork + spacing)
-            }
-        }
-        .contentShape(.rect)
-        .onTapGesture { viewModel.onSelect(media: item.id) }
     }
 }
 
@@ -325,14 +290,15 @@ private extension MediaCollectionScreen {
             reportTargetId: media.id.value
         )
         // Detents come from TrackOptionsSheet itself (sized to its rows).
-        .presentationDragIndicator(.visible)
         .sheetBackground()
     }
 
     func mediaActions(_ media: Media) -> [TrackOptionsSheet.Action] {
         var list: [TrackOptionsSheet.Action] = [
             .init(icon: .user, title: "Go to Artist") { await goToArtist(media) },
-            .init(icon: .share2, title: "Share Track", dismissesSheet: false) { shareTrack(media) },
+            .init(icon: .share2, title: "Share Track", dismissesSheet: false) {
+                ShareActions.shareTrack(title: media.meta.title, trackId: media.id.value)
+            },
             .init(icon: .circlePlus, title: "Add to Playlist") { addToPlaylistMedia = media },
         ]
         if let onRemoveFromPlaylist {
@@ -345,14 +311,6 @@ private extension MediaCollectionScreen {
 
     func addToPlaylistSheet(_ media: Media) -> some View {
         AddToPlaylistSheet(trackId: media.id.value, currentPlaylistId: currentPlaylistId)
-    }
-
-    /// Dismiss the options sheet, then run the action so the next sheet/share/nav
-    /// presents over a clean stack.
-    func shareTrack(_ media: Media) {
-        let text = "Check out \"\(media.meta.title)\" on Volspire!"
-        AnalyticsService.shared?.log(.shareClicked, trackId: media.id.value, metadata: ["kind": "track", "method": "share_sheet"])
-        UIApplication.presentActivitySheet([text])
     }
 
     func goToArtist(_ media: Media) async {

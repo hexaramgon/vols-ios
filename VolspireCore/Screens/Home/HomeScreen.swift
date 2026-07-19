@@ -91,10 +91,7 @@ struct HomeScreen: View {
     /// Bottom inset so the last rows clear the tab bar + (when present) the
     /// mini-player docked above it — same formula as Library / Search /
     /// Messages so every scrolling tab bottoms out consistently.
-    var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    var bottomInset: CGFloat { playerController.contentBottomInset }
 
     var body: some View {
         // The header floats on top (z-overlay) so it can sit transparently over
@@ -136,7 +133,6 @@ struct HomeScreen: View {
         .sheet(isPresented: $viewModel.showCreateFolder) { createFolderSheet }
         .gradientBackground()
         .task {
-            viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
             await viewModel.loadInitial()
         }

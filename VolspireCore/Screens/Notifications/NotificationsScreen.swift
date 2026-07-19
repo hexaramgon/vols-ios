@@ -19,10 +19,7 @@ struct NotificationsScreen: View {
     @State private var viewModel = NotificationsScreenViewModel()
 
     /// Clears the tab bar + (when present) the floating mini-player.
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     var body: some View {
         ScrollView {
@@ -66,25 +63,19 @@ struct NotificationsScreen: View {
     /// Shimmering placeholder that mirrors the notification row (avatar + two
     /// text lines + trailing time) — consistent with the app's other skeletons.
     private var loadingSkeleton: some View {
-        let bone = Color.white.opacity(0.08)
-        return VStack(alignment: .leading, spacing: 0) {
-            ForEach(0 ..< 8, id: \.self) { _ in
-                HStack(alignment: .top, spacing: 12) {
-                    Circle().fill(bone).frame(width: 44, height: 44)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Capsule().fill(bone).frame(width: 210, height: 13)
-                        Capsule().fill(bone).frame(width: 120, height: 11)
-                    }
-                    Spacer(minLength: 8)
-                    Capsule().fill(bone).frame(width: 30, height: 10)
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.vertical, 12)
-            }
-        }
+        SkeletonRows(
+            count: 8,
+            thumb: .circle(size: 44),
+            line1: CGSize(width: 210, height: 13),
+            line2: CGSize(width: 120, height: 11),
+            trailing: CGSize(width: 30, height: 10),
+            rowAlignment: .top,
+            thumbSpacing: 12,
+            verticalPadding: 12,
+            boneOpacity: 0.08
+        )
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 8)
-        .shimmering()
     }
 
     private func sectionHeader(_ title: String) -> some View {

@@ -27,7 +27,6 @@ final class SearchScreenViewModel {
     var packs: [ApiMarketplacePack] = []
     var services: [ApiMarketplaceService] = []
 
-    weak var mediaState: MediaState?
     weak var player: MediaPlayer? {
         didSet { observeMediaPlayerState() }
     }
@@ -65,28 +64,24 @@ final class SearchScreenViewModel {
     func coverURL(for track: ApiSearchTrack) -> URL? { cover(track.coverUrl) }
 
     /// Plays a search track, queueing the rest of the track results behind it.
+    /// The shared queue-and-play helper registers the queue in MediaState,
+    /// dedupes by id, and drops rows with no audio.
     func play(_ track: ApiSearchTrack) async {
-        guard let audio = storageService.resolveTrackUrl(track.audioUrl).flatMap({ URL(string: $0) }) else { return }
+        guard let player,
+              storageService.resolveTrackUrl(track.audioUrl) != nil else { return }
 
-        // The tapped track must be in the queue or `MediaPlayer.play` rejects it.
-        var seen = Set<String>()
-        let queue = tracks.filter { seen.insert($0.id).inserted && ($0.id == track.id || $0.audioUrl != nil) }
-
-        for t in queue {
-            let url = t.id == track.id ? audio : storageService.resolveTrackUrl(t.audioUrl).flatMap { URL(string: $0) }
-            await mediaState?.addTrack(
-                Media(
-                    id: MediaID(t.id),
-                    meta: MediaMeta(
-                        artwork: cover(t.coverUrl),
-                        title: t.title,
-                        artist: t.artist ?? "unknown",
-                        audioURL: url
-                    )
+        let queue = tracks.map { t in
+            Media(
+                id: MediaID(t.id),
+                meta: MediaMeta(
+                    artwork: cover(t.coverUrl),
+                    title: t.title,
+                    artist: t.artist ?? "unknown",
+                    audioURL: storageService.resolveTrackUrl(t.audioUrl).flatMap { URL(string: $0) }
                 )
             )
         }
-        player?.play(MediaID(track.id), of: queue.map { MediaID($0.id) })
+        await player.play(MediaID(track.id), queue: queue)
     }
 }
 

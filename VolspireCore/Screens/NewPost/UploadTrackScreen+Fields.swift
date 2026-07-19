@@ -2,7 +2,7 @@
 //  UploadTrackScreen+Fields.swift
 //  Volspire
 //
-//  Cover + title + genre, description, and the streamable-preview / video attachment area.
+//  Cover + title + genre and the streamable-preview / video attachment area.
 //
 
 import CoreTransferable
@@ -19,106 +19,15 @@ extension UploadTrackScreen {
             Button {
                 showCoverPicker = true
             } label: {
-                coverBox
+                // Mirrors the title column's height so their bottoms align.
+                UploadCoverBox(image: viewModel.coverImage, size: max(96, titleColumnHeight))
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 10) {
-                TextField(
-                    "",
-                    text: $viewModel.title,
-                    prompt: Text("Track title").foregroundStyle(Color.vText3)
-                )
-                .font(.appBody)
-                .foregroundStyle(.white)
-                .submitLabel(.done)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 13)
-                .uploadFieldShell()
-                .onChange(of: viewModel.title) { _, newValue in
-                    if newValue.count > 100 {
-                        viewModel.title = String(newValue.prefix(100))
-                    }
-                }
-
-                Button {
-                    showGenrePicker = true
-                } label: {
-                    HStack {
-                        Text(viewModel.genre.isEmpty ? "Genre" : viewModel.genre)
-                            .font(.appBody)
-                            .foregroundStyle(viewModel.genre.isEmpty ? Color.vText3 : .white)
-                        Spacer()
-                        LucideIcon(.chevronDown, .sm)
-                            .foregroundStyle(Color.vText3)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 13)
-                    .uploadFieldShell()
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
+            UploadTitleGenreColumn(title: $viewModel.title, genre: $viewModel.genre) {
+                showGenrePicker = true
             }
-            // The cover box mirrors this column's height so their bottoms align.
             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { titleColumnHeight = $0 })
-        }
-    }
-
-    var coverBox: some View {
-        ZStack {
-            if let img = viewModel.coverImage {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                UploadTheme.fieldFill
-                VStack(spacing: 6) {
-                    LucideIcon(.image, .lg)
-                        .foregroundStyle(Color.vText3)
-                    Text("Cover art")
-                        .font(.appCaption)
-                        .foregroundStyle(Color.vText3)
-                }
-            }
-        }
-        .frame(width: max(96, titleColumnHeight), height: max(96, titleColumnHeight))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            if viewModel.coverImage == nil {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
-            } else {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
-            }
-        }
-    }
-
-    // MARK: - Description
-
-    var descriptionField: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            TextField(
-                "",
-                text: $viewModel.description,
-                prompt: Text("What's the story behind this track?").foregroundStyle(Color.vText3),
-                axis: .vertical
-            )
-            .font(.appBody)
-            .foregroundStyle(.white)
-            .lineLimit(3...6)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .uploadFieldShell()
-            .onChange(of: viewModel.description) { _, newValue in
-                if newValue.count > 500 {
-                    viewModel.description = String(newValue.prefix(500))
-                }
-            }
-
-            Text("\(viewModel.description.count)/500")
-                .font(.appCaption)
-                .foregroundStyle(Color.vText3)
         }
     }
 
@@ -151,7 +60,7 @@ extension UploadTrackScreen {
     var attachmentArea: some View {
         if viewModel.mediaType == .audio {
             if let data = viewModel.audioData {
-                attachedFileCard(icon: .fileAudio, name: viewModel.audioFileName, bytes: data.count) {
+                UploadAttachedFileCard(icon: .fileAudio, name: viewModel.audioFileName, bytes: data.count) {
                     viewModel.audioData = nil
                     viewModel.audioFileName = nil
                 }
@@ -164,7 +73,7 @@ extension UploadTrackScreen {
                 Button {
                     showAudioPicker = true
                 } label: {
-                    dropZone(
+                    UploadDropZone(
                         icon: .fileAudio,
                         title: "Tap to choose an audio file",
                         hint: "MP3, WAV, FLAC, AIFF"
@@ -174,7 +83,7 @@ extension UploadTrackScreen {
             }
         } else {
             if let data = viewModel.videoData {
-                attachedFileCard(icon: .video, name: viewModel.videoFileName, bytes: data.count) {
+                UploadAttachedFileCard(icon: .video, name: viewModel.videoFileName, bytes: data.count) {
                     viewModel.videoData = nil
                     viewModel.videoFileName = nil
                     viewModel.videoAudioOnly = false
@@ -197,7 +106,7 @@ extension UploadTrackScreen {
                 Button {
                     showVideoPicker = true
                 } label: {
-                    dropZone(
+                    UploadDropZone(
                         icon: .video,
                         title: "Tap to choose a video",
                         hint: "MP4, MOV from your library"
@@ -212,7 +121,7 @@ extension UploadTrackScreen {
     /// — replaces the empty drop zone so it never looks frozen mid-pick.
     var videoProcessingCard: some View {
         VStack(spacing: 14) {
-            iconBox(.video)
+            UploadIconBox(icon: .video)
             VStack(spacing: 8) {
                 Text(viewModel.videoProcessingProgress > 0 ? "Compressing video…" : "Loading video…")
                     .font(.appCallout)
@@ -272,22 +181,6 @@ extension UploadTrackScreen {
         withTransaction(transaction) {
             viewModel.videoAudioOnly = value
         }
-    }
-
-    // Thin wrappers over the shared attach components (UploadFormComponents) —
-    // the listing's clip rows use the same ones, so the two flows can't drift.
-    func dropZone(icon: LucideIcon.Name, title: String, hint: String) -> some View {
-        UploadDropZone(icon: icon, title: title, hint: hint)
-    }
-
-    func attachedFileCard(
-        icon: LucideIcon.Name, name: String?, bytes: Int, clear: @escaping () -> Void
-    ) -> some View {
-        UploadAttachedFileCard(icon: icon, name: name, bytes: bytes, clear: clear)
-    }
-
-    func iconBox(_ icon: LucideIcon.Name) -> some View {
-        UploadIconBox(icon: icon)
     }
 
 }

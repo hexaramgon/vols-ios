@@ -16,10 +16,7 @@ struct NotificationSettingsScreen: View {
 
     /// Clears the custom tab bar + home indicator + (when present) the floating
     /// mini-player — none of which are part of this pushed screen's safe area.
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     var body: some View {
         ScrollView {

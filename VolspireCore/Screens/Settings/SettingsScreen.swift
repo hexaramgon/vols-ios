@@ -26,10 +26,7 @@ struct SettingsScreen: View {
 
     /// Clears the custom tab bar + home indicator + (when present) the floating
     /// mini-player — none of which are part of this pushed screen's safe area.
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     var body: some View {
         ScrollView {
@@ -169,15 +166,8 @@ private extension SettingsScreen {
         .buttonStyle(.plain)
         .padding(.horizontal, ViewConst.screenPaddings)
         .padding(.top, 28)
-        .confirmationDialog(
-            "Log out of Volspire?",
-            isPresented: $showLogoutConfirm,
-            titleVisibility: .visible
-        ) {
-            Button("Log out", role: .destructive) {
-                Task { await dependencies.authManager.signOut() }
-            }
-            Button("Cancel", role: .cancel) {}
+        .destructiveConfirm("Log out of Volspire?", isPresented: $showLogoutConfirm, actionLabel: "Log out") {
+            Task { await dependencies.authManager.signOut() }
         }
     }
 

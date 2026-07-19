@@ -26,10 +26,7 @@ struct SearchScreen: View {
     private var pad: CGFloat { ViewConst.screenPaddings }
 
     /// Clears the tab bar + (when present) the floating mini-player.
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,7 +41,6 @@ struct SearchScreen: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .enableSwipeBack()
         .task {
-            viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
             if !initialQuery.isEmpty, viewModel.searchText.isEmpty {
                 viewModel.searchText = initialQuery
@@ -98,10 +94,11 @@ private extension SearchScreen {
             LoadErrorView { viewModel.retry() }
         } else if !viewModel.hasResults {
             let q = viewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            stateView(
+            EmptyStateView(
                 icon: .search,
                 title: q.isEmpty ? "Search Volspire" : "No results",
-                message: q.isEmpty ? "Find tracks, artists, services & packs." : "Nothing matched “\(q)”."
+                message: q.isEmpty ? "Find tracks, artists, services & packs." : "Nothing matched “\(q)”.",
+                centered: true
             )
         } else {
             ScrollView {
@@ -140,25 +137,19 @@ private extension SearchScreen {
     /// Placeholder while the first results are fetched — two faux sections of
     /// row bones, sweeping with the shared shimmer.
     var resultsSkeleton: some View {
-        let bone = Color.white.opacity(0.06)
-        return ScrollView {
+        ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 ForEach(0 ..< 2, id: \.self) { _ in
                     VStack(alignment: .leading, spacing: 2) {
-                        Capsule().fill(bone).frame(width: 80, height: 12)
+                        Capsule().fill(Color.white.opacity(0.06)).frame(width: 80, height: 12)
                             .padding(.horizontal, 14).padding(.bottom, 8)
-                        ForEach(0 ..< 4, id: \.self) { _ in
-                            HStack(spacing: 13) {
-                                RoundedRectangle(cornerRadius: 9, style: .continuous).fill(bone)
-                                    .frame(width: 50, height: 50)
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Capsule().fill(bone).frame(width: 150, height: 13)
-                                    Capsule().fill(bone).frame(width: 90, height: 11)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 14).padding(.vertical, 9)
-                        }
+                        SkeletonRows(
+                            count: 4,
+                            line1: CGSize(width: 150, height: 13),
+                            rowSpacing: 2,
+                            horizontalPadding: 14,
+                            shimmers: false
+                        )
                     }
                 }
             }
@@ -174,24 +165,16 @@ private extension SearchScreen {
 
 private extension SearchScreen {
     func trackRow(_ track: ApiSearchTrack) -> some View {
-        let activity = viewModel.mediaActivity(MediaID(track.id))
-        return rowShell {
-            ArtworkView(viewModel.coverURL(for: track).map { .webImage($0) } ?? .album, cornerRadius: 9)
-                .frame(width: 50, height: 50)
-                .overlay {
-                    if let activity {
-                        ZStack {
-                            Color.black.opacity(0.45)
-                            MediaActivityIndicator(state: activity).foregroundStyle(.white)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    }
-                }
-            rowText(title: track.title, subtitle: track.artist.map { "@\($0)" })
-            Spacer(minLength: 8)
-        } onTap: {
-            Task { await viewModel.play(track) }
-        }
+        TrackListRow(
+            artwork: viewModel.coverURL(for: track).map { .webImage($0) } ?? .album,
+            title: track.title,
+            subtitle: track.artist.map { "@\($0)" },
+            activity: viewModel.mediaActivity(MediaID(track.id)),
+            horizontalPadding: 14,
+            onTap: {
+                Task { await viewModel.play(track) }
+            }
+        )
     }
 
     func artistRow(_ artist: ApiExploreArtist) -> some View {
@@ -274,22 +257,9 @@ private extension SearchScreen {
     }
 }
 
-// MARK: - State + formatting
+// MARK: - Formatting
 
 private extension SearchScreen {
-    func stateView(icon: LucideIcon.Name, title: String, message: String) -> some View {
-        VStack(spacing: 10) {
-            LucideIcon(icon, .hero).foregroundStyle(Color.vText3)
-            Text(title).font(.appTitle3).foregroundStyle(.white)
-            Text(message)
-                .font(.appSubheadline)
-                .foregroundStyle(Color.vText2)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 40)
-    }
-
     func priceLabel(_ price: Double?) -> String {
         let p = price ?? 0
         if p <= 0 { return "Free" }

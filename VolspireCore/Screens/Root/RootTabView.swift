@@ -108,7 +108,7 @@ struct RootTabView: View {
     @Environment(PlayerController.self) private var playerController
 
     /// The collapsed mini-player floats above the tab bar, so content is padded to clear it.
-    private var showMiniPlayer: Bool { !playerController.display.title.isEmpty }
+    private var showMiniPlayer: Bool { playerController.hasMedia }
 
     private var isConversationOpen: Bool { conversationState.activeConversation != nil }
 
@@ -166,7 +166,14 @@ struct RootTabView: View {
                 // The visible bar never unmounts — hiding is a pure offset, which
                 // stays smooth while the push animation runs alongside it.
                 customTabBar
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { tabBarHeight = $0 }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                        tabBarHeight = $0
+                        // Publish for chrome consumers outside this view —
+                        // contentBottomInset and the mini-player's collapsed
+                        // frame (OverlaidRootView hardcoded 49pt before, which
+                        // drifted from the real bar at larger Dynamic Type).
+                        playerController.tabBarHeight = $0
+                    }
                     .offset(y: isConversationOpen ? tabBarHeight + ViewConst.safeAreaInsets.bottom : 0)
                     .animation(.smooth(duration: 0.35), value: isConversationOpen)
                     .allowsHitTesting(!isConversationOpen)

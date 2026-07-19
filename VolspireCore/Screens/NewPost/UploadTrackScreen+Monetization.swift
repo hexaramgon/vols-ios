@@ -59,7 +59,7 @@ extension UploadTrackScreen {
             showAssetPicker = true
         } label: {
             HStack(spacing: 12) {
-                iconBox(.fileAudio)
+                UploadIconBox(icon: .fileAudio)
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
@@ -186,23 +186,15 @@ extension UploadTrackScreen {
                         "",
                         text: Binding(
                             get: { viewModel.tierPrice[tier] ?? "" },
-                            set: { viewModel.tierPrice[tier] = $0.filter { "0123456789.".contains($0) } }
-                        ),
+                            set: { viewModel.tierPrice[tier] = $0 }
+                        ).decimalFiltered(),
                         prompt: Text("0.00").foregroundStyle(Color.vText3)
                     )
                     .font(.appBody)
                     .foregroundStyle(.white)
                     .keyboardType(.decimalPad)
                     .focused($priceFieldFocused)
-                    .toolbar {
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Spacer()
-                            Button("Done") {
-                                priceFieldFocused = false
-                            }
-                            .font(.appCallout)
-                        }
-                    }
+                    .doneKeyboardToolbar($priceFieldFocused)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
@@ -259,14 +251,7 @@ extension UploadTrackScreen {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Privacy & Release")
 
-            HStack(spacing: 8) {
-                UploadPill("Public", icon: .globe, expands: true, selected: viewModel.visibility == "public") {
-                    viewModel.visibility = "public"
-                }
-                UploadPill("Private", icon: .lock, expands: true, selected: viewModel.visibility == "private") {
-                    viewModel.visibility = "private"
-                }
-            }
+            UploadVisibilityPicker(visibility: $viewModel.visibility)
         }
     }
 }

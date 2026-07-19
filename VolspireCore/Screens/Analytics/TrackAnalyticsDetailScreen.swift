@@ -14,10 +14,7 @@ struct TrackAnalyticsDetailScreen: View {
     @Environment(PlayerController.self) private var playerController
     let track: TrackAnalyticsItem
 
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     private var series: [Int] { track.dailyPlaysSeries }
     private var trend: Int { AnalyticsViewModel.weekTrend(from: series) }
@@ -29,7 +26,13 @@ struct TrackAnalyticsDetailScreen: View {
                 VStack(spacing: 14) {
                     statsGrid
                     chartCard
-                    if !track.sortedSources.isEmpty { sourcesCard }
+                    if !track.sortedSources.isEmpty {
+                        AnalyticsSourcesCard(
+                            subtitle: "How listeners reached this track",
+                            sources: Array(track.sortedSources.prefix(6)),
+                            totalPlays: track.sources.values.reduce(0, +)
+                        )
+                    }
                 }
                 .padding(.horizontal, ViewConst.screenPaddings)
                 .padding(.top, 4)
@@ -53,7 +56,7 @@ private extension TrackAnalyticsDetailScreen {
         HStack(spacing: 12) {
             BackButton(shadow: false)
 
-            ArtworkView(track.coverURL.map { .webImage($0) } ?? .placeholder(name: track.title), cornerRadius: 8)
+            ArtworkView(.placeholder(track.coverURL, name: track.title), cornerRadius: 8)
                 .frame(width: 40, height: 40)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -74,23 +77,14 @@ private extension TrackAnalyticsDetailScreen {
 
 private extension TrackAnalyticsDetailScreen {
     var statsGrid: some View {
+        // Lucide icons matching the dashboard's tiles (.repeat is the closest
+        // bundled glyph to the old bidirectional-arrows SF symbol for seeks).
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-            tile("Streams", track.streams.compactCount, "play.fill")
-            tile("Unique listeners", track.uniqueListeners.compactCount, "person.2.fill")
-            tile("Avg. listen", time(Int(track.avgListenTime)), "clock.fill")
-            tile("Avg. seeks", String(format: "%.1f", track.avgSeekCount), "arrow.left.arrow.right")
+            AnalyticsStatTile(value: track.streams.compactCount, label: "Streams", icon: .playFill)
+            AnalyticsStatTile(value: track.uniqueListeners.compactCount, label: "Unique listeners", icon: .users)
+            AnalyticsStatTile(value: time(Int(track.avgListenTime)), label: "Avg. listen", icon: .clock)
+            AnalyticsStatTile(value: String(format: "%.1f", track.avgSeekCount), label: "Avg. seeks", icon: .repeat)
         }
-    }
-
-    func tile(_ label: String, _ value: String, _ icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: icon).font(.system(size: 13)).foregroundStyle(Color.brand)
-            Text(value).font(.appTitle).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
-            Text(label).font(.appCaption).foregroundStyle(Color.vText3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 16))
     }
 }
 
@@ -100,66 +94,13 @@ private extension TrackAnalyticsDetailScreen {
     var chartCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                sectionLabel("Plays · last 30 days")
+                AnalyticsSectionLabel("Plays · last 30 days")
                 Spacer()
-                trendPill
+                AnalyticsTrendPill(trend: trend)
             }
-            AnalyticsTrendChart(values: series).frame(height: 90)
-            HStack {
-                Text("30 days ago").font(.appCaption).foregroundStyle(Color.vText3)
-                Spacer()
-                Text("Today").font(.appCaption).foregroundStyle(Color.vText3)
-            }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
-    }
-
-    var trendPill: some View {
-        let up = trend >= 0
-        let tint = up ? Color.green : Color.red
-        return HStack(spacing: 3) {
-            Image(systemName: up ? "arrow.up.right" : "arrow.down.right")
-                .font(.system(size: 10, weight: .bold))
-            Text("\(abs(trend))%").font(.appCaption).fontWeight(.semibold)
-        }
-        .foregroundStyle(tint)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.16), in: Capsule())
-    }
-}
-
-// MARK: - Sources
-
-private extension TrackAnalyticsDetailScreen {
-    var sourcesCard: some View {
-        let total = max(track.sources.values.reduce(0, +), 1)
-        return VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                sectionLabel("Where plays come from")
-                Text("How listeners reached this track")
-                    .font(.appCaption).foregroundStyle(Color.vText3)
-            }
-            ForEach(track.sortedSources.prefix(6), id: \.label) { source in
-                let pct = Int((Double(source.count) / Double(total) * 100).rounded())
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(source.label).font(.appFootnote).foregroundStyle(.white)
-                        Spacer()
-                        Text("\(pct)%").font(.appCaption).foregroundStyle(Color.vText2).monospacedDigit()
-                    }
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(.white.opacity(0.06))
-                            Capsule().fill(Color.brand.opacity(0.85))
-                                .frame(width: max(6, geo.size.width * CGFloat(source.count) / CGFloat(total)))
-                        }
-                    }
-                    .frame(height: 6)
-                }
-            }
+            // No scrub binding → static chart (no drag gesture).
+            ScrubbableTrendChart(values: series).frame(height: 90)
+            AnalyticsChartFooter(days: 30)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -170,12 +111,5 @@ private extension TrackAnalyticsDetailScreen {
 // MARK: - Helpers
 
 private extension TrackAnalyticsDetailScreen {
-    func sectionLabel(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(.appLabel)
-            .tracking(0.8)
-            .foregroundStyle(Color.vText3)
-    }
-
     func time(_ seconds: Int) -> String { seconds.durationLabel }
 }

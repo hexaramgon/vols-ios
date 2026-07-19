@@ -43,7 +43,6 @@ struct PlayerControls: View {
     @State private var showReportArtist = false
     @State private var showBlockArtist = false
     @State private var pendingPlayerAction: PlayerTrackAction?
-    @State private var optionsSheetHeight: CGFloat = 320
 
     var body: some View {
         GeometryReader { geo in
@@ -172,18 +171,6 @@ private extension PlayerControls {
         .padding(.horizontal, ViewConst.playerCardPaddings)
     }
 
-    /// Shares the track using the same single-message format as the Library share,
-    /// with the track's web link (`/track/{id}`) appended.
-    func shareTrack() {
-        var shareText = "Check out \"\(model.display.title)\" on Volspire!"
-        if let trackId = model.state.currentMediaID?.value {
-            shareText += " https://volspire.com/track/\(trackId)"
-        }
-        AnalyticsService.shared?.log(.shareClicked, trackId: model.state.currentMediaID?.value, metadata: ["kind": "track", "method": "share_sheet"])
-
-        UIApplication.presentActivitySheet([shareText])
-    }
-
     /// A text "Comments" pill button that opens the comments panel.
     /// (Count removed for now — see todolist "Comments-button count".)
     var commentsButton: some View {
@@ -256,11 +243,8 @@ private extension PlayerControls {
                 ReportSheet(targetType: .user, targetId: id, subject: "@\(optionsArtistName)")
             }
         }
-        .confirmationDialog("Block @\(optionsArtistName)?", isPresented: $showBlockArtist, titleVisibility: .visible) {
-            Button("Block", role: .destructive) { blockCurrentArtist() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You won't see their tracks and they can't message you. Unblock anytime in Settings.")
+        .blockUserDialog(username: optionsArtistName, isPresented: $showBlockArtist) {
+            blockCurrentArtist()
         }
     }
 
@@ -300,45 +284,24 @@ private extension PlayerControls {
     /// Slide-up options sheet — matches the folder / listing / track sheets.
     private var trackOptionsSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                SheetHeader(icon: .music, title: model.display.title, subtitle: "@\(optionsArtistName)") {
-                    showTrackOptions = false
-                }
-                VStack(spacing: 0) {
-                    if optionsArtistId != nil {
-                        optionRow(.user, "View artist") { pendingPlayerAction = .viewArtist; showTrackOptions = false }
-                    }
-                    optionRow(.share2, "Share track") { pendingPlayerAction = .share; showTrackOptions = false }
-                    optionRow(.flag, "Report song") { pendingPlayerAction = .reportSong; showTrackOptions = false }
-                    if optionsArtistId != nil {
-                        optionRow(.flag, "Report artist") { pendingPlayerAction = .reportArtist; showTrackOptions = false }
-                        optionRow(.ban, "Block artist", tint: .vDestructive) { pendingPlayerAction = .block; showTrackOptions = false }
-                    }
-                }
-                .padding(.top, 6)
+            SheetHeader(icon: .music, title: model.display.title, subtitle: "@\(optionsArtistName)") {
+                showTrackOptions = false
             }
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { optionsSheetHeight = $0 })
-
-            Spacer(minLength: 0)
+            VStack(spacing: 0) {
+                if optionsArtistId != nil {
+                    OptionSheetRow(icon: .user, title: "View artist") { pendingPlayerAction = .viewArtist; showTrackOptions = false }
+                }
+                OptionSheetRow(icon: .share2, title: "Share track") { pendingPlayerAction = .share; showTrackOptions = false }
+                OptionSheetRow(icon: .flag, title: "Report song") { pendingPlayerAction = .reportSong; showTrackOptions = false }
+                if optionsArtistId != nil {
+                    OptionSheetRow(icon: .flag, title: "Report artist") { pendingPlayerAction = .reportArtist; showTrackOptions = false }
+                    OptionSheetRow(icon: .ban, title: "Block artist", tint: .vDestructive) { pendingPlayerAction = .block; showTrackOptions = false }
+                }
+            }
+            .padding(.top, 6)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(optionsSheetHeight + ViewConst.safeAreaInsets.bottom + 8)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
-    }
-
-    private func optionRow(_ icon: LucideIcon.Name, _ title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                LucideIcon(icon, .lg).foregroundStyle(tint).frame(width: 26)
-                Text(title).font(.appBody).foregroundStyle(tint)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20).padding(.vertical, 15)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
     }
 
     private func runPendingPlayerAction() {
@@ -346,7 +309,7 @@ private extension PlayerControls {
         pendingPlayerAction = nil
         switch action {
         case .viewArtist:   if let id = optionsArtistId { model.pendingProfileNavigation = id }
-        case .share:        shareTrack()
+        case .share:        ShareActions.shareTrack(title: model.display.title, trackId: model.state.currentMediaID?.value)
         case .reportSong:   showReportSong = true
         case .reportArtist: showReportArtist = true
         case .block:        showBlockArtist = true

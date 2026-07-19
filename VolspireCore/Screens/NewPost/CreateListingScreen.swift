@@ -86,13 +86,7 @@ struct CreateListingScreen: View {
     // MARK: - Bottom bar (pinned CTA + always-visible status)
 
     private var bottomBar: some View {
-        VStack(spacing: 10) {
-            if case .error(let message) = viewModel.uploadState {
-                statusRow(message, color: UploadTheme.errorText)
-            } else if let hint = viewModel.validationHint {
-                statusRow(hint, color: Color.vText3)
-            }
-
+        UploadBottomBar(error: viewModel.uploadState.errorMessage, hint: viewModel.validationHint) {
             // Same gradient CTA as the auth pages.
             AuthCTA(
                 title: viewModel.isEditing ? "Save Changes" : "Post Listing",
@@ -103,29 +97,6 @@ struct CreateListingScreen: View {
                 Task { await viewModel.post() }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-        .background {
-            Color.vBar
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.vBorder)
-                        .frame(height: 1)
-                }
-                .ignoresSafeArea()
-        }
-    }
-
-    private func statusRow(_ message: String, color: Color) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            LucideIcon(.triangleAlert, .sm)
-                .foregroundStyle(color)
-            Text(message)
-                .font(.appFootnote)
-                .foregroundStyle(color)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Category grid
@@ -166,41 +137,19 @@ struct CreateListingScreen: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 13)
                 .uploadFieldShell()
-                .onChange(of: viewModel.title) { _, newValue in
-                    if newValue.count > CreateListingViewModel.titleLimit {
-                        viewModel.title = String(newValue.prefix(CreateListingViewModel.titleLimit))
-                    }
-                }
+                .charLimited($viewModel.title, CreateListingViewModel.titleLimit)
 
                 Text("\(viewModel.title.count)/\(CreateListingViewModel.titleLimit)")
                     .font(.appCaption)
                     .foregroundStyle(Color.vText3)
             }
 
-            VStack(alignment: .trailing, spacing: 4) {
-                TextField(
-                    "",
-                    text: $viewModel.description,
-                    prompt: Text("Describe the vibe, the reference, what you need, the timeline…")
-                        .foregroundStyle(Color.vText3),
-                    axis: .vertical
-                )
-                .font(.appBody)
-                .foregroundStyle(.white)
-                .lineLimit(4...8)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 13)
-                .uploadFieldShell()
-                .onChange(of: viewModel.description) { _, newValue in
-                    if newValue.count > CreateListingViewModel.descriptionLimit {
-                        viewModel.description = String(newValue.prefix(CreateListingViewModel.descriptionLimit))
-                    }
-                }
-
-                Text("\(viewModel.description.count)/\(CreateListingViewModel.descriptionLimit)")
-                    .font(.appCaption)
-                    .foregroundStyle(Color.vText3)
-            }
+            UploadDescriptionField(
+                text: $viewModel.description,
+                prompt: "Describe the vibe, the reference, what you need, the timeline…",
+                limit: CreateListingViewModel.descriptionLimit,
+                lines: 4...8
+            )
         }
     }
 

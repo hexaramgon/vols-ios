@@ -137,24 +137,18 @@ public extension UIImage {
 }
 
 private func mergeSimilar(colors: [ColorCount], diffThreshold: CGFloat = 10.0, maxCount: Int) async -> [ColorCount] {
+    // Keep the first (highest-count — the input is pre-sorted) colour of each
+    // perceptual cluster and drop near-duplicates. NB: the old version carried
+    // "merge the counts into the best match" bookkeeping that mutated a local
+    // copy and never wrote it back — dropping was always the actual behaviour,
+    // this just says so.
     var result = [ColorCount]()
     for colorCount in colors {
-        var bestMatchScore: CGFloat?
-        var bestMatchColor: ColorCount?
-        for dominantColor in result {
-            let differenceScore =
-                CGFloat(colorCount.color.lab.deltaECIE94(rhs: dominantColor.color.lab))
-                    .rounded(.toNearestOrEven, precision: 100)
-            if differenceScore < bestMatchScore ?? CGFloat(Int.max) {
-                bestMatchScore = differenceScore
-                bestMatchColor = dominantColor
-            }
+        let isNearDuplicate = result.contains {
+            CGFloat(colorCount.color.lab.deltaECIE94(rhs: $0.color.lab))
+                .rounded(.toNearestOrEven, precision: 100) < diffThreshold
         }
-        if let bestMatchScore, bestMatchScore < diffThreshold {
-            bestMatchColor = bestMatchColor.map {
-                ColorCount(color: $0.color, count: $0.count + 1)
-            }
-        } else {
+        if !isNearDuplicate {
             result.append(colorCount)
         }
     }

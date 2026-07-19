@@ -78,7 +78,7 @@ struct ProfileTracksTab: View {
     private func latestReleaseCard(_ track: ProfileTrack) -> some View {
         let isActive = viewModel.mediaActivity(MediaID(track.id)) != nil
         return HStack(spacing: 14) {
-            ArtworkView(track.coverURL.map { .webImage($0) } ?? .placeholder(name: track.title), cornerRadius: 10)
+            ArtworkView(.placeholder(track.coverURL, name: track.title), cornerRadius: 10)
                 .frame(width: 64, height: 64)
             VStack(alignment: .leading, spacing: 4) {
                 Text(track.title)
@@ -92,7 +92,9 @@ struct ProfileTracksTab: View {
             Spacer(minLength: 8)
             if isOwnProfile { trackOptionsButton(track) }
             if isActive {
-                ProfileEqualizerBars().padding(.trailing, 4)
+                EqualizerBars(heights: [7, 13, 9], barWidth: 2.5, spacing: 2, tint: .white.opacity(0.9))
+                    .frame(width: 14, height: 13)
+                    .padding(.trailing, 4)
             } else {
                 ZStack {
                     Circle().fill(.white.opacity(0.12)).frame(width: 34, height: 34)

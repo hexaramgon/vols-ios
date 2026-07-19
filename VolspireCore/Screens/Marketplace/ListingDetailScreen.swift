@@ -38,8 +38,8 @@ struct ListingDetailScreen: View {
     @State private var pendingViewer: ViewerAction?
     @State private var reportTarget: ReportTarget?
     @State private var showBlockAuthor = false
-    /// Scroll-driven chrome state — read only by `ListingCollapsedBar`.
-    @State private var barState = ListingBarState()
+    /// Scroll-driven chrome state — read only by `CollapsedTitleBar`.
+    @State private var barState = ScrollFadeState()
     /// Which discussion list the author is viewing (visitors only see comments).
     @State private var discussionTab: DiscussionTab = .comments
     /// Signed-in user's avatar for the composer pill (matches the player's).
@@ -119,9 +119,9 @@ struct ListingDetailScreen: View {
         // own component observing `barState`, so per-frame scroll writes never
         // re-render this page (same isolation as the profile/Home headers).
         .overlay(alignment: .top) {
-            ListingCollapsedBar(
+            CollapsedTitleBar(
                 state: barState,
-                title: "\(categoryLabel) Listing",
+                title: "\(listing.categoryLabel) Listing",
                 subtitle: "@\(listing.author.username)"
             )
         }
@@ -177,12 +177,7 @@ struct ListingDetailScreen: View {
                 ReportSheet(targetType: .user, targetId: listing.author.userId, subject: "@\(listing.author.username)")
             }
         }
-        .confirmationDialog("Block @\(listing.author.username)?", isPresented: $showBlockAuthor, titleVisibility: .visible) {
-            Button("Block", role: .destructive) { blockAuthor() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You won't see their listings or content, and they can't message you. You can unblock from Settings.")
-        }
+        .blockUserDialog(username: listing.author.username, isPresented: $showBlockAuthor) { blockAuthor() }
         .fullScreenCover(isPresented: $showEdit, onDismiss: { Task { await viewModel.load() } }) {
             CreateListingScreen(viewModel: CreateListingViewModel(
                 editing: listing,
@@ -190,13 +185,12 @@ struct ListingDetailScreen: View {
                 authManager: dependencies.authManager
             ))
         }
-        .confirmationDialog("Delete this listing?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                Task { if await viewModel.deleteListing() { dismiss() } }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This permanently removes the listing and its responses.")
+        .destructiveConfirm(
+            "Delete this listing?",
+            isPresented: $showDeleteConfirm,
+            message: "This permanently removes the listing and its responses."
+        ) {
+            Task { if await viewModel.deleteListing() { dismiss() } }
         }
     }
 
@@ -230,32 +224,27 @@ struct ListingDetailScreen: View {
     /// Viewer options as a slide-up sheet — mirrors `adminOptionsSheet`.
     private var viewerOptionsSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SheetHeader(icon: categoryIcon, title: listing.title, subtitle: "@\(listing.author.username)") {
+            SheetHeader(icon: listing.categoryIcon, title: listing.title, subtitle: "@\(listing.author.username)") {
                 showViewerOptions = false
             }
 
             VStack(spacing: 0) {
-                adminRow(icon: .flag, title: "Report listing") {
+                OptionSheetRow(icon: .flag, title: "Report listing") {
                     pendingViewer = .reportListing
                     showViewerOptions = false
                 }
-                adminRow(icon: .flag, title: "Report @\(listing.author.username)") {
+                OptionSheetRow(icon: .flag, title: "Report @\(listing.author.username)") {
                     pendingViewer = .reportAuthor
                     showViewerOptions = false
                 }
-                adminRow(icon: .ban, title: "Block @\(listing.author.username)", tint: Color.vDestructive) {
+                OptionSheetRow(icon: .ban, title: "Block @\(listing.author.username)", tint: .vDestructive) {
                     pendingViewer = .block
                     showViewerOptions = false
                 }
             }
             .padding(.top, 6)
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(272)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
     }
 
@@ -271,50 +260,30 @@ struct ListingDetailScreen: View {
     /// matching the folder / playlist / track option sheets.
     private var adminOptionsSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SheetHeader(icon: categoryIcon, title: listing.title, subtitle: viewModel.isClosed ? "Closed" : "Open") {
+            SheetHeader(icon: listing.categoryIcon, title: listing.title, subtitle: viewModel.isClosed ? "Closed" : "Open") {
                 showAdminOptions = false
             }
 
             VStack(spacing: 0) {
-                adminRow(icon: .squarePen, title: "Edit listing") {
+                OptionSheetRow(icon: .squarePen, title: "Edit listing") {
                     pendingEdit = true
                     showAdminOptions = false
                 }
-                adminRow(icon: viewModel.isClosed ? .circleCheck : .lock,
-                         title: viewModel.isClosed ? "Reopen listing" : "Close listing") {
+                OptionSheetRow(icon: viewModel.isClosed ? .circleCheck : .lock,
+                               title: viewModel.isClosed ? "Reopen listing" : "Close listing") {
                     showAdminOptions = false
                     Task { await viewModel.toggleStatus() }
                 }
-                adminRow(icon: .trash2, title: "Delete listing",
-                         tint: Color.vDestructive) {
+                OptionSheetRow(icon: .trash2, title: "Delete listing",
+                               tint: .vDestructive) {
                     pendingAdminDelete = true
                     showAdminOptions = false
                 }
             }
             .padding(.top, 6)
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(272)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
-    }
-
-    private func adminRow(icon: LucideIcon.Name, title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                LucideIcon(icon, .lg)
-                    .foregroundStyle(tint)
-                    .frame(width: 26)
-                Text(title).font(.appBody).foregroundStyle(tint)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20).padding(.vertical, 15)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -378,8 +347,8 @@ private extension ListingDetailScreen {
     /// badge and the "New" pills, sized down to sit in the author row.
     var categoryChip: some View {
         HStack(spacing: 5) {
-            LucideIcon(categoryIcon, .xs)
-            Text(categoryLabel).font(.appCaptionMedium)
+            LucideIcon(listing.categoryIcon, .xs)
+            Text(listing.categoryLabel).font(.appCaptionMedium)
         }
         .foregroundStyle(.white)
         .padding(.horizontal, 10)
@@ -403,7 +372,7 @@ private extension ListingDetailScreen {
                 Text("@\(listing.author.username)")
                     .font(.appFootnoteMedium).foregroundStyle(.white)
                 Text("·").foregroundStyle(Color.vText3)
-                Text(timeAgo(listing.createdAt))
+                Text(MessageTime.agoLong(iso: listing.createdAt))
                     .font(.appFootnote).foregroundStyle(.white.opacity(0.65))
                 Spacer(minLength: 0)
             }
@@ -716,10 +685,7 @@ private extension ListingDetailScreen {
     }
 
     /// Clearance for the floating tab bar (+ mini player when a track plays).
-    var bottomChromeInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return 60 + mini
-    }
+    var bottomChromeInset: CGFloat { 60 + playerController.miniPlayerAllowance }
 
     /// Signed-in user's 28pt avatar in the composer pill — identical styling
     /// to the player composer's (initial-letter fallback included).
@@ -745,7 +711,7 @@ private extension ListingDetailScreen {
                             .font(.appLabel).foregroundStyle(.white.opacity(0.7))
                     }
                     .buttonStyle(.plain)
-                    Text(timeAgo(comment.createdAt))
+                    Text(MessageTime.agoLong(iso: comment.createdAt))
                         .font(.appCaption2).foregroundStyle(.white.opacity(0.3))
                 }
                 ExpandableText(comment.content)
@@ -815,59 +781,49 @@ private struct RespondSheet: View {
     @State private var message = ""
     @State private var error: String?
     @FocusState private var focused: Bool
-    /// Measured so the sheet detents to exactly fit its content (no empty tail).
-    @State private var contentHeight: CGFloat = 360
 
     var body: some View {
+        // The app's standard sheet anatomy — same header/field/CTA as the
+        // report and playlist/folder form sheets, sized to its rows.
         VStack(alignment: .leading, spacing: 0) {
-            // The app's standard sheet anatomy — same header/field/CTA as the
-            // report and playlist/folder form sheets, sized to its rows.
-            VStack(alignment: .leading, spacing: 0) {
-                // The author's avatar as the leading tile (SheetHeader's
-                // custom-leading form) instead of a glyph.
-                SheetHeader(title: "Respond to @\(author.username)", subtitle: listingTitle, onClose: { dismiss() }) {
-                    authorAvatar
-                }
-
-                VStack(alignment: .leading, spacing: 14) {
-                    TextField(
-                        "",
-                        text: $message,
-                        prompt: Text("Hey @\(author.username), I'd love to work on this…").foregroundColor(Color.vText3),
-                        axis: .vertical
-                    )
-                    .font(.appBody)
-                    .foregroundStyle(.white)
-                    .tint(.white)
-                    .lineLimit(4 ... 8)
-                    .focused($focused)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 13)
-                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.vBorder))
-
-                    if let error {
-                        ErrorBanner(error)
-                    }
-
-                    PrimaryButton("Send Message", busy: isSending, enabled: canSend) {
-                        Task { error = await onSend(message) }
-                    }
-                    .disabled(!canSend)
-                    .animation(.easeOut(duration: 0.15), value: canSend)
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 14)
+            // The author's avatar as the leading tile (SheetHeader's
+            // custom-leading form) instead of a glyph.
+            SheetHeader(title: "Respond to @\(author.username)", subtitle: listingTitle, onClose: { dismiss() }) {
+                authorAvatar
             }
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
 
-            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 14) {
+                TextField(
+                    "",
+                    text: $message,
+                    prompt: Text("Hey @\(author.username), I'd love to work on this…").foregroundColor(Color.vText3),
+                    axis: .vertical
+                )
+                .font(.appBody)
+                .foregroundStyle(.white)
+                .tint(.white)
+                .lineLimit(4 ... 8)
+                .focused($focused)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+                .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.vBorder))
+
+                if let error {
+                    ErrorBanner(error)
+                }
+
+                PrimaryButton("Send Message", busy: isSending, enabled: canSend) {
+                    Task { error = await onSend(message) }
+                }
+                .disabled(!canSend)
+                .animation(.easeOut(duration: 0.15), value: canSend)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(contentHeight + ViewConst.safeAreaInsets.bottom + 8)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
         .onAppear { focused = true }
     }
@@ -908,27 +864,6 @@ private extension ListingDetailScreen {
         }
     }
 
-    var categoryLabel: String {
-        listingCategories.first { $0.id == listing.category }?.label ?? listing.category.capitalized
-    }
-
-    var categoryIcon: LucideIcon.Name {
-        listingCategories.first { $0.id == listing.category }?.icon ?? .music
-    }
-
-    func timeAgo(_ iso: String?) -> String {
-        guard let iso, let date = isoDate(iso) else { return "" }
-        let s = Date().timeIntervalSince(date)
-        switch s {
-        case ..<60: return "just now"
-        case ..<3600: return "\(Int(s / 60))m ago"
-        case ..<86400: return "\(Int(s / 3600))h ago"
-        case ..<604800: return "\(Int(s / 86400))d ago"
-        default: return "\(Int(s / 604800))w ago"
-        }
-    }
-
-    func isoDate(_ s: String) -> Date? { MessageTime.parse(s) }
 }
 
 // MARK: - Comment options sheet
@@ -944,9 +879,6 @@ private struct ListingCommentOptionsSheet: View {
 
     @Environment(\.dismiss) private var dismiss
 
-    // Copy + (Delete or Report) — matches the track sheet's row math.
-    private var detentHeight: CGFloat { 130 + 2 * 56 }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(
@@ -956,96 +888,26 @@ private struct ListingCommentOptionsSheet: View {
             ) { dismiss() }
 
             VStack(spacing: 0) {
-                optionRow(icon: .copy, title: "Copy", destructive: false) {
+                OptionSheetRow(icon: .copy, title: "Copy") {
                     UIPasteboard.general.string = comment.content
                     dismiss()
                 }
                 if isOwn {
-                    optionRow(icon: .trash2, title: "Delete comment", destructive: true) {
+                    OptionSheetRow(icon: .trash2, title: "Delete comment", tint: .vError) {
                         dismiss()
                         onDelete()
                     }
                 } else {
-                    optionRow(icon: .triangleAlert, title: "Report", destructive: false) {
+                    OptionSheetRow(icon: .triangleAlert, title: "Report") {
                         dismiss()
                         onReport()
                     }
                 }
             }
             .padding(.top, 6)
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(detentHeight)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
     }
-
-    private func optionRow(icon: LucideIcon.Name, title: String, destructive: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                LucideIcon(icon, .lg)
-                    .foregroundStyle(destructive ? Color.vError : .white)
-                    .frame(width: 26)
-                Text(title)
-                    .font(.appBody)
-                    .foregroundStyle(destructive ? Color.vError : .white)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 15)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-    }
 }
 
-// MARK: - Collapsing chrome
-
-/// Scroll-driven chrome state — only `ListingCollapsedBar` observes it, so the
-/// per-frame scroll writes never re-render the listing page (the same
-/// isolation the profile and Home headers use).
-@Observable @MainActor
-final class ListingBarState {
-    private(set) var opacity: Double = 0
-
-    func update(offsetY: CGFloat) {
-        let next = Double(min(1, max(0, (offsetY - 40) / 70)))
-        if next != opacity { opacity = next }
-    }
-}
-
-/// Solid bar + centred title/author that fade in as the hero scrolls past.
-/// Never hit-testable — the toolbar back/"…" buttons sit above it.
-private struct ListingCollapsedBar: View {
-    let state: ListingBarState
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        Color.vBar
-            .frame(height: ViewConst.safeAreaInsets.top + 44)
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(Color.vBorder).frame(height: 0.5)
-            }
-            .overlay(alignment: .bottom) {
-                VStack(spacing: 1) {
-                    Text(title)
-                        .font(.appCalloutSemibold)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(.appCaption2Medium)
-                        .foregroundStyle(Color.vText3)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 64)
-                .frame(height: 44)
-            }
-            .opacity(state.opacity)
-            .ignoresSafeArea(edges: .top)
-            .allowsHitTesting(false)
-    }
-}

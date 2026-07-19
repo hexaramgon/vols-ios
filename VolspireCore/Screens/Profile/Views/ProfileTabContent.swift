@@ -15,10 +15,7 @@ struct ProfileTabContent: View {
     let isOwnProfile: Bool
 
     /// Base tab-bar clearance plus the floating mini-player when a track is playing.
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return 110 + mini
-    }
+    private var bottomInset: CGFloat { 110 + playerController.miniPlayerAllowance }
 
     var body: some View {
         Group {

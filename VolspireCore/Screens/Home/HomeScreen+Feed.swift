@@ -411,14 +411,8 @@ extension HomeScreen {
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
-                    Text(listing.category.replacingOccurrences(of: "_", with: " ").capitalized)
-                        .font(.appCaption2Semibold)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        // Brand accent — matches the listing detail's category chip.
-                        .background(LinearGradient.sendAccent, in: Capsule())
+                    // Brand accent — matches the listing detail's category chip.
+                    AccentChip(text: listing.categoryLabel)
                     Spacer(minLength: 0)
                     Text(MessageTime.ago(MessageTime.parse(listing.createdAt)))
                         .font(.appCaption2)

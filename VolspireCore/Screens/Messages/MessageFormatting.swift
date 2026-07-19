@@ -25,6 +25,14 @@ enum MessageTime {
     private static let tzSuffix =
         try! NSRegularExpression(pattern: #"[+-]\d\d:?\d\d$"#)
 
+    /// ISO-8601 "now" for OUTPUT (optimistic comment inserts, analytics
+    /// timestamps) — reuses the cached formatter instead of allocating an
+    /// `ISO8601DateFormatter` per call. Same format as a fresh formatter's
+    /// default (`.withInternetDateTime`, UTC).
+    static func isoNow() -> String {
+        plain.string(from: Date())
+    }
+
     /// Parse a Postgres/ISO timestamp that may lack a timezone (treated as UTC,
     /// matching the web's `parseUtc`).
     static func parse(_ iso: String?) -> Date? {
@@ -49,6 +57,21 @@ enum MessageTime {
         case ..<2592000: return "\(s / 604800)w"
         case ..<31536000: return "\(s / 2592000)mo"
         default: return "\(s / 31536000)y"
+        }
+    }
+
+    /// "just now", "5m ago", "3h ago", "2d ago", "4w ago" — the long-suffix
+    /// relative-time voice used by listing/marketplace surfaces (was re-rolled
+    /// verbatim at two of them).
+    static func agoLong(iso: String?) -> String {
+        guard let iso, let date = parse(iso) else { return "" }
+        let s = max(0, Int(Date().timeIntervalSince(date)))
+        switch s {
+        case ..<60: return "just now"
+        case ..<3600: return "\(s / 60)m ago"
+        case ..<86400: return "\(s / 3600)h ago"
+        case ..<604800: return "\(s / 86400)d ago"
+        default: return "\(s / 604800)w ago"
         }
     }
 

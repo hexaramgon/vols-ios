@@ -114,7 +114,7 @@ struct ProfileScreen: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showUserOptions = true } label: {
                         Image(systemName: "ellipsis")
-                            .font(.system(size: ViewConst.backIconSize, weight: .semibold))
+                            .font(.system(size: ViewConst.headerIconSize, weight: .semibold))
                             .foregroundStyle(.white)
                             .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
                     }
@@ -155,26 +155,19 @@ struct ProfileScreen: View {
                 onBlock: { pendingBlock = true; showUserOptions = false }
             )
         }
-        .confirmationDialog(
+        .destructiveConfirm(
             "Remove @\(viewModel.username) as a collaborator?",
             isPresented: $showRemoveCollabConfirm,
-            titleVisibility: .visible
+            actionLabel: "Remove",
+            message: "You'll no longer be collaborators, and your conversation moves to your inbox's Archived section. You can send a new collab request anytime."
         ) {
-            Button("Remove", role: .destructive) {
-                Task { await viewModel.removeCollaborator(userId: resolvedUserId) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("You'll no longer be collaborators, and your conversation moves to your inbox's Archived section. You can send a new collab request anytime.")
+            Task { await viewModel.removeCollaborator(userId: resolvedUserId) }
         }
         .sheet(isPresented: $showReportUser) {
             ReportSheet(targetType: .user, targetId: resolvedUserId, subject: "@\(viewModel.username)")
         }
-        .confirmationDialog("Block @\(viewModel.username)?", isPresented: $showBlockConfirm, titleVisibility: .visible) {
-            Button("Block", role: .destructive) { blockUser() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("They won't be able to message you or see your content, and you won't see theirs. You can unblock from Settings.")
+        .blockUserDialog(username: viewModel.username, isPresented: $showBlockConfirm) {
+            blockUser()
         }
         .sheet(isPresented: $viewModel.showCollabSheet) {
             CollabRequestSheet(
@@ -186,14 +179,14 @@ struct ProfileScreen: View {
         }
         .sheet(item: $viewModel.trackOptionsTrack) { track in
             TrackOptionsSheet(
-                artwork: track.coverURL.map { .webImage($0) } ?? .placeholder(name: track.title),
+                artwork: .placeholder(track.coverURL, name: track.title),
                 title: track.title,
                 artist: "@\(viewModel.username)",
                 meta: track.isPrivate ? "Private" : "Public",
                 actions: trackOptionsActions(for: track)
             )
             // Detents come from TrackOptionsSheet itself (sized to its rows).
-            .presentationDragIndicator(.visible)
+            .sheetBackground()
         }
         .fullScreenCover(item: $viewModel.editingTrackDetail) { detail in
             EditTrackScreen(
@@ -206,21 +199,19 @@ struct ProfileScreen: View {
                 onSaved: { Task { await viewModel.refreshTrack(trackId: detail.trackId) } }
             )
         }
-        .confirmationDialog("Delete this track?", isPresented: $viewModel.showDeleteTrackConfirm, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                Task {
-                    if let id = viewModel.pendingDeleteTrackId {
-                        _ = await viewModel.deleteTrack(trackId: id)
-                    }
-                    viewModel.pendingDeleteTrackId = nil
+        .destructiveConfirm(
+            "Delete this track?",
+            isPresented: $viewModel.showDeleteTrackConfirm,
+            message: "This removes the track from your profile and library. This can't be undone."
+        ) {
+            Task {
+                if let id = viewModel.pendingDeleteTrackId {
+                    _ = await viewModel.deleteTrack(trackId: id)
                 }
+                viewModel.pendingDeleteTrackId = nil
             }
-            Button("Cancel", role: .cancel) { viewModel.pendingDeleteTrackId = nil }
-        } message: {
-            Text("This removes the track from your profile and library. This can't be undone.")
         }
         .task {
-            viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
             guard !didLoad else { return }
             didLoad = true

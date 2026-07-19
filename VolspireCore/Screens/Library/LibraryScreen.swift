@@ -36,10 +36,7 @@ struct LibraryScreen: View {
     /// Bottom inset so the last rows clear the tab bar + (when present) the
     /// mini-player docked above it — same formula as Search / Messages /
     /// MediaCollection so every scrolling tab bottoms out consistently.
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     /// A saved-track row.
     fileprivate struct Row: Identifiable {
@@ -148,14 +145,12 @@ struct LibraryScreen: View {
                 onAddToPlaylist: { addToPlaylistTrack = track }
             )
             // Detents come from TrackOptionsSheet itself (sized to its rows).
-            .presentationDragIndicator(.visible)
             .sheetBackground()
         }
         .sheet(item: $addToPlaylistTrack) { track in
             AddToPlaylistSheet(trackId: track.trackId)
                 // Detents come from the sheet itself (.medium/.large so long
                 // playlist lists can expand).
-                .presentationDragIndicator(.visible)
                 .sheetBackground()
         }
         .sheet(isPresented: $playlistsVM.showCreate) { playlistCreateSheet }
@@ -175,53 +170,15 @@ private extension LibraryScreen {
             // Inside the header chrome so the bar background sits behind the
             // field — not floating over the page content.
             if showSearchField {
-                searchRow
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                HeaderSearchField(
+                    prompt: "Search saved tracks…",
+                    text: $searchText,
+                    isRevealed: $showSearchField,
+                    focus: $searchFocused
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-    }
-
-    /// Search field revealed by the header search icon. Cancel hides it + clears.
-    var searchRow: some View {
-        HStack(spacing: 12) {
-            searchField
-            Button("Cancel") {
-                searchFocused = false
-                withAnimation(.easeInOut(duration: 0.2)) { showSearchField = false }
-                searchText = ""
-            }
-            .font(.appCallout)
-            .foregroundStyle(.white)
-        }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.bottom, 12)
-    }
-
-    var searchField: some View {
-        HStack(spacing: 10) {
-            LucideIcon(.search, .md).foregroundStyle(Color.vText3)
-            TextField("", text: $searchText, prompt: Text("Search saved tracks…").foregroundColor(Color.vText3))
-                .font(.appCallout)
-                .foregroundStyle(.white)
-                .tint(.white)
-                .focused($searchFocused)
-                .autocorrectionDisabled()
-            if !searchText.isEmpty {
-                Button { searchText = "" } label: {
-                    LucideIcon(.circleX, .md)
-                        .foregroundStyle(Color.vText3)
-                        .frame(width: 28, height: 28)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 12)
-        // Fixed height — the clear button (28pt) appearing once you type must
-        // not grow the field.
-        .frame(height: 42)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.vBorder, lineWidth: 1))
     }
 
     /// A consistent, modern section header: a bold title with an optional
@@ -255,13 +212,13 @@ private extension LibraryScreen {
         VStack(alignment: .leading, spacing: 24) {
             skeletonSection(spacing: 16) {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 16) { ForEach(0 ..< 3, id: \.self) { _ in playlistSkeleton } }
+                    HStack(spacing: 16) { ForEach(0 ..< 3, id: \.self) { _ in PlaylistCardSkeleton(width: 158) } }
                         .padding(.horizontal, ViewConst.screenPaddings)
                 }
                 .scrollDisabled(true)
             }
             skeletonSection(spacing: 10) {
-                savedSkeletonRows
+                SkeletonRows(count: 6, shimmers: false)
             }
         }
         .shimmering()
@@ -277,22 +234,6 @@ private extension LibraryScreen {
         }
     }
 
-    var savedSkeletonRows: some View {
-        VStack(spacing: 0) {
-            ForEach(0 ..< 6, id: \.self) { _ in
-                HStack(spacing: 13) {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.06)).frame(width: 50, height: 50)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Capsule().fill(Color.white.opacity(0.06)).frame(width: 160, height: 13)
-                        Capsule().fill(Color.white.opacity(0.06)).frame(width: 90, height: 11)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.vertical, 9)
-            }
-        }
-    }
 }
 
 // MARK: - Playlists section
@@ -311,7 +252,7 @@ private extension LibraryScreen {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 16) {
                         if playlistsLoading {
-                            ForEach(0 ..< 2, id: \.self) { _ in playlistSkeleton }
+                            ForEach(0 ..< 2, id: \.self) { _ in PlaylistCardSkeleton(width: 158) }
                                 .transition(.opacity)
                         } else {
                             ForEach(playlistsVM.playlists) { playlistCard($0) }
@@ -338,19 +279,7 @@ private extension LibraryScreen {
             Text("Playlists").font(.appFont.sectionTitle).foregroundStyle(.white)
             Spacer(minLength: 0)
             if !playlistsVM.playlists.isEmpty {
-                Button { playlistsVM.showCreate = true } label: {
-                    HStack(spacing: 5) {
-                        LucideIcon(.plus, .sm)
-                        Text("New")
-                    }
-                    .font(.appFootnoteMedium)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(LinearGradient.sendAccent, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                    .contentShape(.rect(cornerRadius: 11))
-                }
-                .buttonStyle(LibraryPress())
+                AccentPillButton(title: "New") { playlistsVM.showCreate = true }
                 Button { router.navigateToPlaylists() } label: {
                     HStack(spacing: 2) {
                         Text("See all").font(.appFootnoteMedium)
@@ -377,19 +306,7 @@ private extension LibraryScreen {
                     .foregroundStyle(Color.vText3)
             }
             Spacer(minLength: 8)
-            Button { playlistsVM.showCreate = true } label: {
-                HStack(spacing: 5) {
-                    LucideIcon(.plus, .sm)
-                    Text("Create")
-                }
-                .font(.appFootnoteMedium)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(LinearGradient.sendAccent, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                .contentShape(.rect(cornerRadius: 11))
-            }
-            .buttonStyle(LibraryPress())
+            AccentPillButton(title: "Create") { playlistsVM.showCreate = true }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -397,50 +314,14 @@ private extension LibraryScreen {
         .padding(.horizontal, ViewConst.screenPaddings)
     }
 
-    var playlistSkeleton: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.white.opacity(0.06))
-                .frame(width: 158, height: 158)
-            Capsule().fill(Color.white.opacity(0.06)).frame(width: 110, height: 12)
-            Capsule().fill(Color.white.opacity(0.06)).frame(width: 64, height: 10)
-        }
-        .frame(width: 158, alignment: .leading)
-    }
-
     func playlistCard(_ playlist: ApiPlaylist) -> some View {
-        Button {
+        PlaylistCard(playlist: playlist, coverURL: playlistsVM.cover(playlist.coverUrl), width: 158) {
             router.navigateToPlaylist(playlistId: playlist.playlistId, title: playlist.title)
-        } label: {
-            VStack(alignment: .leading, spacing: 9) {
-                ArtworkView(playlistsVM.cover(playlist.coverUrl).map { .webImage($0) } ?? .placeholder(name: playlist.title), cornerRadius: 16)
-                    .frame(width: 158, height: 158)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(playlist.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
-                    Text("\(playlist.trackCount ?? 0) tracks").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
-                }
-                .frame(width: 158, alignment: .leading)
-            }
-            .frame(width: 158)
-            .contentShape(.rect)
         }
-        .buttonStyle(LibraryPress())
     }
 
     var playlistCreateSheet: some View {
-        PlaylistFormSheet(
-            icon: .listMusic,
-            title: "New Playlist",
-            subtitle: "Give it a cover, name, and description",
-            name: $playlistsVM.newTitle,
-            description: $playlistsVM.newDescription,
-            coverData: $playlistsVM.newCoverData,
-            savedCoverURL: nil,
-            actionTitle: "Create",
-            busy: playlistsVM.isCreating,
-            onSubmit: { await playlistsVM.create() }
-        )
+        PlaylistCreateSheet(viewModel: playlistsVM)
     }
 }
 
@@ -459,24 +340,8 @@ private extension LibraryScreen {
     var savedContent: some View {
         switch viewModel.loadingState {
         case .idle, .loading:
-            VStack(spacing: 0) {
-                ForEach(0 ..< 5, id: \.self) { _ in
-                    HStack(spacing: 13) {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(Color.white.opacity(0.06))
-                            .frame(width: 50, height: 50)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Capsule().fill(Color.white.opacity(0.06)).frame(width: 160, height: 13)
-                            Capsule().fill(Color.white.opacity(0.06)).frame(width: 90, height: 11)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                    .padding(.vertical, 9)
-                }
-            }
-            .skeletonPulse()
-            .transition(.opacity)
+            SkeletonRows(count: 5)
+                .transition(.opacity)
         case let .error(message):
             inlineState(icon: .triangleAlert, title: "Something went wrong", subtitle: message)
                 .transition(.opacity)
@@ -504,38 +369,17 @@ private extension LibraryScreen {
     }
 
     func trackRow(_ row: Row, isLast: Bool) -> some View {
-        let activity = viewModel.mediaActivity(MediaID(row.id))
-        let isActive = activity != nil
-        return HStack(spacing: 13) {
-            ArtworkView(row.coverURL.map { .webImage($0) } ?? .placeholder(name: row.title), cornerRadius: 9)
-                .frame(width: 50, height: 50)
-                // Cover loads/re-decodes on its own schedule; without this the
-                // section's entrance/loading animations catch that change and
-                // slide the image in from the bottom, out of sync with its row.
-                // Clearing the transaction animation lets it appear in place.
-                .transaction { $0.animation = nil }
-                .overlay {
-                    if let activity {
-                        ZStack {
-                            Color.black.opacity(0.45)
-                            MediaActivityIndicator(state: activity).foregroundStyle(.white)
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    }
-                }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.title)
-                    .font(.appFont.trackTitle)
-                    .foregroundStyle(isActive ? .white : .white.opacity(0.95))
-                    .lineLimit(1)
-                if let artist = row.artist, !artist.isEmpty {
-                    Text("@\(artist)").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
-                }
+        TrackListRow(
+            artwork: .placeholder(row.coverURL, name: row.title),
+            title: row.title,
+            subtitle: row.artist.flatMap { $0.isEmpty ? nil : "@\($0)" },
+            activity: viewModel.mediaActivity(MediaID(row.id)),
+            showsSeparator: !isLast,
+            onTap: {
+                searchFocused = false
+                if let track = viewModel.savedTracks.first(where: { $0.trackId == row.id }) { viewModel.play(track) }
             }
-
-            Spacer(minLength: 8)
-
+        ) {
             Button {
                 searchFocused = false
                 if let track = viewModel.savedTracks.first(where: { $0.trackId == row.id }) { selectedTrack = track }
@@ -546,17 +390,6 @@ private extension LibraryScreen {
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-        }
-        .padding(.vertical, 9)
-        .overlay(alignment: .bottom) {
-            if !isLast {
-                Rectangle().fill(Color.white.opacity(0.06)).frame(height: 0.5).padding(.leading, 63)
-            }
-        }
-        .contentShape(.rect)
-        .onTapGesture {
-            searchFocused = false
-            if let track = viewModel.savedTracks.first(where: { $0.trackId == row.id }) { viewModel.play(track) }
         }
     }
 
@@ -609,16 +442,6 @@ private extension LibraryScreen {
             }
         }
         .padding(.horizontal, ViewConst.screenPaddings)
-    }
-}
-
-/// Gentle scale + dim press feedback for the Library's cards.
-private struct LibraryPress: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.92 : 1)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 

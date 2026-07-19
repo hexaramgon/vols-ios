@@ -75,6 +75,25 @@ public final class MediaPlayer {
 
     // MARK: - Public Playback Controls
 
+    /// Whether a URL plays as video. Drives BOTH the engine's video mode and the
+    /// app's display mode — one list, so they can't disagree.
+    public static func isVideoURL(_ url: URL) -> Bool {
+        URLAudioPlayer.videoExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    /// Queue-and-play: registers every item in the shared MediaState FIRST —
+    /// `play(_:of:)` rejects ids that aren't registered — deduping by id and
+    /// dropping items with no audio. The one home of that invariant (it was
+    /// re-implemented, with the same warning comment, in seven view models).
+    public func play(_ id: MediaID, queue: [Media]) async {
+        var seen = Set<MediaID>()
+        let playable = queue.filter { $0.meta.audioURL != nil && seen.insert($0.id).inserted }
+        if let mediaState {
+            for item in playable { await mediaState.addTrack(item) }
+        }
+        play(id, of: playable.map(\.id))
+    }
+
     public func togglePlayPause() {
         if state.isPlaying {
             pause()

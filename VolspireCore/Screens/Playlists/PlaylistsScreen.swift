@@ -145,33 +145,15 @@ private extension PlaylistsScreen {
     }
 
     func card(_ playlist: ApiPlaylist) -> some View {
-        Button {
+        PlaylistCard(playlist: playlist, coverURL: viewModel.cover(playlist.coverUrl)) {
             router.navigateToPlaylist(playlistId: playlist.playlistId, title: playlist.title)
-        } label: {
-            VStack(alignment: .leading, spacing: 9) {
-                ArtworkView(viewModel.cover(playlist.coverUrl).map { .webImage($0) } ?? .placeholder(name: playlist.title), cornerRadius: 16)
-                    .aspectRatio(1, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(playlist.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
-                    Text("\(playlist.trackCount ?? 0) tracks").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
-                }
-            }
-            .contentShape(.rect)
         }
-        .buttonStyle(PlaylistsPress())
     }
 
     var skeletonGrid: some View {
         LazyVGrid(columns: gridColumns, spacing: 18) {
             ForEach(0 ..< 6, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 9) {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(Color.white.opacity(0.06))
-                        .aspectRatio(1, contentMode: .fit)
-                    Capsule().fill(Color.white.opacity(0.06)).frame(width: 110, height: 12)
-                    Capsule().fill(Color.white.opacity(0.06)).frame(width: 60, height: 10)
-                }
+                PlaylistCardSkeleton(line2Width: 60)
             }
         }
         .padding(.horizontal, ViewConst.gridPaddings)
@@ -184,28 +166,28 @@ private extension PlaylistsScreen {
 
 private extension PlaylistsScreen {
     var createSheet: some View {
-        PlaylistFormSheet(
+        PlaylistCreateSheet(viewModel: viewModel)
+    }
+}
+
+/// The "New Playlist" form bound to a `PlaylistsViewModel` — one definition for
+/// the Library rail and the Playlists grid, which presented identical sheets.
+struct PlaylistCreateSheet: View {
+    @Bindable var viewModel: PlaylistsViewModel
+
+    var body: some View {
+        ItemFormSheet(
             icon: .listMusic,
             title: "New Playlist",
             subtitle: "Give it a cover, name, and description",
+            namePrompt: "Playlist name",
             name: $viewModel.newTitle,
             description: $viewModel.newDescription,
-            coverData: $viewModel.newCoverData,
-            savedCoverURL: nil,
+            cover: .init(data: $viewModel.newCoverData),
             actionTitle: "Create",
             busy: viewModel.isCreating,
             onSubmit: { await viewModel.create() }
         )
-    }
-}
-
-/// Gentle scale + dim press feedback for the playlist cards.
-private struct PlaylistsPress: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.92 : 1)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 

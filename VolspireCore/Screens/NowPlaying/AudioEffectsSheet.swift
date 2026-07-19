@@ -32,10 +32,9 @@ struct AudioEffectsSheet: View {
         .padding(.top, 30)
         .padding(.bottom, 18)
         .frame(maxWidth: .infinity)
-        .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
         // Darker frosted panel to match the web's modal background.
-        .sheetBackground()
+        .sheetBackground(dragIndicator: false)
     }
 }
 

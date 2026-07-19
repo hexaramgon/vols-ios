@@ -10,6 +10,7 @@
 import DesignSystem
 import Foundation
 import Services
+import SharedUtilities
 
 /// The fixed category set — what the poster is looking for. Mirrors the
 /// CHECK constraint on `listings.category` and the web's LISTING_CATEGORIES.
@@ -95,10 +96,9 @@ final class CreateListingViewModel {
         guard let index = attachments.firstIndex(where: { $0.id == rowId }) else { return }
         switch result {
         case .success(let url):
-            guard url.startAccessingSecurityScopedResource() else { return }
-            defer { url.stopAccessingSecurityScopedResource() }
             do {
-                attachments[index].data = try Data(contentsOf: url)
+                guard let data = try SecurityScopedFile.read(url) else { return }
+                attachments[index].data = data
                 attachments[index].fileName = url.lastPathComponent
             } catch {
                 uploadState = .error("Failed to read audio file")

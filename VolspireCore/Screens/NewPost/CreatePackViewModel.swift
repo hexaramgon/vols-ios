@@ -10,6 +10,7 @@
 import DesignSystem
 import Foundation
 import Services
+import SharedUtilities
 import SwiftUI
 
 struct PackTypeOption: Identifiable, Sendable {
@@ -63,10 +64,12 @@ final class CreatePackViewModel {
     var files: [PackFileDraft] = []
     var visibility: String = "public"
 
-    // Cover (optional — overrides the gradient when set)
-    var coverData: Data?
-    var coverFileName: String?
-    var coverImage: UIImage?
+    // Cover (optional — overrides the gradient when set), staged via the
+    // shared CoverDraft.
+    private var cover = CoverDraft()
+    var coverImage: UIImage? { cover.image }
+    var coverData: Data? { cover.data }
+    var coverFileName: String? { cover.fileName }
 
     var uploadState: UploadState = .idle
 
@@ -128,24 +131,18 @@ final class CreatePackViewModel {
     }
 
     func handleCoverImage(_ image: UIImage) {
-        coverImage = image
-        coverData = image.jpegData(compressionQuality: 0.85)
-        coverFileName = "cover_\(UUID().uuidString).jpg"
+        cover.set(image)
     }
 
     func clearCover() {
-        coverImage = nil
-        coverData = nil
-        coverFileName = nil
+        cover.clear()
     }
 
     func addFiles(result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
             for url in urls {
-                guard url.startAccessingSecurityScopedResource() else { continue }
-                defer { url.stopAccessingSecurityScopedResource() }
-                guard let data = try? Data(contentsOf: url), !data.isEmpty else { continue }
+                guard let data = try? SecurityScopedFile.read(url), !data.isEmpty else { continue }
                 files.append(PackFileDraft(name: url.lastPathComponent, data: data))
             }
         case .failure(let error):

@@ -21,10 +21,7 @@ struct EditProfileScreen: View {
 
     /// Clears the floating tab bar + (when present) the mini-player docked
     /// above it — same formula as Library / Messages / MediaCollection.
-    private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
-        return ViewConst.safeAreaInsets.bottom + 52 + mini
-    }
+    private var bottomInset: CGFloat { playerController.contentBottomInset }
 
     @State private var editUsername: String = ""
     @State private var editBio: String = ""
@@ -484,12 +481,6 @@ private struct EditPenBadge: View {
             .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(Color.vBase, lineWidth: 3))
     }
-}
-
-/// A picked image awaiting crop in the full-screen cropper.
-private struct CropTarget: Identifiable {
-    let id = UUID()
-    let image: UIImage
 }
 
 private struct AvatarImageView: View {

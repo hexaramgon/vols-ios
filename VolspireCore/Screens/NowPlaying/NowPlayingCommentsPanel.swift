@@ -270,11 +270,6 @@ private struct CommentOptionsSheet: View {
     /// Only top-level comments can be replied to (one-level threading).
     private var canReply: Bool { comment.parentId == nil }
 
-    private var detentHeight: CGFloat {
-        let rows = (canReply ? 1 : 0) + 1 /* copy */ + 1 /* report or delete */
-        return 130 + CGFloat(rows) * 56
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(
@@ -285,53 +280,30 @@ private struct CommentOptionsSheet: View {
 
             VStack(spacing: 0) {
                 if canReply {
-                    optionRow(icon: .reply, title: "Reply", destructive: false) {
+                    OptionSheetRow(icon: .reply, title: "Reply") {
                         dismiss()
                         onReply()
                     }
                 }
-                optionRow(icon: .copy, title: "Copy", destructive: false) {
+                OptionSheetRow(icon: .copy, title: "Copy") {
                     UIPasteboard.general.string = comment.content
                     dismiss()
                 }
                 if isOwn {
-                    optionRow(icon: .trash2, title: "Delete comment", destructive: true) {
+                    OptionSheetRow(icon: .trash2, title: "Delete comment", tint: .vError) {
                         dismiss()
                         onDelete()
                     }
                 } else {
-                    optionRow(icon: .triangleAlert, title: "Report", destructive: false) {
+                    OptionSheetRow(icon: .triangleAlert, title: "Report") {
                         dismiss()
                         onReport()
                     }
                 }
             }
             .padding(.top, 6)
-
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(detentHeight)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
-    }
-
-    private func optionRow(icon: LucideIcon.Name, title: String, destructive: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                LucideIcon(icon, .lg)
-                    .foregroundStyle(destructive ? Color.vError : .white)
-                    .frame(width: 26)
-                Text(title)
-                    .font(.appBody)
-                    .foregroundStyle(destructive ? Color.vError : .white)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 15)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
     }
 }

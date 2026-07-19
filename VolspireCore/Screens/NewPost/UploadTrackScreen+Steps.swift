@@ -62,13 +62,7 @@ extension UploadTrackScreen {
     }
 
     var bottomBar: some View {
-        VStack(spacing: 10) {
-            if case .error(let message) = viewModel.uploadState {
-                statusRow(message, color: UploadTheme.errorText)
-            } else if let hint = stepHint {
-                statusRow(hint, color: Color.vText3)
-            }
-
+        UploadBottomBar(error: viewModel.uploadState.errorMessage, hint: stepHint) {
             HStack(spacing: 10) {
                 if step > 0 {
                     Button {
@@ -114,29 +108,6 @@ extension UploadTrackScreen {
                 }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-        .background {
-            Color.vBar
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.vBorder)
-                        .frame(height: 1)
-                }
-                .ignoresSafeArea()
-        }
-    }
-
-    func statusRow(_ message: String, color: Color) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            LucideIcon(.triangleAlert, .sm)
-                .foregroundStyle(color)
-            Text(message)
-                .font(.appFootnote)
-                .foregroundStyle(color)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
 }

@@ -13,13 +13,6 @@ import Player
 import Services
 import SharedUtilities
 
-enum LibraryLoadingState: Equatable {
-    case idle
-    case loading
-    case loaded
-    case error(String)
-}
-
 @Observable @MainActor
 final class LibraryScreenViewModel {
     /// How many saved tracks the Library page shows inline before "See all".
@@ -30,7 +23,7 @@ final class LibraryScreenViewModel {
     var playerState: MediaPlayerState = .paused(media: .none)
     var savedTracks: [ApiUserLike] = []
     var uploadedTracks: [ApiProfileTrack] = []
-    var loadingState: LibraryLoadingState = .idle
+    var loadingState: LoadState = .idle
     /// The last load got no response (used as an offline indicator).
     var loadFailed = false
 
@@ -122,12 +115,11 @@ final class LibraryScreenViewModel {
         )
     }
 
+    /// Plays a saved track with the whole saved list queued behind it — the
+    /// shared queue-and-play helper registers the queue in MediaState first.
     func play(_ track: ApiUserLike) {
         guard let player else { return }
-        let media = mediaFor(track)
-        Task { await mediaState?.addTrack(media) }
-        let queueIDs = savedTracks.map { MediaID($0.trackId) }
-        player.play(media.id, of: queueIDs)
+        Task { await player.play(MediaID(track.trackId), queue: savedMediaList()) }
     }
 
     func removeFromLibrary(_ track: ApiUserLike) async {

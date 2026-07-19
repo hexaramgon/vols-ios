@@ -135,6 +135,29 @@ final class PlayerController {
     private let supabaseService = SupabaseService()
     private var lastFetchedTrackId: String?
 
+    /// True when a track is loaded — i.e. the mini player is visible above the
+    /// tab bar. THE mini-player predicate (don't re-roll `display.title.isEmpty`).
+    var hasMedia: Bool { !display.title.isEmpty }
+
+    /// The mini player's occupied height above the tab bar (0 when hidden).
+    var miniPlayerAllowance: CGFloat { hasMedia ? ViewConst.compactNowPlayingHeight + 16 : 0 }
+
+    /// MEASURED height of the custom floating tab bar — written by RootTabView's
+    /// onGeometryChange (it varies with Dynamic Type). Default matches the
+    /// design-size bar so first layout is right.
+    var tabBarHeight: CGFloat = 52
+
+    /// The tab-root scroll clearance WITHOUT the mini player: home safe area +
+    /// the floating tab bar. The static form (design-size bar) exists for the
+    /// rare view with no controller in scope.
+    static var baseBottomInset: CGFloat { ViewConst.safeAreaInsets.bottom + 52 }
+
+    /// Bottom content inset for scrolls that sit under the floating tab bar,
+    /// growing when the mini player is showing — shared by every tab-root and
+    /// pushed list screen (was copy-pasted 15×). Uses the MEASURED bar height,
+    /// so large Dynamic Type can't underlap content.
+    var contentBottomInset: CGFloat { ViewConst.safeAreaInsets.bottom + tabBarHeight + miniPlayerAllowance }
+
     /// True when the current video is clearly portrait (taller than wide) — drives
     /// the full-bleed TikTok/Reels-style backdrop in the expanded player.
     var isPortraitVideo: Bool {
@@ -294,8 +317,6 @@ final class PlayerController {
 }
 
 private extension PlayerController {
-    static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "avi", "webm"]
-
     private func observeMediaPlayerState() {
         guard let player else { return }
         cancellables.removeAll()
@@ -345,9 +366,7 @@ private extension PlayerController {
     func updateDisplay(withMeta meta: MediaMeta?, avPlayer: AVPlayer?) async {
         nowPlayingMeta = meta
         if let meta {
-            let isVideo = meta.audioURL.map {
-                Self.videoExtensions.contains($0.pathExtension.lowercased())
-            } ?? false
+            let isVideo = meta.audioURL.map(MediaPlayer.isVideoURL) ?? false
 
             let albumArtwork: Artwork = .placeholder(meta.artwork, name: meta.title)
             let artwork: Artwork

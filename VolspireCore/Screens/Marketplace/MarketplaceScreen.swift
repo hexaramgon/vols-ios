@@ -271,10 +271,11 @@ private extension MarketplaceScreen {
         case .loaded:
             let filtered = !viewModel.searchText.isEmpty || viewModel.activeFilter != nil
             if viewModel.listings.isEmpty {
-                stateView(
+                EmptyStateView(
                     icon: .shoppingCart,
                     title: filtered ? "No results" : "Nothing here yet",
-                    message: filtered ? nil : "Check back later for new packs & services."
+                    message: filtered ? nil : "Check back later for new packs & services.",
+                    centered: true
                 )
                 .transition(.opacity)
             } else {
@@ -344,17 +345,6 @@ private extension MarketplaceScreen {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    func stateView(icon: LucideIcon.Name, title: String, message: String?) -> some View {
-        VStack(spacing: 10) {
-            LucideIcon(icon, .hero).foregroundStyle(Color.vText3)
-            Text(title).font(.appTitle3).foregroundStyle(.white)
-            if let message {
-                Text(message).font(.appSubheadline).foregroundStyle(Color.vText2).multilineTextAlignment(.center)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 40)
-    }
 }
 
 // MARK: - Collab board
@@ -374,12 +364,13 @@ private extension MarketplaceScreen {
                 .transition(.opacity)
         case .loaded:
             if viewModel.filteredBoardListings.isEmpty {
-                stateView(
+                EmptyStateView(
                     icon: .handshake,
                     title: viewModel.searchText.isEmpty ? "No open listings yet" : "No matching listings",
                     message: viewModel.searchText.isEmpty
                         ? "Check back for collab calls — vocalists, producers, features."
-                        : "Try a different category or search."
+                        : "Try a different category or search.",
+                    centered: true
                 )
                 .transition(.opacity)
             } else {
@@ -426,10 +417,10 @@ private extension MarketplaceScreen {
     func listingCard(_ listing: ApiListing) -> some View {
         marketCard(
             cover: nil,
-            icon: listingCategoryIcon(listing.category),
+            icon: listing.categoryIcon,
             gradient: collabGradient,
-            topLeft: listingCategoryLabel(listing.category),
-            topRight: timeAgo(listing.createdAt),
+            topLeft: listing.categoryLabel,
+            topRight: MessageTime.agoLong(iso: listing.createdAt),
             title: listing.title,
             subtitle: "@\(listing.author.username)",
             metaIcon: .users,
@@ -439,28 +430,6 @@ private extension MarketplaceScreen {
 
     /// Tinted banner gradient for collab listings (which carry no image).
     var collabGradient: [Color] { [Color.brand, Color(red: 0.10, green: 0.14, blue: 0.24)] }
-
-    func listingCategoryLabel(_ id: String) -> String {
-        listingCategories.first { $0.id == id }?.label ?? id.capitalized
-    }
-
-    func listingCategoryIcon(_ id: String) -> LucideIcon.Name {
-        listingCategories.first { $0.id == id }?.icon ?? .music
-    }
-
-    func timeAgo(_ iso: String?) -> String {
-        guard let iso, let date = isoDate(iso) else { return "" }
-        let s = Date().timeIntervalSince(date)
-        switch s {
-        case ..<60: return "just now"
-        case ..<3600: return "\(Int(s / 60))m ago"
-        case ..<86400: return "\(Int(s / 3600))h ago"
-        case ..<604800: return "\(Int(s / 86400))d ago"
-        default: return "\(Int(s / 604800))w ago"
-        }
-    }
-
-    func isoDate(_ s: String) -> Date? { MessageTime.parse(s) }
 }
 
 // MARK: - Cards
@@ -549,7 +518,7 @@ private extension MarketplaceScreen {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .shadow(color: .black.opacity(0.28), radius: 10, y: 5)
         }
-        .buttonStyle(PressableCardStyle())
+        .buttonStyle(CardPress())
     }
 
     /// Layered card surface — a base fill plus a soft top highlight for subtle depth
@@ -588,17 +557,6 @@ private extension MarketplaceScreen {
 
     func priceLabel(_ price: Double?) -> String {
         (price ?? 0).priceLabel(free: true)
-    }
-}
-
-/// Tactile press feedback for marketplace cards — a gentle scale + dim, so tapping
-/// a listing feels responsive instead of flat.
-private struct PressableCardStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .opacity(configuration.isPressed ? 0.92 : 1)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 

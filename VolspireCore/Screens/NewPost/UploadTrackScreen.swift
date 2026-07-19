@@ -15,12 +15,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct UploadTrackScreen: View {
-    /// A picked image awaiting crop in the full-screen cropper.
-    struct CropTarget: Identifiable {
-        let id = UUID()
-        let image: UIImage
-    }
-
     /// Receives a picked video as a temp FILE instead of an in-memory Data blob —
     /// combined with `.current` encoding this skips PhotoKit's slow pre-transcode
     /// and the giant RAM copy that used to run before compression even started.
@@ -64,10 +58,7 @@ struct UploadTrackScreen: View {
     /// Which edge the next step pushes in from (forward vs back).
     @State var stepDirection: Edge = .trailing
 
-    let tagSuggestions = [
-        "808", "trap", "melodic", "dark", "drill", "r&b", "lo-fi",
-        "chill", "hype", "afro", "soulful", "vocal", "instrumental",
-    ]
+    let tagSuggestions = trackTagSuggestions
 
     var isUploading: Bool {
         viewModel.uploadState == .uploading
@@ -95,7 +86,11 @@ struct UploadTrackScreen: View {
                     case 1:
                         stepScroll {
                             coverAndTitleRow
-                            descriptionField
+                            UploadDescriptionField(
+                                text: $viewModel.description,
+                                prompt: "What's the story behind this track?",
+                                limit: 500
+                            )
                             tagsSection
                         }
                     default:

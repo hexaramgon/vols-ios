@@ -25,9 +25,11 @@ final class EditTrackViewModel {
 
     /// Already-resolved cover URL, shown until the user picks a replacement.
     var existingCoverURL: URL?
-    var coverImage: UIImage?
-    var coverData: Data?
-    var coverFileName: String?
+    /// A replacement cover, staged via the shared CoverDraft.
+    private var cover = CoverDraft()
+    var coverImage: UIImage? { cover.image }
+    var coverData: Data? { cover.data }
+    var coverFileName: String? { cover.fileName }
 
     var uploadState: UploadState = .idle
 
@@ -61,9 +63,7 @@ final class EditTrackViewModel {
     }
 
     func handleCoverImage(_ image: UIImage) {
-        coverImage = image
-        coverData = image.jpegData(compressionQuality: 0.85)
-        coverFileName = "cover_\(UUID().uuidString).jpg"
+        cover.set(image)
     }
 
     func save() async {

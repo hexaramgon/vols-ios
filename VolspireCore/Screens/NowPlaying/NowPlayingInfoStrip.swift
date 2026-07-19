@@ -369,7 +369,9 @@ struct PlayerAboutModal: View {
                     }
 
                     if !tags.isEmpty {
-                        InfoTagFlow(spacing: 6) {
+                        // The shared wrapping layout (Profile chips) — one value
+                        // for both gaps, like the old private InfoTagFlow.
+                        ChipFlowLayout(spacing: 6, lineSpacing: 6) {
                             ForEach(tags, id: \.self) { tag in
                                 Text("#\(tag)")
                                     .font(.appCaption2Medium)
@@ -404,32 +406,19 @@ private struct PlayerCreditsSheet: View {
     let people: [NowPlayingInfoStrip.CreditPerson]
     var onOpenProfile: (String) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var contentHeight: CGFloat = 300
 
     var body: some View {
-        // TrackOptionsSheet's anatomy: measure the header+rows, pin them to the
-        // sheet's top with a trailing Spacer, and size the detent to the
-        // measurement — otherwise the content floats centered in the detent
-        // and reads as extra padding at the top.
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                SheetHeader(icon: .users, title: "Credits", subtitle: "Everyone on this track", onClose: { dismiss() })
+            SheetHeader(icon: .users, title: "Credits", subtitle: "Everyone on this track", onClose: { dismiss() })
 
-                VStack(spacing: 2) {
-                    ForEach(people) { row($0) }
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
+            VStack(spacing: 2) {
+                ForEach(people) { row($0) }
             }
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
-
-            Spacer(minLength: 0)
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
         }
-        .frame(maxWidth: .infinity)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(contentHeight + ViewConst.safeAreaInsets.bottom + 8)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
     }
 
@@ -487,50 +476,4 @@ extension View {
             .padding(.horizontal, 25)
     }
     .environment(playerController)
-}
-
-// MARK: - InfoTagFlow
-
-/// Simple wrapping layout for the About sheet's tag cloud (the strip itself
-/// never wraps — it caps at one line + "…").
-private struct InfoTagFlow: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
-        arrange(proposal: proposal, subviews: subviews).size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
-        let result = arrange(proposal: proposal, subviews: subviews)
-        for (index, origin) in result.origins.enumerated() {
-            subviews[index].place(
-                at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
-                proposal: .unspecified
-            )
-        }
-    }
-
-    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (origins: [CGPoint], size: CGSize) {
-        let maxWidth = proposal.width ?? .infinity
-        var origins: [CGPoint] = []
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalSize: CGSize = .zero
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x + size.width > maxWidth, x > 0 {
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            origins.append(CGPoint(x: x, y: y))
-            rowHeight = max(rowHeight, size.height)
-            x += size.width + spacing
-            totalSize.width = max(totalSize.width, x - spacing)
-            totalSize.height = max(totalSize.height, y + rowHeight)
-        }
-        return (origins, totalSize)
-    }
 }

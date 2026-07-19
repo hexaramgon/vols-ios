@@ -26,13 +26,18 @@ struct MarketplaceDetailScreen: View {
     }
 
     private let item: Item
-    private let supabase = SupabaseService()
+    /// Stateless path→URL resolver; instantiated locally like every other
+    /// screen (Dependencies doesn't carry a StorageService). RPCs go through
+    /// the injected `dependencies.supabaseService`.
     private let storage = StorageService()
 
     @State private var packDetail: ApiPackDetail?
     @State private var serviceDetail: ApiServiceDetail?
     @State private var loadingDetail = true
-    @State private var scrollY: CGFloat = 0
+    /// Scroll-driven chrome state — read only by `CollapsedTitleBar`, so
+    /// per-frame scroll writes never re-render this page. Thresholds preserve
+    /// the old fade window: cover height (screen width) −150 → −80.
+    @State private var barState = ScrollFadeState(fadeStart: UIScreen.size.width - 150, fadeDistance: 70)
 
     /// Samples list paging — mirrors the web's FileGroup show-more behavior
     /// (start capped, reveal in steps, "show all" / "collapse").
@@ -83,7 +88,9 @@ struct MarketplaceDetailScreen: View {
             }
         }
         .scrollIndicators(.hidden)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in scrollY = y }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
+            barState.update(offsetY: y)
+        }
         .background(Color.vBase.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .ignoresSafeArea(edges: .top)
@@ -93,22 +100,14 @@ struct MarketplaceDetailScreen: View {
         // the collab detail and profile screens use).
         .enableSwipeBack()
         .toolbarBackground(.hidden, for: .navigationBar)
-        .overlay(alignment: .top) { collapsingTitleBar }
+        // Solid bar + centred title/creator fade in once the cover scrolls away
+        // — its own component observing `barState`, so per-frame scroll writes
+        // never re-render this page (same isolation as the listing detail).
+        .overlay(alignment: .top) {
+            CollapsedTitleBar(state: barState, title: title, subtitle: "@\(creatorName)")
+        }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { backButton }
-            ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text(title)
-                        .font(.appCalloutSemibold)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text("@\(creatorName)")
-                        .font(.appCaption2Medium)
-                        .foregroundStyle(Color.vText3)
-                        .lineLimit(1)
-                }
-                .opacity(titleBarOpacity)
-            }
             ToolbarItem(placement: .topBarTrailing) { optionsButton }
         }
         .task { await loadDetail() }
@@ -122,11 +121,13 @@ struct MarketplaceDetailScreen: View {
             ActivityViewController(activityItems: [shareText])
                 .presentationDetents([.medium, .large])
         }
-        .confirmationDialog("Remove this listing from the marketplace?", isPresented: $showRemoveConfirm, titleVisibility: .visible) {
-            Button("Remove", role: .destructive) { Task { await removeListing() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("It will no longer appear in the marketplace. You can re-list it later.")
+        .destructiveConfirm(
+            "Remove this listing from the marketplace?",
+            isPresented: $showRemoveConfirm,
+            actionLabel: "Remove",
+            message: "It will no longer appear in the marketplace. You can re-list it later."
+        ) {
+            Task { await removeListing() }
         }
     }
 
@@ -134,28 +135,10 @@ struct MarketplaceDetailScreen: View {
         BackButton()
     }
 
-    /// Crossfade progress for the title bar as the cover scrolls away.
-    private var titleBarOpacity: Double {
-        let start = coverHeight - 150
-        let end = coverHeight - 80
-        return Double(min(1, max(0, (scrollY - start) / (end - start))))
-    }
-
-    /// Solid bar that fades in behind the centred title + back button on scroll.
-    private var collapsingTitleBar: some View {
-        Color.vBar
-            .frame(height: ViewConst.safeAreaInsets.top + 44)
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(Color.vBorder).frame(height: 0.5)
-            }
-            .opacity(titleBarOpacity)
-            .ignoresSafeArea(edges: .top)
-    }
-
     private func loadDetail() async {
         switch item {
-        case let .pack(p): packDetail = try? await supabase.getPack(packId: p.packId)
-        case let .service(s): serviceDetail = try? await supabase.getServiceDetail(serviceId: s.serviceId)
+        case let .pack(p): packDetail = try? await dependencies.supabaseService.getPack(packId: p.packId)
+        case let .service(s): serviceDetail = try? await dependencies.supabaseService.getServiceDetail(serviceId: s.serviceId)
         }
         loadingDetail = false
     }
@@ -220,68 +203,37 @@ private extension MarketplaceDetailScreen {
         }
     }
 
-    /// Slide-up options sheet — mirrors the collab listing's "…" sheet.
+    /// Slide-up options sheet — the shared `SheetHeader` + option rows, sized
+    /// to its content like the folder / listing / track "…" sheets.
     var optionsSheet: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 13) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.white.opacity(0.08))
-                    LucideIcon(fallbackIcon, .lg).foregroundStyle(.white)
-                }
-                .frame(width: 52, height: 52)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.appTitle3Bold).foregroundStyle(.white).lineLimit(1)
-                    Text("@\(creatorName)").font(.appFootnote).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
-                }
-                Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(icon: fallbackIcon, title: title, subtitle: "@\(creatorName)") {
+                showOptions = false
             }
-            .padding(.horizontal, 6)
-            .padding(.bottom, 2)
 
-            VStack(spacing: 2) {
+            VStack(spacing: 0) {
                 if canEdit {
-                    optionRow(systemImage: "pencil", title: "Edit listing") {
+                    OptionSheetRow(icon: .squarePen, title: "Edit listing") {
                         pendingEdit = true
                         showOptions = false
                     }
                 }
-                optionRow(systemImage: "square.and.arrow.up", title: "Share") {
+                OptionSheetRow(icon: .share2, title: "Share") {
                     pendingShare = true
                     showOptions = false
                 }
                 if canRemove {
-                    optionRow(systemImage: "trash", title: "Remove from marketplace",
-                              tint: Color.vDestructive) {
+                    OptionSheetRow(icon: .trash2, title: "Remove from marketplace",
+                                   tint: .vDestructive) {
                         pendingRemove = true
                         showOptions = false
                     }
                 }
             }
-            Spacer(minLength: 0)
+            .padding(.top, 6)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 22)
-        .padding(.bottom, 14)
-        .frame(maxWidth: .infinity)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(CGFloat(188 + (canEdit ? 62 : 0) + (canRemove ? 62 : 0)))])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
-    }
-
-    func optionRow(systemImage: String, title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 16) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 18)).foregroundStyle(tint)
-                    .frame(width: 26, alignment: .center)
-                Text(title).font(.appBodyLargeMedium).foregroundStyle(tint)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 6).padding(.vertical, 15)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
     }
 
     var shareText: String {
@@ -300,7 +252,7 @@ private extension MarketplaceDetailScreen {
     func removeListing() async {
         guard case let .service(s) = item else { return }
         do {
-            _ = try await supabase.updateUserService(
+            _ = try await dependencies.supabaseService.updateUserService(
                 serviceId: s.serviceId, title: nil, description: nil, serviceType: nil,
                 price: nil, currency: nil, deliveryTimeDays: nil, isActive: false
             )
@@ -663,7 +615,7 @@ private extension MarketplaceDetailScreen {
                 .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(file.name).font(.appSubheadlineMedium).foregroundStyle(.white).lineLimit(1)
-                Text([file.format, file.fileSize.map(formatBytes)].compactMap { $0 }.joined(separator: " · "))
+                Text([file.format, file.fileSize.map(\.byteLabel)].compactMap { $0 }.joined(separator: " · "))
                     .font(.appCaption2).foregroundStyle(Color.vText3).lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -901,12 +853,5 @@ private extension MarketplaceDetailScreen {
         case "Preset Pack": "presets"
         default: "samples"
         }
-    }
-
-
-    func formatBytes(_ bytes: Int) -> String {
-        let kb = Double(bytes) / 1024
-        if kb < 1024 { return String(format: "%.0f KB", kb) }
-        return String(format: "%.1f MB", kb / 1024)
     }
 }

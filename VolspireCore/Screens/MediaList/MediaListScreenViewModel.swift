@@ -15,7 +15,6 @@ import SwiftUI
 
 @Observable @MainActor
 class MediaListScreenViewModel {
-    weak var mediaState: MediaState?
     let items: [Media]
     let listMeta: MediaList.Meta?
     var playerState: MediaPlayerState = .paused(media: .none)
@@ -64,33 +63,27 @@ class MediaListScreenViewModel {
         }
     }
 
+    // Playback goes through the shared queue-and-play helper, which registers
+    // `items` in MediaState first (nothing else guarantees they're registered —
+    // e.g. the Home "See all", where a track is only added on a direct tap).
+
     func onSelect(media: MediaID) {
         guard let player else { return }
-        player.play(media, of: items.map(\.id))
+        Task { await player.play(media, queue: items) }
     }
 
     func onPlay() {
         guard let player, let item = items.first else { return }
-        player.play(item.id, of: items.map(\.id))
+        Task { await player.play(item.id, queue: items) }
     }
 
     func onShuffle() {
         guard let player, !items.isEmpty else { return }
         // Random starting track + player-level shuffle: the queue keeps its real
         // order underneath, so toggling shuffle off in the player restores it.
-        let ids = items.map(\.id)
-        guard let start = ids.randomElement() else { return }
+        guard let start = items.map(\.id).randomElement() else { return }
         player.setShuffle(true)
-        player.play(start, of: ids)
-    }
-
-    /// Register every row's media in the shared MediaState so playback can resolve
-    /// its audio URL. The caller builds `items` with full meta, but nothing else
-    /// guarantees they're registered — e.g. the Home "See all", where a track is
-    /// only added to MediaState on a direct tap, so tapping it here would no-op.
-    func registerItems() async {
-        guard let mediaState else { return }
-        for item in items { await mediaState.addTrack(item) }
+        Task { await player.play(start, queue: items) }
     }
 
     func isSaved(_ id: MediaID) -> Bool { savedTrackIDs.contains(id.value) }

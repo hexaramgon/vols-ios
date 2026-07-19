@@ -100,13 +100,7 @@ struct CreatePackScreen: View {
     }
 
     private var bottomBar: some View {
-        VStack(spacing: 10) {
-            if case .error(let message) = viewModel.uploadState {
-                statusRow(message, color: UploadTheme.errorText)
-            } else if let hint = viewModel.validationHint {
-                statusRow(hint, color: Color.vText3)
-            }
-
+        UploadBottomBar(error: viewModel.uploadState.errorMessage, hint: viewModel.validationHint) {
             PrimaryButton(
                 viewModel.isEditing ? "Save Changes" : "Publish Pack",
                 busy: isUploading,
@@ -115,29 +109,6 @@ struct CreatePackScreen: View {
                 Task { await viewModel.publish() }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-        .background {
-            Color.vBar
-                .overlay(alignment: .top) {
-                    Rectangle()
-                        .fill(Color.vBorder)
-                        .frame(height: 1)
-                }
-                .ignoresSafeArea()
-        }
-    }
-
-    private func statusRow(_ message: String, color: Color) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            LucideIcon(.triangleAlert, .sm)
-                .foregroundStyle(color)
-            Text(message)
-                .font(.appFootnote)
-                .foregroundStyle(color)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Cover & identity
@@ -150,30 +121,15 @@ struct CreatePackScreen: View {
                 Button {
                     showCoverPicker = true
                 } label: {
-                    coverBox
+                    UploadCoverBox(image: viewModel.coverImage)
                 }
                 .buttonStyle(.plain)
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Optional cover image. When uploaded it replaces the gradient on tiles and the pack page. Square, at least 1000×1000.")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vText3)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if viewModel.coverImage != nil {
-                        Button {
-                            viewModel.clearCover()
-                        } label: {
-                            HStack(spacing: 6) {
-                                LucideIcon(.x, .xs)
-                                Text("Remove cover")
-                                    .font(.appFootnote)
-                            }
-                            .foregroundStyle(Color.vText3)
-                            .contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                    }
+                UploadCoverCaption(
+                    text: "Optional cover image. When uploaded it replaces the gradient on tiles and the pack page. Square, at least 1000×1000.",
+                    hasCover: viewModel.coverImage != nil
+                ) {
+                    viewModel.clearCover()
                 }
             }
 
@@ -197,36 +153,6 @@ struct CreatePackScreen: View {
         }
     }
 
-    private var coverBox: some View {
-        ZStack {
-            if let img = viewModel.coverImage {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                UploadTheme.fieldFill
-                VStack(spacing: 6) {
-                    LucideIcon(.image, .lg)
-                        .foregroundStyle(Color.vText3)
-                    Text("Cover art")
-                        .font(.appCaption)
-                        .foregroundStyle(Color.vText3)
-                }
-            }
-        }
-        .frame(width: 96, height: 96)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            if viewModel.coverImage == nil {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
-            } else {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
-            }
-        }
-    }
-
     // MARK: - Basic info
 
     private var basicInfoSection: some View {
@@ -244,11 +170,7 @@ struct CreatePackScreen: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
             .uploadFieldShell()
-            .onChange(of: viewModel.name) { _, newValue in
-                if newValue.count > 80 {
-                    viewModel.name = String(newValue.prefix(80))
-                }
-            }
+            .charLimited($viewModel.name, 80)
 
             HStack(spacing: 6) {
                 Text("$")
@@ -256,54 +178,24 @@ struct CreatePackScreen: View {
                     .foregroundStyle(Color.vText3)
                 TextField(
                     "",
-                    text: Binding(
-                        get: { viewModel.price },
-                        set: { viewModel.price = $0.filter { "0123456789.".contains($0) } }
-                    ),
+                    text: $viewModel.price.decimalFiltered(),
                     prompt: Text("Price — leave blank or 0 for free").foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
                 .foregroundStyle(.white)
                 .keyboardType(.decimalPad)
                 .focused($priceFieldFocused)
-                .toolbar {
-                    ToolbarItemGroup(placement: .keyboard) {
-                        Spacer()
-                        Button("Done") {
-                            priceFieldFocused = false
-                        }
-                        .font(.appCallout)
-                    }
-                }
+                .doneKeyboardToolbar($priceFieldFocused)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
             .uploadFieldShell()
 
-            VStack(alignment: .trailing, spacing: 4) {
-                TextField(
-                    "",
-                    text: $viewModel.description,
-                    prompt: Text("Describe what's in the pack — sounds, vibe, what makes it special…")
-                        .foregroundStyle(Color.vText3),
-                    axis: .vertical
-                )
-                .font(.appBody)
-                .foregroundStyle(.white)
-                .lineLimit(3...6)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 13)
-                .uploadFieldShell()
-                .onChange(of: viewModel.description) { _, newValue in
-                    if newValue.count > 600 {
-                        viewModel.description = String(newValue.prefix(600))
-                    }
-                }
-
-                Text("\(viewModel.description.count)/600")
-                    .font(.appCaption)
-                    .foregroundStyle(Color.vText3)
-            }
+            UploadDescriptionField(
+                text: $viewModel.description,
+                prompt: "Describe what's in the pack — sounds, vibe, what makes it special…",
+                limit: 600
+            )
         }
     }
 
@@ -469,22 +361,11 @@ struct CreatePackScreen: View {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Visibility")
 
-            HStack(spacing: 8) {
-                UploadPill("Public", icon: .globe, expands: true, selected: viewModel.visibility == "public") {
-                    viewModel.visibility = "public"
-                }
-                UploadPill("Private", icon: .lock, expands: true, selected: viewModel.visibility == "private") {
-                    viewModel.visibility = "private"
-                }
-            }
-
-            Text(
-                viewModel.visibility == "public"
-                    ? "Public — appears in the marketplace and on your profile."
-                    : "Private — hidden from the marketplace. You can flip it public later from the pack page."
+            UploadVisibilityPicker(
+                visibility: $viewModel.visibility,
+                publicHint: "Public — appears in the marketplace and on your profile.",
+                privateHint: "Private — hidden from the marketplace. You can flip it public later from the pack page."
             )
-            .font(.appFootnote)
-            .foregroundStyle(Color.vText3)
         }
     }
 }

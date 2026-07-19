@@ -23,6 +23,10 @@ struct BackButton: View {
             LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(shadow ? 0.5 : 0), radius: 2, y: 1)
+                // Grow the hit area to ~44pt without moving any pixels (an
+                // explicit frame would shift the chevron's leading alignment
+                // at every call site).
+                .contentShape(Rectangle().inset(by: -11))
         }
         .buttonStyle(.plain)
     }

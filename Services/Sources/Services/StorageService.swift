@@ -8,6 +8,7 @@
 //
 
 import Foundation
+import SharedUtilities
 import Supabase
 
 // MARK: - Bucket Configuration

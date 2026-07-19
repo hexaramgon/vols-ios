@@ -68,7 +68,6 @@ public struct LucideIcon: View {
         case pause = "lucide-pause"
         case playFill = "lucide-play-fill"
         case pauseFill = "lucide-pause-fill"
-        case square = "lucide-square"
         case download = "lucide-download"
         case shoppingCart = "lucide-shopping-cart"
         case library = "lucide-library"

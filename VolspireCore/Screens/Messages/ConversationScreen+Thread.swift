@@ -10,6 +10,7 @@ import DesignSystem
 import Kingfisher
 import MediaLibrary
 import PhotosUI
+import SharedUtilities
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -155,7 +156,6 @@ struct ChatThread: View {
                 actions: attachmentActions(target)
             )
             // Detents come from TrackOptionsSheet itself (sized to its rows).
-            .presentationDragIndicator(.visible)
             .sheetBackground()
         }
     }
@@ -425,7 +425,7 @@ struct ChatThread: View {
             playSharedTrack(track)
         } label: {
             HStack(spacing: 11) {
-                ArtworkView(track.coverURL.map { .webImage($0) } ?? .placeholder(name: track.title), cornerRadius: 10)
+                ArtworkView(.placeholder(track.coverURL, name: track.title), cornerRadius: 10)
                     .frame(width: 48, height: 48)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -783,9 +783,8 @@ struct ChatThread: View {
     /// Stages the picked file in the input bar (does not send).
     private func handleFile(_ result: Result<[URL], Error>) {
         guard case let .success(urls) = result, let url = urls.first else { return }
-        let access = url.startAccessingSecurityScopedResource()
-        defer { if access { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else { return }
+        // Shared scoped-access dance; denied access or a failed read = silent skip.
+        guard let data = (try? SecurityScopedFile.read(url)) ?? nil else { return }
         let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
         let preview = mime.hasPrefix("image") ? UIImage(data: data) : nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -805,49 +804,27 @@ private struct MessageOptionsSheet: View {
     let onReport: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var contentHeight: CGFloat = 200
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                SheetHeader(icon: .messageCircle, title: "Message", subtitle: message.text) { dismiss() }
+            SheetHeader(icon: .messageCircle, title: "Message", subtitle: message.text) { dismiss() }
 
-                VStack(spacing: 0) {
-                    optionRow(icon: .copy, title: "Copy", tint: .white) {
-                        UIPasteboard.general.string = message.text
+            VStack(spacing: 0) {
+                OptionSheetRow(icon: .copy, title: "Copy") {
+                    UIPasteboard.general.string = message.text
+                    dismiss()
+                }
+                if !message.isFromMe {
+                    OptionSheetRow(icon: .flag, title: "Report") {
                         dismiss()
-                    }
-                    if !message.isFromMe {
-                        optionRow(icon: .flag, title: "Report", tint: .white) {
-                            dismiss()
-                            onReport()
-                        }
+                        onReport()
                     }
                 }
-                .padding(.top, 6)
             }
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
-
-            Spacer(minLength: 0)
+            .padding(.top, 6)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(contentHeight + ViewConst.safeAreaInsets.bottom + 8)])
-        .presentationDragIndicator(.visible)
+        .selfSizedDetent()
         .sheetBackground()
-    }
-
-    private func optionRow(icon: LucideIcon.Name, title: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                LucideIcon(icon, .lg).foregroundStyle(tint).frame(width: 26)
-                Text(title).font(.appBody).foregroundStyle(tint)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 20).padding(.vertical, 15)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
     }
 }
 

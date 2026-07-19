@@ -60,17 +60,3 @@ public extension Notification.Name {
     static let userBlockStateChanged = Notification.Name("userBlockStateChanged")
 }
 
-/// A user the current account has blocked — powers Settings → Blocked accounts.
-/// Decoded from `get_blocked_users`.
-public struct ApiBlockedUser: Codable, Sendable, Identifiable {
-    public var id: String { userId }
-    public let userId: String
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
