@@ -26,18 +26,18 @@ let packTypes: [PackTypeOption] = [
     .init(id: "Plugin", icon: .package),
 ]
 
-/// Web GRADIENT_OPTIONS (pack-create) — value strings stored in the DB,
-/// top colours approximated for the swatches.
+/// Web GRADIENT_OPTIONS (pack-create) — value strings stored in the DB; the swatch
+/// top colour is derived from each string via TailwindGradient (see UploadGradientOption).
 let packGradients: [UploadGradientOption] = [
-    .init(id: "from-violet-900 via-violet-950 to-black", label: "Violet", top: Color(red: 0.30, green: 0.11, blue: 0.58)),
-    .init(id: "from-rose-900 via-rose-950 to-black", label: "Rose", top: Color(red: 0.53, green: 0.07, blue: 0.22)),
-    .init(id: "from-cyan-900 via-cyan-950 to-black", label: "Cyan", top: Color(red: 0.09, green: 0.31, blue: 0.39)),
-    .init(id: "from-neutral-700 via-neutral-900 to-black", label: "Slate", top: Color(white: 0.25)),
-    .init(id: "from-amber-900 via-amber-950 to-black", label: "Amber", top: Color(red: 0.47, green: 0.21, blue: 0.06)),
-    .init(id: "from-emerald-900 via-emerald-950 to-black", label: "Emerald", top: Color(red: 0.02, green: 0.31, blue: 0.23)),
-    .init(id: "from-orange-900 via-orange-950 to-black", label: "Orange", top: Color(red: 0.49, green: 0.18, blue: 0.07)),
-    .init(id: "from-indigo-900 via-indigo-950 to-black", label: "Indigo", top: Color(red: 0.19, green: 0.18, blue: 0.51)),
-    .init(id: "from-blue-900 via-blue-950 to-black", label: "Blue", top: Color(red: 0.12, green: 0.23, blue: 0.54)),
+    .init(id: "from-violet-900 via-violet-950 to-black", label: "Violet"),
+    .init(id: "from-rose-900 via-rose-950 to-black", label: "Rose"),
+    .init(id: "from-cyan-900 via-cyan-950 to-black", label: "Cyan"),
+    .init(id: "from-neutral-700 via-neutral-900 to-black", label: "Slate"),
+    .init(id: "from-amber-900 via-amber-950 to-black", label: "Amber"),
+    .init(id: "from-emerald-900 via-emerald-950 to-black", label: "Emerald"),
+    .init(id: "from-orange-900 via-orange-950 to-black", label: "Orange"),
+    .init(id: "from-indigo-900 via-indigo-950 to-black", label: "Indigo"),
+    .init(id: "from-blue-900 via-blue-950 to-black", label: "Blue"),
 ]
 
 @MainActor

@@ -241,11 +241,11 @@ private extension MediaCollectionScreen {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.meta.title)
-                    .font(.appCalloutSemibold)
+                    .font(.appFont.trackTitle)
                     .foregroundStyle(isActive ? .white : .white.opacity(0.95))
                     .lineLimit(1)
                 if let artist = item.meta.artist, !artist.isEmpty {
-                    Text("@\(artist)").font(.appFootnote).foregroundStyle(Color.vText2).lineLimit(1)
+                    Text("@\(artist)").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
                 }
             }
 
@@ -290,13 +290,7 @@ private extension MediaCollectionScreen {
 
 private extension MediaCollectionScreen {
     var backButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 2, y: 1) // legible over hero art
-        }
-        .buttonStyle(.plain)
+        BackButton()
     }
 
     /// Crossfade progress for the nav bar as the hero scrolls away.
@@ -308,10 +302,10 @@ private extension MediaCollectionScreen {
 
     /// Solid bar that fades in behind the (system-centred) nav title + back button.
     var collapsingTitleBar: some View {
-        Color(white: 0.1)
+        Color.vBar
             .frame(height: ViewConst.safeAreaInsets.top + 44)
             .overlay(alignment: .bottom) {
-                Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5)
+                Rectangle().fill(Color.vBorder).frame(height: 0.5)
             }
             .opacity(titleBarOpacity)
             .ignoresSafeArea(edges: .top)
@@ -327,7 +321,8 @@ private extension MediaCollectionScreen {
             artwork: media.meta.artwork.map { .webImage($0) } ?? .album,
             title: media.meta.title,
             artist: media.meta.artist,
-            actions: mediaActions(media)
+            actions: mediaActions(media),
+            reportTargetId: media.id.value
         )
         // Detents come from TrackOptionsSheet itself (sized to its rows).
         .presentationDragIndicator(.visible)
@@ -357,13 +352,7 @@ private extension MediaCollectionScreen {
     func shareTrack(_ media: Media) {
         let text = "Check out \"\(media.meta.title)\" on Volspire!"
         AnalyticsService.shared?.log(.shareClicked, trackId: media.id.value, metadata: ["kind": "track", "method": "share_sheet"])
-        let vc = UIActivityViewController(activityItems: [text], applicationActivities: nil)
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let root = scene.windows.first?.rootViewController else { return }
-        var presenter = root
-        while let presented = presenter.presentedViewController { presenter = presented }
-        vc.popoverPresentationController?.sourceView = presenter.view
-        presenter.present(vc, animated: true)
+        UIApplication.presentActivitySheet([text])
     }
 
     func goToArtist(_ media: Media) async {

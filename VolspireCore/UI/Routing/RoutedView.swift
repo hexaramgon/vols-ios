@@ -12,6 +12,10 @@ struct RoutedView: View {
 
     var body: some View {
         content
+            // Every pushed page sits on the app's one base colour (`appBase`),
+            // so screens that don't paint their own background can never fall
+            // back to the system black and drift from the tab roots.
+            .background(Color.vBase.ignoresSafeArea())
             .onAppear {
                 AnalyticsService.shared?.log(.pageView, metadata: pageViewMetadata)
             }
@@ -28,10 +32,6 @@ struct RoutedView: View {
         switch route {
         case let .mediaList(items, listMeta, showSave):
             MediaCollectionScreen(items: items, listMeta: listMeta, showSave: showSave)
-        case let .mediaItem(item):
-            MediaItemScreen(item: item)
-        case .downloaded:
-            DownloadedScreen()
         case let .profile(userId):
             ProfileScreen(userId: userId)
         case let .search(query):
@@ -42,8 +42,6 @@ struct RoutedView: View {
             MessagesScreen()
         case .settings:
             SettingsScreen()
-        case .workspace:
-            WorkspaceScreen()
         case .playlists:
             PlaylistsScreen()
         case let .playlist(playlistId, title):

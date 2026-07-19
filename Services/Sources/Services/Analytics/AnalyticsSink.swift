@@ -27,16 +27,3 @@ public struct NoopAnalyticsSink: AnalyticsSink {
     public func send(_ event: AnalyticsEvent) async {}
     public func incrementStream(trackId: String, sessionId: String, metadata: [String: AnalyticsValue]) async {}
 }
-
-/// Prints events instead of sending them — handy while wiring up call sites.
-public struct ConsoleAnalyticsSink: AnalyticsSink {
-    public init() {}
-
-    public func send(_ event: AnalyticsEvent) async {
-        print("[analytics] \(event.type.rawValue) track=\(event.trackId ?? "-") session=\(event.sessionId) meta=\(event.metadata)")
-    }
-
-    public func incrementStream(trackId: String, sessionId: String, metadata: [String: AnalyticsValue]) async {
-        print("[analytics] stream_counted track=\(trackId) session=\(sessionId) meta=\(metadata)")
-    }
-}

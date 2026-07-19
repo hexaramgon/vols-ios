@@ -31,10 +31,35 @@ enum ProfileLayout {
 
 extension Int {
     /// Compact count formatting for stats / streams / downloads (1.2K, 3.4M).
-    var profileCompact: String {
+    var compactCount: String {
         if self >= 1_000_000 { return String(format: "%.1fM", Double(self) / 1_000_000) }
         if self >= 1_000 { return String(format: "%.0fK", Double(self) / 1_000) }
         return "\(self)"
+    }
+
+    /// "m:ss" duration label from a whole number of seconds.
+    var durationLabel: String { String(format: "%d:%02d", self / 60, self % 60) }
+}
+
+extension Double {
+    /// "m:ss" duration label from seconds; "0:00" for a non-finite/negative value.
+    var durationLabel: String {
+        guard isFinite, self >= 0 else { return "0:00" }
+        return Int(rounded()).durationLabel
+    }
+
+    /// A price label — `$`/`€`/`£` for USD/EUR/GBP, else an unambiguous code
+    /// suffix (e.g. "5 CAD"); trims a whole amount's decimals. `free: true`
+    /// renders "Free" for a price of 0 or less.
+    func priceLabel(currency: String? = nil, free: Bool = false) -> String {
+        if free, self <= 0 { return "Free" }
+        let amount = self == rounded() ? String(format: "%.0f", self) : String(format: "%.2f", self)
+        switch (currency ?? "USD").uppercased() {
+        case "USD": return "$\(amount)"
+        case "EUR": return "€\(amount)"
+        case "GBP": return "£\(amount)"
+        default: return "\(amount) \((currency ?? "").uppercased())"
+        }
     }
 }
 

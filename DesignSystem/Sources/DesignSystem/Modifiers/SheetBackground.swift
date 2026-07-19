@@ -10,9 +10,11 @@ import SwiftUI
 
 public extension View {
     /// The app-standard slide-up sheet background — a dark frosted material.
+    /// Also grants every sheet the app-wide tap-to-dismiss-keyboard behaviour.
     func sheetBackground() -> some View {
-        presentationBackground {
-            Color.black.opacity(0.28).background(.regularMaterial)
-        }
+        tapToDismissKeyboard()
+            .presentationBackground {
+                Color.black.opacity(0.28).background(.regularMaterial)
+            }
     }
 }

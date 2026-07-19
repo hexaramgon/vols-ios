@@ -13,7 +13,6 @@ import Supabase
 public enum SupabaseConfig {
     public static let baseURL = "https://api.volspire.com"
     public static let apiKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhrem5rZHhoeW56cm13dXB1ZmF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY2NzE3MDYsImV4cCI6MjA2MjI0NzcwNn0.yiRjLdzjAAAFJFfLT60ebqXeIF3mvj-UO8qtFq-Tyac"
-    public static let redirectURL = "volspire://auth/callback"
 }
 
 // MARK: - Shared Supabase Client
@@ -23,1213 +22,9 @@ public let supabaseClient = SupabaseClient(
     supabaseKey: SupabaseConfig.apiKey
 )
 
-// MARK: - Home API Response Models
-
-/// Mirrors the `get_home_tracks` RPC (and the web app's `HomeTracksData`),
-/// which returns three track buckets.
-public struct HomeTracksResponse: Codable, Sendable {
-    public let popularTracks: [ApiHomeTrack]?
-    public let demos: [ApiHomeTrack]?
-    public let samples: [ApiHomeTrack]?
-
-    enum CodingKeys: String, CodingKey {
-        case popularTracks = "popular_tracks"
-        case demos
-        case samples
-    }
-}
-
-public struct ApiHomeTrack: Codable, Sendable, Identifiable {
-    public let id: String
-    public let title: String
-    public let artist: String?
-    public let coverUrl: String?
-    public let audioUrl: String?
-    public let streams: Int?
-    public let durationMs: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case title
-        case artist
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case streams
-        case durationMs = "duration_ms"
-    }
-}
-
-/// An artist row from `get_explore_artists` (Explore "Artists" tab).
-public struct ApiExploreArtist: Codable, Sendable, Identifiable {
-    public var id: String { userId }
-    public let userId: String
-    public let username: String?
-    public let profileImageUrl: String?
-    public let accountType: String?
-    public let monthlyListeners: Int?
-    public let followersCount: Int?
-    public let tags: [String]?
-    public let isFollowing: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case accountType = "account_type"
-        case monthlyListeners = "monthly_listeners"
-        case followersCount = "followers_count"
-        case tags
-        case isFollowing = "is_following"
-    }
-}
-
-// MARK: - Messages Models
-
-/// One row from `get_user_conversations`. Only the fields the iOS messages UI
-/// consumes are decoded; everything optional so order/collab convo variants
-/// (which carry extra columns) still decode cleanly.
-public struct ApiConversation: Codable, Sendable, Identifiable {
-    public var id: String { convoId }
-    public let convoId: String
-    public let title: String?
-    public let type: String?
-    public let lastMessageContent: String?
-    public let lastMessageAt: String?
-    public let lastMessageUserId: String?
-    public let lastMessageType: String?
-    public let unreadCount: Int?
-    public let otherUserId: String?
-    public let otherUsername: String?
-    public let otherProfileImageUrl: String?
-    public let archivedAt: String?
-    /// Collab-request lifecycle (`pending` / `accepted` / `rejected`) — drives
-    /// the messages list's Requests vs Archived classification.
-    public let requestStatus: String?
-
-    enum CodingKeys: String, CodingKey {
-        case convoId = "convo_id"
-        case title
-        case type
-        case lastMessageContent = "last_message_content"
-        case lastMessageAt = "last_message_at"
-        case lastMessageUserId = "last_message_user_id"
-        case lastMessageType = "last_message_type"
-        case unreadCount = "unread_count"
-        case otherUserId = "other_user_id"
-        case otherUsername = "other_username"
-        case otherProfileImageUrl = "other_profile_image_url"
-        case archivedAt = "archived_at"
-        case requestStatus = "request_status"
-    }
-}
-
-/// One row from `get_convo_messages` (returned oldest-first).
-public struct ApiConvoMessage: Codable, Sendable, Identifiable {
-    public var id: String { messageId }
-    public let messageId: String
-    public let convoId: String?
-    public let userId: String?
-    public let content: String?
-    public let createdAt: String?
-    public let attachment: Bool?
-    public let attachmentUrl: String?
-    public let attachmentType: String?
-    public let attachmentName: String?
-    public let username: String?
-    public let profileImageUrl: String?
-    public let messageType: String?
-    /// Structured request payload (collab requests): `{ "track_ids": [...] }`.
-    /// The referenced tracks are resolved separately via `getTracksByIds` and
-    /// rendered as cards — the message `content` stays a plain caption.
-    public let requestType: String?
-    public let requestMetadata: RequestMetadata?
-    /// Collab-request lifecycle — drives the inline Accept/Decline UI.
-    public let requestId: String?
-    public let requestStatus: String?     // "pending" | "accepted" | "rejected"
-    public let requestFromUserId: String?
-
-    public struct RequestMetadata: Codable, Sendable {
-        public let trackIds: [String]?
-        enum CodingKeys: String, CodingKey { case trackIds = "track_ids" }
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case messageId = "message_id"
-        case convoId = "convo_id"
-        case userId = "user_id"
-        case content
-        case createdAt = "created_at"
-        case attachment
-        case attachmentUrl = "attachment_url"
-        case attachmentType = "attachment_type"
-        case attachmentName = "attachment_name"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case messageType = "message_type"
-        case requestType = "request_type"
-        case requestMetadata = "request_metadata"
-        case requestId = "request_id"
-        case requestStatus = "request_status"
-        case requestFromUserId = "request_from_user_id"
-    }
-}
-
-/// Compact, render-ready track for share cards (`get_tracks_by_ids`). Cover/audio
-/// come back as bare storage paths — resolve via `StorageService` before use.
-public struct ApiSharedTrack: Codable, Sendable, Identifiable {
-    public var id: String { trackId }
-    public let trackId: String
-    public let title: String?
-    public let coverUrl: String?
-    public let audioUrl: String?
-    public let artistUserId: String?
-    public let artistUsername: String?
-    public let artistImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case trackId = "track_id"
-        case title
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case artistUserId = "artist_user_id"
-        case artistUsername = "artist_username"
-        case artistImageUrl = "artist_image_url"
-    }
-}
-
-// MARK: - User Profile Response Models
-
-public struct ApiUserProfile: Codable, Sendable {
-    public let userId: String
-    public let username: String?
-    public let bio: String?
-    public let accountType: String?
-    public let profileImageUrl: String?
-    public let bannerImageUrl: String?
-    public let location: String?
-    public let tags: [String]?
-    public let followersCount: Int?
-    public let monthlyListenersCount: Int
-    public let trackCount: Int
-    public let tracks: [ApiProfileTrack]
-    public let services: [ApiUserService]
-    /// Whether the signed-in viewer follows this profile. Computed server-side.
-    public let isFollowing: Bool?
-    /// Collaborator relationship from the viewer's perspective: `none` | `pending` | `accepted`.
-    public let collaboratorStatus: String?
-    /// Existing DM conversation id with this user, when one exists (drives "Message").
-    public let collabConvoId: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username, bio, tags
-        case accountType = "account_type"
-        case profileImageUrl = "profile_image_url"
-        case bannerImageUrl = "banner_image_url"
-        case location
-        case followersCount = "followers_count"
-        case monthlyListenersCount = "monthly_listeners_count"
-        case trackCount = "track_count"
-        case tracks, services
-        case isFollowing = "is_following"
-        case collaboratorStatus = "collaborator_status"
-        case collabConvoId = "collab_convo_id"
-    }
-}
-
-public struct ApiUpdateProfileResponse: Codable, Sendable {
-    public let userId: String
-    public let username: String?
-    public let bio: String?
-    public let accountType: String?
-    public let location: String?
-    public let profileImageUrl: String?
-    public let bannerImageUrl: String?
-    public let tags: [String]?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username, bio, tags
-        case accountType = "account_type"
-        case location
-        case profileImageUrl = "profile_image_url"
-        case bannerImageUrl = "banner_image_url"
-    }
-}
-
-public struct ApiUserService: Codable, Sendable, Identifiable {
-    public var id: String { serviceId }
-    public let serviceId: String
-    public let title: String
-    public let description: String?
-    public let serviceType: String?
-    public let price: Double?
-    public let currency: String?
-    public let deliveryTimeDays: Int?
-    /// Optional seller-uploaded cover (bare storage path in `post-uploads`).
-    public let coverUrl: String?
-    /// Tailwind gradient class used as the cover fallback in the web app.
-    public let gradient: String?
-    /// `false` means the listing is private/owner-only (shown as a "Private" pill).
-    public let isActive: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case serviceId = "service_id"
-        case title, description, price, currency, gradient
-        case serviceType = "service_type"
-        case deliveryTimeDays = "delivery_time_days"
-        case coverUrl = "cover_url"
-        case isActive = "is_active"
-    }
-}
-
-public struct ApiProfileTrack: Codable, Sendable, Identifiable {
-    public let id: String
-    public let title: String
-    public let coverUrl: String?
-    public let audioUrl: String?
-    public let streams: Int?
-    public let hasVisual: Bool?
-    /// `public` | `private` — own-profile rows surface a lock on private tracks.
-    public let visibility: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, title, streams, visibility
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case hasVisual = "has_visual"
-    }
-}
-
-/// A track owned by another artist where this profile's user is credited
-/// (returned by `get_tracks_credited_to_user`). Cover/audio come back as bare
-/// storage paths; resolve via `StorageService` before display/playback.
-public struct ApiCreditedTrack: Codable, Sendable, Identifiable {
-    public let id: String
-    public let title: String
-    public let artist: String?
-    public let artistId: String?
-    public let artistProfileImageUrl: String?
-    public let coverUrl: String?
-    public let audioUrl: String?
-    public let hasVisual: Bool?
-    public let streams: Int?
-    public let durationMs: Int?
-    public let genre: String?
-    /// The role this user was credited as (e.g. "Producer", "Mixing").
-    public let role: String?
-    /// True when the owning artist privatized/delisted the track. Only ever true
-    /// for the credited user viewing their own profile (server owner-bypass).
-    public let isUnavailable: Bool?
-    /// `delisted` | `private` | nil — why an unavailable row is tombstoned.
-    public let unavailableReason: String?
-
-    enum CodingKeys: String, CodingKey {
-        case id, title, artist, streams, genre, role
-        case artistId = "artist_id"
-        case artistProfileImageUrl = "artist_profile_image_url"
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case hasVisual = "has_visual"
-        case durationMs = "duration_ms"
-        case isUnavailable = "is_unavailable"
-        case unavailableReason = "unavailable_reason"
-    }
-}
-
-/// A sample/preset/plugin pack owned by the profile user (`get_user_packs`).
-/// `coverUrl` is a bare storage path in `post-uploads` when present.
-public struct ApiUserPack: Codable, Sendable, Identifiable {
-    public var id: String { packId }
-    public let packId: String
-    public let name: String
-    public let packType: String?
-    public let price: Double?
-    public let fileCount: Int?
-    public let formats: [String]?
-    public let downloads: Int?
-    public let gradient: String?
-    public let coverUrl: String?
-    public let isPublished: Bool?
-    public let deprecated: Bool?
-    public let createdAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case name, price, formats, downloads, gradient, deprecated
-        case packId = "pack_id"
-        case packType = "pack_type"
-        case fileCount = "file_count"
-        case coverUrl = "cover_url"
-        case isPublished = "is_published"
-        case createdAt = "created_at"
-    }
-}
-
-// MARK: - Folder File DTOs
-
-public struct ApiFolderFile: Codable, Sendable, Identifiable {
-    public var id: String { fileId }
-    public let fileId: String
-    public let name: String
-    public let fileUrl: String?
-    public let fileType: String?
-    public let fileSize: Int?
-    public let timespan: Double?
-    public let ownerId: String
-    public let createdAt: String
-
-    // Uploader info (optional — present when the API joins uploader profile data).
-    public let uploaderUsername: String?
-    public let uploaderProfileImageUrl: String?
-
-    // Track-reference fields (optional — present when `type == "track"`).
-    public let type: String?
-    public let trackId: String?
-    public let trackTitle: String?
-    public let trackArtist: String?
-    public let trackArtistId: String?
-    public let trackCoverUrl: String?
-    public let trackAudioUrl: String?
-    public let trackVisibility: String?
-
-    enum CodingKeys: String, CodingKey {
-        case fileId = "file_id"
-        case name
-        case fileUrl = "file_url"
-        case fileType = "file_type"
-        case fileSize = "file_size"
-        case timespan
-        case ownerId = "owner_id"
-        case createdAt = "created_at"
-        case uploaderUsername = "uploader_username"
-        case uploaderProfileImageUrl = "uploader_profile_image_url"
-        case type
-        case trackId = "track_id"
-        case trackTitle = "track_title"
-        case trackArtist = "track_artist"
-        case trackArtistId = "track_artist_id"
-        case trackCoverUrl = "track_cover_url"
-        case trackAudioUrl = "track_audio_url"
-        case trackVisibility = "track_visibility"
-    }
-}
-
-// MARK: - User Folder DTOs
-
-public struct ApiUserFolder: Codable, Sendable, Identifiable {
-    public var id: String { folderId }
-    public let folderId: String
-    public let name: String
-    public let description: String?
-    public let ownerId: String
-    public let createdAt: String
-    public let role: String
-
-    enum CodingKeys: String, CodingKey {
-        case folderId = "folder_id"
-        case name
-        case description
-        case ownerId = "owner_id"
-        case createdAt = "created_at"
-        case role
-    }
-}
-
-/// One row from `get_workspace_activity` — a collaborator's recent action
-/// (file upload / file comment / joining a folder) across the caller's
-/// workspace folders.
-public struct ApiWorkspaceActivity: Codable, Sendable, Identifiable {
-    /// "upload" | "comment" | "join"
-    public let activityType: String
-    public let actorId: String
-    public let actorUsername: String?
-    /// Bare storage path or full URL — resolve via `StorageService.avatarUrl`.
-    public let actorAvatar: String?
-    public let folderId: String
-    public let folderName: String?
-    public let fileName: String?
-    public let createdAt: String?
-
-    /// No event PK comes back from the RPC — synthesize a stable identity.
-    public var id: String { "\(activityType)-\(actorId)-\(createdAt ?? "")-\(fileName ?? "")" }
-
-    enum CodingKeys: String, CodingKey {
-        case activityType = "activity_type"
-        case actorId = "actor_id"
-        case actorUsername = "actor_username"
-        case actorAvatar = "actor_avatar"
-        case folderId = "folder_id"
-        case folderName = "folder_name"
-        case fileName = "file_name"
-        case createdAt = "created_at"
-    }
-}
-
-public struct ApiFolderMember: Codable, Sendable, Identifiable {
-    public var id: String { userId }
-    public let userId: String
-    public let username: String?
-    public let profileImageUrl: String?
-    public let role: String
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case role
-    }
-}
-
-public struct ApiUserSearchResult: Codable, Sendable, Identifiable {
-    public var id: String { userId }
-    public let userId: String
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
-
-// MARK: - Notification DTOs
-
-public struct ApiNotificationActor: Codable, Sendable {
-    public let userId: String?   // null when the actor row has no/deleted user (left join)
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
-
-public struct ApiNotification: Codable, Sendable, Identifiable {
-    public let id: String
-    public let createdAt: String
-    public let action: String?          // activity_log.action is nullable
-    public let objectType: String?
-    public let objectId: String?
-    public let objectTitle: String?
-    public let contextType: String?
-    public let contextId: String?
-    public let contextPreview: String?
-    public let isRead: Bool?            // activity_log.is_read is nullable
-    public let actor: ApiNotificationActor?
-    /// How many activity rows collapsed into this notification (> 1 only for
-    /// aggregated likes/saves/shares).
-    public let actionCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case createdAt = "created_at"
-        case action
-        case objectType = "object_type"
-        case objectId = "object_id"
-        case objectTitle = "object_title"
-        case contextType = "context_type"
-        case contextId = "context_id"
-        case contextPreview = "context_preview"
-        case isRead = "is_read"
-        case actor
-        case actionCount = "action_count"
-    }
-}
-
-/// The signed-in user's save/like state for a track (`get_track_interaction_status`).
-public struct ApiTrackInteractionStatus: Codable, Sendable {
-    public let isSaved: Bool
-    public let isLiked: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case isSaved = "is_saved"
-        case isLiked = "is_liked"
-    }
-}
-
-// MARK: - Notification Preferences
-
-/// Per-event push/notification toggles (`user_notification_preferences`).
-/// Mirrors the web settings page; every flag defaults to `true`.
-public struct ApiNotificationPreferences: Codable, Sendable {
-    public let newFollowers: Bool
-    public let likes: Bool
-    public let saves: Bool
-    public let comments: Bool
-    public let shares: Bool
-    public let purchases: Bool
-    public let uploads: Bool
-    public let collaborations: Bool
-    public let folders: Bool
-    public let messages: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case newFollowers = "new_followers"
-        case likes, saves, comments, shares, purchases, uploads, collaborations, folders, messages
-    }
-
-    /// Flag lookup by the RPC column name (e.g. "likes", "new_followers").
-    public func value(for key: String) -> Bool? {
-        switch key {
-        case "new_followers": return newFollowers
-        case "likes": return likes
-        case "saves": return saves
-        case "comments": return comments
-        case "shares": return shares
-        case "purchases": return purchases
-        case "uploads": return uploads
-        case "collaborations": return collaborations
-        case "folders": return folders
-        case "messages": return messages
-        default: return nil
-        }
-    }
-}
-
-// MARK: - Analytics
-
-/// Per-track analytics for the signed-in creator (`get_my_track_analytics`),
-/// ordered by total streams. `coverUrl` is a bare `post-uploads` path.
-public struct ApiTrackAnalytics: Codable, Sendable, Identifiable {
-    public var id: String { trackId }
-    public let trackId: String
-    public let title: String
-    public let coverUrl: String?
-    public let streams: Int
-    public let uniqueListeners: Int
-    public let avgListenTime: Double
-    public let avgSeekCount: Double
-    public let sources: [String: Int]
-    public let dailyPlays: [DailyPlay]
-    public let genre: String?
-    public let createdAt: String?
-
-    public struct DailyPlay: Codable, Sendable {
-        public let date: String
-        public let plays: Int
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case title, streams, sources, genre
-        case trackId = "track_id"
-        case coverUrl = "cover_url"
-        case uniqueListeners = "unique_listeners"
-        case avgListenTime = "avg_listen_time"
-        case avgSeekCount = "avg_seek_count"
-        case dailyPlays = "daily_plays"
-        case createdAt = "created_at"
-    }
-}
-
-/// Unread indicator counts (`get_unread_counts`): bell (activity), Inbox
-/// (DMs), and pending seller actions.
-public struct ApiUnreadCounts: Codable, Sendable {
-    public let notifications: Int
-    public let messages: Int
-    public let serviceActions: Int
-
-    enum CodingKeys: String, CodingKey {
-        case notifications, messages
-        case serviceActions = "service_actions"
-    }
-}
-
-/// Creator engagement aggregates (`get_my_engagement_stats`): audience counts
-/// with last-30-day deltas.
-public struct ApiEngagementStats: Codable, Sendable {
-    public let followersTotal: Int
-    public let followers30d: Int
-    public let likesTotal: Int
-    public let likes30d: Int
-    public let savesTotal: Int
-    public let saves30d: Int
-    public let commentsTotal: Int
-    public let comments30d: Int
-    public let shares30d: Int
-
-    enum CodingKeys: String, CodingKey {
-        case followersTotal = "followers_total"
-        case followers30d = "followers_30d"
-        case likesTotal = "likes_total"
-        case likes30d = "likes_30d"
-        case savesTotal = "saves_total"
-        case saves30d = "saves_30d"
-        case commentsTotal = "comments_total"
-        case comments30d = "comments_30d"
-        case shares30d = "shares_30d"
-    }
-}
-
-// MARK: - Marketplace DTOs (get_explore_data)
-
-public struct ApiMarketplaceUser: Codable, Sendable, Hashable {
-    public let userId: String?
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
-
-public struct ApiMarketplacePack: Codable, Sendable, Identifiable, Hashable {
-    public var id: String { packId }
-    public let packId: String
-    public let name: String
-    public let packType: String?
-    public let price: Double?
-    public let downloads: Int?
-    public let fileCount: Int?
-    public let avgRating: Double?
-    public let coverUrl: String?
-    public let gradient: String?
-    public let creator: ApiMarketplaceUser?
-
-    enum CodingKeys: String, CodingKey {
-        case packId = "pack_id"
-        case name
-        case packType = "pack_type"
-        case price
-        case downloads
-        case fileCount = "file_count"
-        case avgRating = "avg_rating"
-        case coverUrl = "cover_url"
-        case gradient
-        case creator
-    }
-}
-
-public struct ApiMarketplaceService: Codable, Sendable, Identifiable, Hashable {
-    public var id: String { serviceId }
-    public let serviceId: String
-    public let title: String
-    public let serviceType: String?
-    public let price: Double?
-    public let deliveryTimeDays: Int?
-    public let avgRating: Double?
-    public let coverUrl: String?
-    public let gradient: String?
-    public let artist: ApiMarketplaceUser?
-
-    enum CodingKeys: String, CodingKey {
-        case serviceId = "service_id"
-        case title
-        case serviceType = "service_type"
-        case price
-        case deliveryTimeDays = "delivery_time_days"
-        case avgRating = "avg_rating"
-        case coverUrl = "cover_url"
-        case gradient
-        case artist
-    }
-}
-
-public struct ApiExploreData: Codable, Sendable {
-    public let packs: [ApiMarketplacePack]?
-    public let services: [ApiMarketplaceService]?
-}
-
-// MARK: - Profile → Marketplace adapters
-
-public extension ApiUserPack {
-    /// Builds a marketplace-shaped pack (so a profile pack can navigate to the pack
-    /// detail). `avgRating` isn't in the profile payload — the detail screen loads
-    /// the full data on open anyway.
-    func asMarketplacePack(creatorUserId: String?, creatorUsername: String?, creatorImageUrl: String?) -> ApiMarketplacePack {
-        ApiMarketplacePack(
-            packId: packId, name: name, packType: packType, price: price,
-            downloads: downloads, fileCount: fileCount, avgRating: nil,
-            coverUrl: coverUrl, gradient: gradient,
-            creator: ApiMarketplaceUser(userId: creatorUserId, username: creatorUsername, profileImageUrl: creatorImageUrl)
-        )
-    }
-}
-
-public extension ApiUserService {
-    /// Builds a marketplace-shaped service (so a profile service can navigate to the
-    /// service detail).
-    func asMarketplaceService(artistUserId: String?, artistUsername: String?, artistImageUrl: String?) -> ApiMarketplaceService {
-        ApiMarketplaceService(
-            serviceId: serviceId, title: title, serviceType: serviceType, price: price,
-            deliveryTimeDays: deliveryTimeDays, avgRating: nil,
-            coverUrl: coverUrl, gradient: gradient,
-            artist: ApiMarketplaceUser(userId: artistUserId, username: artistUsername, profileImageUrl: artistImageUrl)
-        )
-    }
-}
-
-// MARK: - Search DTOs (search_all)
-
-/// One track row from `search_all`. `coverUrl` / `audioUrl` are bare
-/// `post-uploads` paths — resolve via StorageService before display/playback.
-public struct ApiSearchTrack: Codable, Sendable, Identifiable {
-    public var id: String { trackId }
-    public let trackId: String
-    public let title: String
-    public let artist: String?
-    public let artistId: String?
-    public let coverUrl: String?
-    public let audioUrl: String?
-    public let streams: Int?
-    public let durationMs: Int?
-    public let genre: String?
-    public let hasVisual: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case title, artist, genre, streams
-        case trackId = "track_id"
-        case artistId = "artist_id"
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case durationMs = "duration_ms"
-        case hasVisual = "has_visual"
-    }
-}
-
-/// Combined `search_all` payload. Packs/services/artists reuse the existing
-/// marketplace/explore DTOs — the RPC returns a superset of their columns and
-/// Codable ignores the extras.
-public struct ApiSearchResults: Codable, Sendable {
-    public let tracks: [ApiSearchTrack]
-    public let services: [ApiMarketplaceService]
-    public let packs: [ApiMarketplacePack]
-    public let artists: [ApiExploreArtist]
-}
-
-// MARK: - Collab board (listings) DTOs
-
-/// Board/card shape returned by `get_listings`.
-public struct ApiListing: Codable, Sendable, Identifiable, Hashable {
-    public var id: String { listingId }
-    public let listingId: String
-    public let category: String
-    public let title: String
-    public let description: String?
-    public let tags: [String]?
-    /// `attachments` should be a JSON array. Correctly-created listings store an
-    /// array; legacy rows hold a double-encoded JSON *string* like "[]". Decoded
-    /// flexibly either way, exposed via `attachments`.
-    private let attachmentsValue: FlexibleListingAttachments?
-    public let status: String?
-    public let createdAt: String?
-    public let author: ApiListingAuthor
-    public let responseCount: Int?
-    public let saveCount: Int?
-    public let commentCount: Int?
-    // Detail-only viewer flags (nil from the board feed; populated by `get_listing`).
-    public let updatedAt: String?
-    public let isAuthor: Bool?
-    public let viewerHasSaved: Bool?
-    public let viewerHasResponded: Bool?
-    public let viewerConvoId: String?
-
-    /// The attachment clips (empty if none).
-    public var attachments: [ApiListingAttachment] { attachmentsValue?.items ?? [] }
-
-    enum CodingKeys: String, CodingKey {
-        case listingId = "listing_id"
-        case category, title, description, tags, status, author
-        case attachmentsValue = "attachments"
-        case createdAt = "created_at"
-        case responseCount = "response_count"
-        case saveCount = "save_count"
-        case commentCount = "comment_count"
-        case updatedAt = "updated_at"
-        case isAuthor = "is_author"
-        case viewerHasSaved = "viewer_has_saved"
-        case viewerHasResponded = "viewer_has_responded"
-        case viewerConvoId = "viewer_convo_id"
-    }
-}
-
-/// One flat comment on a listing (`get_listing_comments` / `post_listing_comment`).
-public struct ApiListingComment: Codable, Sendable, Identifiable {
-    public var id: String { commentId }
-    public let commentId: String
-    public let content: String
-    public let createdAt: String?
-    public let user: ApiListingAuthor
-
-    enum CodingKeys: String, CodingKey {
-        case commentId = "comment_id"
-        case content
-        case createdAt = "created_at"
-        case user
-    }
-}
-
-/// One responder to a listing (author-only, `get_listing_responses`).
-public struct ApiListingResponse: Codable, Sendable, Identifiable {
-    public var id: String { responseId }
-    public let responseId: String
-    public let convoId: String?
-    public let createdAt: String?
-    public let messagePreview: String?
-    public let responder: ApiListingAuthor
-
-    enum CodingKeys: String, CodingKey {
-        case responseId = "response_id"
-        case convoId = "convo_id"
-        case createdAt = "created_at"
-        case messagePreview = "message_preview"
-        case responder
-    }
-}
-
-public struct ApiListingAttachment: Codable, Sendable, Hashable {
-    public let title: String?
-    public let fileUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case title
-        case fileUrl = "file_url"
-    }
-}
-
-/// Decodes a listing's `attachments` whether it arrives as a proper JSON array
-/// (correct) or a legacy double-encoded JSON string like "[]".
-struct FlexibleListingAttachments: Codable, Sendable, Hashable {
-    let items: [ApiListingAttachment]
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let array = try? container.decode([ApiListingAttachment].self) {
-            items = array
-        } else if let string = try? container.decode(String.self),
-                  let data = string.data(using: .utf8),
-                  let array = try? JSONDecoder().decode([ApiListingAttachment].self, from: data) {
-            items = array
-        } else {
-            items = []
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(items)
-    }
-}
-
-public struct ApiListingAuthor: Codable, Sendable, Hashable {
-    public let userId: String
-    public let username: String
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
-
-// MARK: - Marketplace detail DTOs (get_pack / get_service_detail)
-
-/// Aggregate rating across all of a seller's packs + services.
-public struct ApiSellerReputation: Codable, Sendable, Hashable {
-    public let avgRating: Double?
-    public let reviewCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case avgRating = "avg_rating"
-        case reviewCount = "review_count"
-    }
-}
-
-public struct ApiReviewer: Codable, Sendable, Hashable {
-    public let userId: String?
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
-
-public struct ApiReview: Codable, Sendable, Hashable, Identifiable {
-    public var id: String { reviewId }
-    public let reviewId: String
-    public let rating: Double?
-    public let body: String?
-    public let createdAt: String?
-    public let verified: Bool?
-    public let reviewer: ApiReviewer?
-
-    enum CodingKeys: String, CodingKey {
-        case reviewId = "review_id"
-        case rating, body, verified, reviewer
-        case createdAt = "created_at"
-    }
-}
-
-/// One sample/file inside a pack.
-public struct ApiPackFile: Codable, Sendable, Hashable, Identifiable {
-    public var id: String { fileId }
-    public let fileId: String
-    public let name: String
-    public let category: String?
-    public let format: String?
-    public let duration: Double?
-    public let fileUrl: String?
-    public let fileSize: Int?
-    public let isPreview: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case fileId = "file_id"
-        case name, category, format, duration
-        case fileUrl = "file_url"
-        case fileSize = "file_size"
-        case isPreview = "is_preview"
-    }
-}
-
-public struct ApiPackDetail: Codable, Sendable {
-    public let packId: String
-    public let name: String
-    public let packType: String?
-    public let description: String?
-    public let price: Double?
-    public let currency: String?
-    public let formats: [String]?
-    public let coverUrl: String?
-    public let gradient: String?
-    public let tags: [String]?
-    public let fileCount: Int?
-    public let downloads: Int?
-    public let likes: Int?
-    public let saves: Int?
-    public let avgRating: Double?
-    public let reviewCount: Int?
-    public let createdAt: String?
-    public let ownerId: String?
-    public let creatorUsername: String?
-    public let creatorImage: String?
-    public let sellerReputation: ApiSellerReputation?
-    public let files: [ApiPackFile]?
-    public let reviews: [ApiReview]?
-    public let isPublished: Bool?
-
-    enum CodingKeys: String, CodingKey {
-        case name, description, price, currency, formats, tags, downloads, likes, saves, files, reviews, gradient
-        case packId = "pack_id"
-        case packType = "pack_type"
-        case coverUrl = "cover_url"
-        case fileCount = "file_count"
-        case avgRating = "avg_rating"
-        case reviewCount = "review_count"
-        case createdAt = "created_at"
-        case ownerId = "owner_id"
-        case creatorUsername = "creator_username"
-        case creatorImage = "creator_image"
-        case sellerReputation = "seller_reputation"
-        case isPublished = "is_published"
-    }
-}
-
-/// A service pricing tier (Basic / Standard / Pro).
-public struct ApiServicePackage: Codable, Sendable, Hashable, Identifiable {
-    public var id: String { name }
-    public let name: String
-    public let price: Double?
-    public let delivery: Int?
-    public let revisions: Int?
-    public let features: [String]?
-}
-
-public struct ApiServiceProcessStep: Codable, Sendable, Hashable, Identifiable {
-    public var id: String { step }
-    public let step: String
-    public let description: String?
-}
-
-public struct ApiServiceFaq: Codable, Sendable, Hashable, Identifiable {
-    public var id: String { q }
-    public let q: String
-    public let a: String?
-}
-
-public struct ApiServiceArtist: Codable, Sendable, Hashable {
-    public let userId: String?
-    public let username: String?
-    public let profileImageUrl: String?
-    public let bio: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username, bio
-        case profileImageUrl = "profile_image_url"
-    }
-}
-
-public struct ApiServiceDetail: Codable, Sendable {
-    public let serviceId: String
-    public let title: String
-    public let serviceType: String?
-    public let longDescription: String?
-    public let price: Double?
-    public let currency: String?
-    public let deliveryTimeDays: Int?
-    public let revisions: Int?
-    public let tags: [String]?
-    public let coverUrl: String?
-    public let gradient: String?
-    public let avgRating: Double?
-    public let reviewCount: Int?
-    public let likes: Int?
-    public let saves: Int?
-    public let createdAt: String?
-    public let artist: ApiServiceArtist?
-    public let packages: [ApiServicePackage]?
-    public let process: [ApiServiceProcessStep]?
-    public let deliverables: [String]?
-    public let faqs: [ApiServiceFaq]?
-    public let portfolio: [ApiListingAttachment]?
-    public let sellerReputation: ApiSellerReputation?
-    public let reviews: [ApiReview]?
-
-    enum CodingKeys: String, CodingKey {
-        case title, price, currency, revisions, tags, likes, saves, artist, packages, process, deliverables, faqs, reviews, gradient, portfolio
-        case serviceId = "service_id"
-        case serviceType = "service_type"
-        case longDescription = "long_description"
-        case deliveryTimeDays = "delivery_time_days"
-        case coverUrl = "cover_url"
-        case avgRating = "avg_rating"
-        case reviewCount = "review_count"
-        case createdAt = "created_at"
-        case sellerReputation = "seller_reputation"
-    }
-}
-
-// MARK: - Playlist DTOs
-
-public struct ApiPlaylist: Codable, Sendable, Identifiable {
-    public var id: String { playlistId }
-    public let playlistId: String
-    public let title: String
-    public let description: String?
-    public let coverUrl: String?
-    public let visibility: String?
-    public let createdAt: String?
-    public let updatedAt: String?
-    public let trackCount: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case playlistId = "playlist_id"
-        case title, description, visibility
-        case coverUrl = "cover_url"
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-        case trackCount = "track_count"
-    }
-}
-
-public struct ApiPlaylistTrack: Codable, Sendable, Identifiable {
-    public var id: String { trackId }
-    public let trackId: String
-    public let title: String
-    public let coverUrl: String?
-    public let audioUrl: String?
-    public let durationMs: Int?
-    public let genre: String?
-    public let createdBy: String?
-    public let artistUsername: String?
-    public let artistAvatarUrl: String?
-    public let position: Int?
-    public let addedAt: String?
-
-    enum CodingKeys: String, CodingKey {
-        case trackId = "track_id"
-        case title, genre, position
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case durationMs = "duration_ms"
-        case createdBy = "created_by"
-        case artistUsername = "artist_username"
-        case artistAvatarUrl = "artist_avatar_url"
-        case addedAt = "added_at"
-    }
-}
-
-public struct ApiPlaylistDetail: Codable, Sendable, Identifiable {
-    public var id: String { playlistId }
-    public let playlistId: String
-    public let title: String
-    public let description: String?
-    public let coverUrl: String?
-    public let visibility: String?
-    public let ownerId: String?
-    public let ownerUsername: String?
-    public let ownerAvatarUrl: String?
-    public let createdAt: String?
-    public let updatedAt: String?
-    public let tracks: [ApiPlaylistTrack]?
-
-    enum CodingKeys: String, CodingKey {
-        case playlistId = "playlist_id"
-        case title, description, visibility, tracks
-        case coverUrl = "cover_url"
-        case ownerId = "owner_id"
-        case ownerUsername = "owner_username"
-        case ownerAvatarUrl = "owner_avatar_url"
-        case createdAt = "created_at"
-        case updatedAt = "updated_at"
-    }
-}
-
-// MARK: - Supabase Service Protocol
-
-public protocol SupabaseServiceProtocol: Sendable {
-    func getHomeTracks() async throws -> HomeTracksResponse
-    func getFollowingFeed() async throws -> [ApiHomeTrack]
-    func getExploreTracksFeed(seed: Int) async throws -> [ApiHomeTrack]
-    func getExploreArtists() async throws -> [ApiExploreArtist]
-    func getUserProfile(userId: String) async throws -> ApiUserProfile
-    func getTracksCreditedToUser(userId: String) async throws -> [ApiCreditedTrack]
-    func getUserPacks(userId: String) async throws -> [ApiUserPack]
-    func getUserLikes() async throws -> [ApiUserLike]
-    func getUserLibrary() async throws -> [ApiUserLike]
-    func unsaveTrack(trackId: String) async throws
-    func getUserNotifications() async throws -> [ApiNotification]
-    func markNotificationsRead() async throws
-    func getNotificationPreferences() async throws -> ApiNotificationPreferences
-    func updateNotificationPreference(key: String, value: Bool) async throws -> ApiNotificationPreferences
-    func getMyTrackAnalytics() async throws -> [ApiTrackAnalytics]
-    func getUserFolders() async throws -> [ApiUserFolder]
-    func getFolderFiles(folderId: String) async throws -> [ApiFolderFile]
-    func getUserConversations(limit: Int, offset: Int) async throws -> [ApiConversation]
-    func getConvoMessages(convoId: String, limit: Int, offset: Int) async throws -> [ApiConvoMessage]
-    func sendMessage(convoId: String, content: String) async throws -> String
-    func markConvoRead(convoId: String) async throws
-    func toggleFollow(targetUser: String) async throws
-    func sendCollabRequest(targetId: String, message: String, trackIds: [String]?) async throws
-    @discardableResult
-    func createFolder(name: String, description: String?) async throws -> String
-    func editFolder(folderId: String, name: String, description: String?) async throws
-    func uploadFile(folderId: String, fileName: String, fileData: Data, fileType: String, fileSize: Int) async throws
-    func deleteFile(fileId: String, folderId: String) async throws
-    func createUserService(title: String, description: String, serviceType: String, price: Double, currency: String, deliveryTimeDays: Int?) async throws -> ApiUserService
-    func updateUserService(serviceId: String, title: String?, description: String?, serviceType: String?, price: Double?, currency: String?, deliveryTimeDays: Int?, isActive: Bool?) async throws -> ApiUserService
-    func updateUserProfile(userId: String, username: String?, bio: String?, accountType: String?, location: String?, profileImageUrl: String?, bannerImageUrl: String?, tags: [String]?) async throws -> ApiUpdateProfileResponse
-    func uploadAvatar(userId: String, imageData: Data) async throws -> URL
-    func uploadBanner(userId: String, imageData: Data) async throws -> URL
-    func getTrackInteractionStatus(trackId: String) async throws -> ApiTrackInteractionStatus
-    func likeTrack(trackId: String) async throws
-    func unlikeTrack(trackId: String) async throws
-    func saveTrack(trackId: String) async throws
-    func rpc<T: Decodable>(_ functionName: String, params: [String: Any]?) async throws -> T
-    func uploadPost(userId: String, title: String, description: String?, audioData: Data?, audioFileName: String?, videoData: Data?, videoFileName: String?, coverData: Data?, coverFileName: String?, postType: String) async throws
-}
-
 // MARK: - Supabase Service Implementation
 
-public final class SupabaseService: SupabaseServiceProtocol, Sendable {
+public final class SupabaseService: Sendable {
     private let client: SupabaseClient
     private let cache: APICache
 
@@ -1249,12 +44,12 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Fetches home tracks data from Supabase RPC function (cached 5 min)
     public func getHomeTracks() async throws -> HomeTracksResponse {
-        return try await cachedRpc("get_home_tracks", params: nil, ttl: 300)
+        return try await cachedRpc("get_home_tracks", params: nil, ttl: CacheTTL.long)
     }
 
     /// Tracks from artists the current user follows (Explore "Following" tab).
     public func getFollowingFeed() async throws -> [ApiHomeTrack] {
-        return try await cachedRpc("get_following_feed", params: ["p_limit": 30, "p_offset": 0], ttl: 60)
+        return try await cachedRpc("get_following_feed", params: ["p_limit": 30, "p_offset": 0], ttl: CacheTTL.short)
     }
 
     /// General track feed (Explore "Tracks" tab). `seed` shuffles the ordering
@@ -1262,12 +57,23 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     /// so the recommendations vary instead of returning the same order forever.
     /// Cached per-seed, so the same seed reuses results but a new seed refetches.
     public func getExploreTracksFeed(seed: Int) async throws -> [ApiHomeTrack] {
-        return try await cachedRpc("get_home_feed", params: ["p_seed": seed, "p_limit": 30, "p_offset": 0], ttl: 120)
+        return try await cachedRpc("get_home_feed", params: ["p_seed": seed, "p_limit": 30, "p_offset": 0], ttl: CacheTTL.medium)
     }
 
     /// Artists to explore (Explore "Artists" tab).
     public func getExploreArtists() async throws -> [ApiExploreArtist] {
-        return try await cachedRpc("get_explore_artists", params: ["p_limit": 30, "p_offset": 0], ttl: 120)
+        return try await cachedRpc("get_explore_artists", params: ["p_limit": 30, "p_offset": 0], ttl: CacheTTL.medium)
+    }
+
+    /// Drops the cached home-surface responses (rails, following, artists,
+    /// folders) so a pull-to-refresh refetches fresh data instead of serving
+    /// the TTL cache. The explore feed re-rolls its seed (new cache key) and
+    /// listings/workspace activity are uncached, so they need no entry here.
+    public func invalidateHomeCaches() async {
+        await cache.removeAll(matching: "rpc:get_home_tracks")
+        await cache.removeAll(matching: "rpc:get_following_feed")
+        await cache.removeAll(matching: "rpc:get_explore_artists")
+        await cache.removeAll(matching: "rpc:get_user_folders")
     }
 
     // MARK: - Messages
@@ -1315,7 +121,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         let stamp = Int(Date().timeIntervalSince1970 * 1000)
         let path = "\(convoId)/\(userId)/\(stamp)-\(UUID().uuidString).\(safeExt)"
         try await client.storage
-            .from("message-attachments")
+            .from(.messageAttachments)
             .upload(path, data: data, options: .init(contentType: fileType))
         return path
     }
@@ -1342,7 +148,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Fetches a user profile from Supabase RPC function (cached 5 min)
     public func getUserProfile(userId: String) async throws -> ApiUserProfile {
-        return try await cachedRpc("get_user_profile", params: ["profile_id": userId], ttl: 300)
+        return try await cachedRpc("get_user_profile", params: ["profile_id": userId], ttl: CacheTTL.long)
     }
 
     /// Drops the cached profile + profile-tab payloads for `userId` so the next
@@ -1357,27 +163,27 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     /// Fetches every publicly-visible track where `userId` is credited, with the
     /// role they were credited as ("Featured On" tab). Cached 2 min.
     public func getTracksCreditedToUser(userId: String) async throws -> [ApiCreditedTrack] {
-        return try await cachedRpc("get_tracks_credited_to_user", params: ["p_user_id": userId], ttl: 120)
+        return try await cachedRpc("get_tracks_credited_to_user", params: ["p_user_id": userId], ttl: CacheTTL.medium)
     }
 
     /// Fetches the sample/preset/plugin packs owned by `userId` ("Packs" tab). Cached 2 min.
     public func getUserPacks(userId: String) async throws -> [ApiUserPack] {
-        return try await cachedRpc("get_user_packs", params: ["p_user_id": userId], ttl: 120)
+        return try await cachedRpc("get_user_packs", params: ["p_user_id": userId], ttl: CacheTTL.medium)
     }
 
     /// Fetches the current user's liked tracks (cached 1 min)
     public func getUserLikes() async throws -> [ApiUserLike] {
-        return try await cachedRpc("get_user_likes", params: nil, ttl: 60)
+        return try await cachedRpc("get_user_likes", params: nil, ttl: CacheTTL.short)
     }
 
     /// Fetches the user's saved library (`user_saves`), matching the web app's "Saved" tab.
     public func getUserLibrary() async throws -> [ApiUserLike] {
-        return try await cachedRpc("get_user_library", params: nil, ttl: 60)
+        return try await cachedRpc("get_user_library", params: nil, ttl: CacheTTL.short)
     }
 
     /// Fetches the current user's notifications (cached 30s)
     public func getUserNotifications() async throws -> [ApiNotification] {
-        return try await cachedRpc("get_user_notifications", params: nil, ttl: 30)
+        return try await cachedRpc("get_user_notifications", params: nil, ttl: CacheTTL.realtime)
     }
 
     /// Marks all of the signed-in user's notifications as read.
@@ -1388,18 +194,18 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Fetches the signed-in user's notification toggles (cached 1 min).
     public func getNotificationPreferences() async throws -> ApiNotificationPreferences {
-        return try await cachedRpc("get_notification_preferences", params: nil, ttl: 60)
+        return try await cachedRpc("get_notification_preferences", params: nil, ttl: CacheTTL.short)
     }
 
     /// Fetches per-track analytics for the signed-in creator (cached 2 min).
     public func getMyTrackAnalytics() async throws -> [ApiTrackAnalytics] {
-        return try await cachedRpc("get_my_track_analytics", params: nil, ttl: 120)
+        return try await cachedRpc("get_my_track_analytics", params: nil, ttl: CacheTTL.medium)
     }
 
     /// Creator engagement aggregates — followers / likes / saves / comments
     /// (totals + last-30-day deltas) and 30-day shares (`get_my_engagement_stats`).
     public func getMyEngagementStats() async throws -> ApiEngagementStats {
-        return try await cachedRpc("get_my_engagement_stats", params: nil, ttl: 120)
+        return try await cachedRpc("get_my_engagement_stats", params: nil, ttl: CacheTTL.medium)
     }
 
     /// In-app unread indicator counts (`get_unread_counts` — the same RPC the
@@ -1420,7 +226,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Fetches the current user's folders (cached 1 min)
     public func getUserFolders() async throws -> [ApiUserFolder] {
-        return try await cachedRpc("get_user_folders", params: nil, ttl: 60)
+        return try await cachedRpc("get_user_folders", params: nil, ttl: CacheTTL.short)
     }
 
     /// Collaborators' actions from the past month (uploads / comments / joins)
@@ -1432,7 +238,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Marketplace browse data — public packs + services (`get_explore_data`).
     public func getExploreData() async throws -> ApiExploreData {
-        return try await cachedRpc("get_explore_data", params: nil, ttl: 60)
+        return try await cachedRpc("get_explore_data", params: nil, ttl: CacheTTL.short)
     }
 
     /// The public collab-board feed (`get_listings`). `category` nil = all.
@@ -1561,10 +367,10 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         let stamp = Int(Date().timeIntervalSince1970)
         let path = "Playlists/\(userId.lowercased())/\(playlistId)-\(stamp).jpg"
         try await client.storage
-            .from("post-uploads")
+            .from(.postUploads)
             .upload(path, data: imageData, options: .init(contentType: "image/jpeg"))
         return try client.storage
-            .from("post-uploads")
+            .from(.postUploads)
             .getPublicURL(path: path)
             .absoluteString
     }
@@ -1592,7 +398,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Fetches files in a folder from Supabase RPC function (cached 1 min)
     public func getFolderFiles(folderId: String) async throws -> [ApiFolderFile] {
-        return try await cachedRpc("get_folder_files", params: ["p_folder_id": folderId], ttl: 60)
+        return try await cachedRpc("get_folder_files", params: ["p_folder_id": folderId], ttl: CacheTTL.short)
     }
 
     /// Adds a track to a workspace folder. Already-in-folder (unique violation) is
@@ -1623,10 +429,50 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Toggles follow/unfollow for a user
     public func toggleFollow(targetUser: String) async throws {
-        let _: AnyJSON = try await performRpc("toggle_user_follow", params: ["target_user": targetUser])
+        try await executeRpc("toggle_user_follow", params: ["target_user": targetUser])
         // Invalidate cached profile for this user
         let cacheKey = APICache.key("get_user_profile", params: ["profile_id": targetUser])
         await cache.remove(cacheKey)
+    }
+
+    // MARK: - Reporting & blocking (UGC safety, App Store 1.2)
+
+    /// Files a content or user report (`submit_report`). The DB auto-hides the
+    /// target on severe categories or once enough distinct reports arrive.
+    public func submitReport(
+        targetType: ReportTargetType,
+        targetId: String,
+        reason: ReportReason,
+        details: String? = nil
+    ) async throws {
+        let trimmed = details?.trimmingCharacters(in: .whitespacesAndNewlines)
+        try await executeRpc("submit_report", params: [
+            "p_target_type": targetType.rawValue,
+            "p_target_id": targetId,
+            "p_reason": reason.rawValue,
+            "p_details": (trimmed?.isEmpty == false ? trimmed! : NSNull()) as Any,
+        ])
+    }
+
+    /// Blocks a user (`block_user`): hides both parties' content from each other
+    /// and severs follows + collaborator ties. Clears the cache and posts
+    /// `.userBlockStateChanged` so live screens refetch their filtered reads.
+    public func blockUser(_ userId: String) async throws {
+        try await executeRpc("block_user", params: ["p_blocked_id": userId])
+        await cache.clear()
+        NotificationCenter.default.post(name: .userBlockStateChanged, object: nil)
+    }
+
+    /// Unblocks a user (`unblock_user`).
+    public func unblockUser(_ userId: String) async throws {
+        try await executeRpc("unblock_user", params: ["p_blocked_id": userId])
+        await cache.clear()
+        NotificationCenter.default.post(name: .userBlockStateChanged, object: nil)
+    }
+
+    /// Users the current account has blocked (`get_blocked_users`).
+    public func getBlockedUsers() async throws -> [ApiBlockedUser] {
+        return try await performRpc("get_blocked_users")
     }
 
     /// Sends a collaboration request to an artist (`send_collab_request`), optionally
@@ -1646,11 +492,29 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         } catch {
             // Keep the raw error text (PostgrestError includes its `message`) so the
             // caller can detect specific guards like `collab_rate_limited`.
-            print("[SupabaseService] send_collab_request ERROR: \(error)")
+            debugLog("[SupabaseService] send_collab_request ERROR: \(error)")
             throw SupabaseError.serverError("\(error)")
         }
         // The viewer's collaborator status changed — drop the cached profile.
         await cache.remove(APICache.key("get_user_profile", params: ["profile_id": targetId]))
+    }
+
+    /// Live collaborator status with another user — 'none' / 'pending' /
+    /// 'accepted'. The thread's request card keeps reading "accepted" as
+    /// history after a removal, so anything needing the CURRENT state (e.g.
+    /// the conversation's Remove Collaborator option) asks this instead.
+    public func getCollabStatus(otherUserId: String) async throws -> String {
+        return try await performRpc("get_collab_status", params: ["p_other_id": otherUserId])
+    }
+
+    /// Ends an accepted collaboration (`remove_collaborator`) — the RPC deletes
+    /// the relationship (both directions covered) and archives the pair's DM
+    /// for the caller, so the thread moves to their inbox's Archived section
+    /// with history intact.
+    public func removeCollaborator(userId: String) async throws {
+        try await executeRpc("remove_collaborator", params: ["p_target_id": userId])
+        // The viewer's collaborator status changed — drop the cached profile.
+        await cache.remove(APICache.key("get_user_profile", params: ["profile_id": userId]))
     }
 
     /// Creates a new folder and returns its id — `create_folder` returns
@@ -1674,25 +538,12 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         enum CodingKeys: String, CodingKey { case folderId = "folder_id" }
     }
 
-    /// Edits an existing folder via Supabase RPC function
-    public func editFolder(folderId: String, name: String, description: String?) async throws {
-        let params: [String: Any?] = [
-            "p_folder_id": folderId,
-            "p_name": name,
-            "p_description": description
-        ]
-        let _: AnyJSON = try await performRpc("edit_folder_function", params: params as [String: Any])
-        // Invalidate cached folders
-        let cacheKey = APICache.key("get_user_folders", params: nil)
-        await cache.remove(cacheKey)
-    }
-
     /// Renames/updates a folder (`update_folder`). Owner-only; `description` is
     /// overwritten, so pass the current value to preserve it.
     public func updateFolder(folderId: String, name: String, description: String?) async throws {
         var params: [String: Any] = ["p_folder_id": folderId, "p_name": name]
         if let description { params["p_description"] = description }
-        let _: AnyJSON = try await performRpc("update_folder", params: params)
+        try await executeRpc("update_folder", params: params)
         await cache.remove(APICache.key("get_user_folders", params: nil))
     }
 
@@ -1711,7 +562,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Adds a collaborator by username (`add_folder_member`). Owner/admin-only.
     public func addFolderMember(folderId: String, username: String, role: String) async throws {
-        let _: AnyJSON = try await performRpc("add_folder_member", params: [
+        try await executeRpc("add_folder_member", params: [
             "p_folder_id": folderId, "p_username": username, "p_role": role
         ])
     }
@@ -1756,7 +607,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         let storagePath = "\(folderId)/\(UUID().uuidString.lowercased()).\(ext.isEmpty ? "bin" : ext)"
 
         try await client.storage
-            .from("files")
+            .from(.files)
             .upload(storagePath, data: fileData, options: .init(contentType: fileType))
 
         let params: [String: Any?] = [
@@ -1767,7 +618,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             "p_file_size": fileSize,
             "p_timespan": nil
         ]
-        let _: AnyJSON = try await performRpc("upload_file_metadata", params: params as [String: Any])
+        try await executeRpc("upload_file_metadata", params: params as [String: Any])
 
         // Invalidate cached folder files
         let cacheKey = APICache.key("get_folder_files", params: ["p_folder_id": folderId])
@@ -1785,7 +636,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         let storagePath = "\(folderId)/\(UUID().uuidString.lowercased()).\(ext.isEmpty ? "bin" : ext)"
 
         try await client.storage
-            .from("files")
+            .from(.files)
             .upload(storagePath, data: fileData, options: .init(contentType: fileType))
 
         let params: [String: Any?] = [
@@ -1796,7 +647,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             "p_file_size": fileData.count,
             "p_timespan": nil
         ]
-        let _: AnyJSON = try await performRpc("upload_file_metadata", params: params as [String: Any])
+        try await executeRpc("upload_file_metadata", params: params as [String: Any])
 
         // Invalidate cached folder files
         let cacheKey = APICache.key("get_folder_files", params: ["p_folder_id": folderId])
@@ -1845,21 +696,6 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         await cache.remove(cacheKey)
     }
 
-    /// Creates a new user service via Supabase RPC function
-    public func createUserService(title: String, description: String, serviceType: String, price: Double, currency: String, deliveryTimeDays: Int?) async throws -> ApiUserService {
-        let params: [String: Any?] = [
-            "p_title": title,
-            "p_description": description,
-            "p_service_type": serviceType,
-            "p_price": price,
-            "p_currency": currency,
-            "p_delivery_time_days": deliveryTimeDays
-        ]
-        let result: ApiUserService = try await performRpc("create_user_service", params: params as [String: Any])
-        // Invalidate cached profile so services refresh
-        return result
-    }
-
     // MARK: - Track create v2 (web track-create parity)
 
     /// A buyer-download asset (MP3 / WAV / stems zip) for a paid tier.
@@ -1902,6 +738,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     /// submit flow: cover + streamable master go to `post-uploads`, paid
     /// downloadables go to the private `track-assets` bucket, and only bare
     /// storage paths are persisted.
+    @discardableResult
     public func createTrackV2(
         userId: String,
         title: String,
@@ -1919,14 +756,14 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         paidTiers: [TrackTierInput],
         assets: [TrackAssetUpload],
         lookingForCollab: Bool
-    ) async throws {
+    ) async throws -> String {
         let uid = userId.lowercased()
 
         var coverPath: String?
         if let coverData, let coverFileName {
             let path = "Visuals/\(uid)/\(UUID().uuidString)_cover.\(Self.safeStorageExt(coverFileName))"
             try await client.storage
-                .from("post-uploads")
+                .from(.postUploads)
                 .upload(path, data: coverData, options: .init(contentType: "image/jpeg"))
             coverPath = path
         }
@@ -1937,7 +774,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         let mediaPath = "\(folder)/\(uid)/\(UUID().uuidString)_\(Self.safeStorageName(mediaFileName))"
         let mediaMime = isVideo ? "video/mp4" : Self.audioMimeType(forExt: Self.safeStorageExt(mediaFileName))
         try await client.storage
-            .from("post-uploads")
+            .from(.postUploads)
             .upload(mediaPath, data: mediaData, options: .init(contentType: mediaMime))
 
         // Tier assets — private bucket, path starts with the uploader's id
@@ -1946,7 +783,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         for asset in assets {
             let path = "\(uid)/\(UUID().uuidString)_\(asset.kind)_\(Self.safeStorageName(asset.fileName))"
             try await client.storage
-                .from("track-assets")
+                .from(.trackAssets)
                 .upload(path, data: asset.data)
             assetPaths[asset.kind] = path
         }
@@ -1990,10 +827,17 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             "p_tiers": tiersPayload,
             "p_looking_for_collab": lookingForCollab,
         ]
-        try await executeRpc("create_track_v2", params: params)
+        // The RPC returns the new track's id — callers use it to open the
+        // freshly-posted track (expanded player).
+        struct Created: Decodable {
+            let trackId: String
+            enum CodingKeys: String, CodingKey { case trackId = "track_id" }
+        }
+        let created: Created = try await performRpc("create_track_v2", params: params)
         // The new track should appear on the author's profile immediately —
         // drop the cached profile (5-min TTL) so the next visit refetches.
         await invalidateProfile(userId: userId)
+        return created.trackId
     }
 
     // MARK: - Track edit / delete (web track-edit parity)
@@ -2045,7 +889,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         if let coverData, let coverFileName {
             let path = "Visuals/\(userId.lowercased())/\(UUID().uuidString)_cover.\(Self.safeStorageExt(coverFileName))"
             try await client.storage
-                .from("post-uploads")
+                .from(.postUploads)
                 .upload(path, data: coverData, options: .init(contentType: "image/jpeg"))
             coverArg = path
         }
@@ -2106,16 +950,19 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         if let coverData, let coverFileName {
             let path = "PackCovers/\(uid)/\(packId).\(Self.safeStorageExt(coverFileName))"
             try await client.storage
-                .from("post-uploads")
+                .from(.postUploads)
                 .upload(path, data: coverData, options: .init(contentType: "image/jpeg", upsert: true))
             coverPath = path
         }
 
         var fileRows: [[String: Any]] = []
         for file in files {
-            let path = "\(packId)/\(UUID().uuidString)_\(Self.safeStorageName(file.name))"
+            // uid-prefixed so the `packs_insert_authenticated` storage policy can pin
+            // writes to the caller's own path (foldername[1] = auth.uid()); without the
+            // prefix any authed user could write anywhere in the public-read bucket.
+            let path = "\(uid)/\(packId)/\(UUID().uuidString)_\(Self.safeStorageName(file.name))"
             try await client.storage
-                .from("packs")
+                .from(.packs)
                 .upload(path, data: file.data)
             fileRows.append([
                 "name": file.name,
@@ -2175,7 +1022,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         if let coverData, let coverFileName {
             let path = "PackCovers/\(userId.lowercased())/\(packId).\(Self.safeStorageExt(coverFileName))"
             try await client.storage
-                .from("post-uploads")
+                .from(.postUploads)
                 .upload(path, data: coverData, options: .init(contentType: "image/jpeg", upsert: true))
             coverArg = path
         }
@@ -2261,7 +1108,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         if let coverData, let coverFileName {
             let path = "ServiceCovers/\(uid)/\(UUID().uuidString).\(Self.safeStorageExt(coverFileName))"
             try await client.storage
-                .from("post-uploads")
+                .from(.postUploads)
                 .upload(path, data: coverData, options: .init(contentType: "image/jpeg", upsert: true))
             coverPath = path
         }
@@ -2271,7 +1118,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             let ext = Self.safeStorageExt(clip.fileName)
             let path = "ServicePortfolios/\(uid)/\(UUID().uuidString).\(ext)"
             try await client.storage
-                .from("post-uploads")
+                .from(.postUploads)
                 .upload(path, data: clip.data, options: .init(contentType: Self.audioMimeType(forExt: ext), upsert: true))
             portfolioRows.append(["title": clip.title, "file_url": path])
         }
@@ -2347,7 +1194,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             let ext = Self.safeStorageExt(fileName)
             let path = "ServicePortfolios/\(uid)/\(UUID().uuidString).\(ext)"
             try await client.storage
-                .from("post-uploads")
+                .from(.postUploads)
                 .upload(path, data: data, options: .init(contentType: Self.audioMimeType(forExt: ext), upsert: true))
             portfolioRows.append(["title": clip.title, "file_url": path])
         }
@@ -2418,6 +1265,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     /// Creates a collab-board listing. Mirrors the web's listing-create flow:
     /// each clip is uploaded to `post-uploads/ListingPortfolios/<user-id>/` and
     /// only the bare storage path is stored in the attachments jsonb.
+    @discardableResult
     public func createListing(
         userId: String,
         category: String,
@@ -2425,7 +1273,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         description: String?,
         tags: [String],
         attachments: [ListingAttachmentUpload]
-    ) async throws {
+    ) async throws -> String {
         var attachmentRows: [[String: String]] = []
         for clip in attachments {
             let rawExt = (clip.fileName as NSString).pathExtension
@@ -2434,7 +1282,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             let ext = rawExt.isEmpty ? "bin" : String(rawExt.prefix(8))
             let path = "ListingPortfolios/\(userId.lowercased())/\(UUID().uuidString).\(ext)"
             try await client.storage
-                .from("post-uploads")
+                .from(.postUploads)
                 .upload(path, data: clip.data, options: .init(contentType: Self.audioMimeType(forExt: ext), upsert: true))
             attachmentRows.append(["title": clip.title, "file_url": path])
         }
@@ -2450,7 +1298,14 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             "p_tags": tags,
             "p_attachments": attachmentRows,
         ]
-        let _: AnyJSON = try await performRpc("create_listing", params: params)
+        // The RPC returns `{ success, listing_id }` — callers use the id to
+        // open the freshly-posted listing's detail page.
+        struct Created: Decodable {
+            let listingId: String
+            enum CodingKeys: String, CodingKey { case listingId = "listing_id" }
+        }
+        let created: Created = try await performRpc("create_listing", params: params)
+        return created.listingId
     }
 
     /// A listing attachment for editing — either kept as-is (`existingFileUrl`) or
@@ -2496,7 +1351,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             let ext = rawExt.isEmpty ? "bin" : String(rawExt.prefix(8))
             let path = "ListingPortfolios/\(userId.lowercased())/\(UUID().uuidString).\(ext)"
             try await client.storage
-                .from("post-uploads")
+                .from(.postUploads)
                 .upload(path, data: data, options: .init(contentType: Self.audioMimeType(forExt: ext), upsert: true))
             attachmentRows.append(["title": clip.title, "file_url": path])
         }
@@ -2509,7 +1364,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             "p_tags": tags,
             "p_attachments": attachmentRows,
         ]
-        let _: AnyJSON = try await performRpc("update_listing", params: params)
+        try await executeRpc("update_listing", params: params)
     }
 
     private static func audioMimeType(forExt ext: String) -> String {
@@ -2596,11 +1451,11 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         let storagePath = "\(userId).png"
 
         try await client.storage
-            .from("user-avatars")
+            .from(.userAvatars)
             .upload(storagePath, data: imageData, options: .init(contentType: "image/png", upsert: true))
 
         let publicURL = try client.storage
-            .from("user-avatars")
+            .from(.userAvatars)
             .getPublicURL(path: storagePath)
 
         return Self.versioned(publicURL)
@@ -2612,11 +1467,11 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
         let storagePath = "\(userId).png"
 
         try await client.storage
-            .from("user-banners")
+            .from(.userBanners)
             .upload(storagePath, data: imageData, options: .init(contentType: "image/png", upsert: true))
 
         let publicURL = try client.storage
-            .from("user-banners")
+            .from(.userBanners)
             .getPublicURL(path: storagePath)
 
         return Self.versioned(publicURL)
@@ -2634,23 +1489,12 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
     /// Fetches track detail from Supabase RPC function (cached 5 min)
     public func getTrackMetadata(trackId: String) async throws -> ApiTrackDetail {
-        return try await cachedRpc("get_track_metadata", params: ["p_track_id": trackId], ttl: 300)
+        return try await cachedRpc("get_track_metadata", params: ["p_track_id": trackId], ttl: CacheTTL.long)
     }
 
     /// Fetches comments for a track from Supabase RPC function (cached 1 min)
     public func getTrackComments(trackId: String) async throws -> [ApiTrackComment] {
-        return try await cachedRpc("get_track_comments", params: ["p_track_id": trackId], ttl: 60)
-    }
-
-    /// Fetches the track's license tiers straight from `track_licenses` (the web
-    /// reads the same table). Display only — checkout lives on the web.
-    public func getTrackLicenses(trackId: String) async throws -> [ApiTrackLicense] {
-        try await client
-            .from("track_licenses")
-            .select("id, track_id, license_type, price, currency, terms, available")
-            .eq("track_id", value: trackId)
-            .execute()
-            .value
+        return try await cachedRpc("get_track_comments", params: ["p_track_id": trackId], ttl: CacheTTL.short)
     }
 
     /// Posts a comment on a track via Supabase RPC function
@@ -2664,7 +1508,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             "p_timestamp_seconds": timestampSeconds.map { Int($0) },
             "p_timestamp_end_seconds": timestampEndSeconds.map { Int($0) }
         ]
-        let _: AnyJSON = try await performRpc("post_comment", params: params as [String: Any])
+        try await executeRpc("post_comment", params: params as [String: Any])
         // Invalidate cached comments for this track
         let cacheKey = APICache.key("get_track_comments", params: ["p_track_id": trackId])
         await cache.remove(cacheKey)
@@ -2682,7 +1526,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     // MARK: - File comments (workspace files) — mirrors track comments.
 
     public func getFileComments(fileId: String) async throws -> [ApiTrackComment] {
-        return try await cachedRpc("get_file_comments", params: ["p_file_id": fileId], ttl: 60)
+        return try await cachedRpc("get_file_comments", params: ["p_file_id": fileId], ttl: CacheTTL.short)
     }
 
     public func postFileComment(content: String, fileId: String, parentId: String? = nil, timestampSeconds: Double? = nil, timestampEndSeconds: Double? = nil) async throws {
@@ -2694,128 +1538,13 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
             "p_timestamp_seconds": timestampSeconds.map { Int($0) },
             "p_timestamp_end_seconds": timestampEndSeconds.map { Int($0) }
         ]
-        let _: AnyJSON = try await performRpc("add_file_comment", params: params as [String: Any])
+        try await executeRpc("add_file_comment", params: params as [String: Any])
         await cache.remove(APICache.key("get_file_comments", params: ["p_file_id": fileId]))
     }
 
     public func deleteFileComment(commentId: String, fileId: String) async throws {
         try await executeRpc("delete_file_comment", params: ["p_comment_id": commentId])
         await cache.remove(APICache.key("get_file_comments", params: ["p_file_id": fileId]))
-    }
-
-    /// Uploads a post with media files to Supabase Storage then creates the post via RPC
-    public func uploadPost(
-        userId: String,
-        title: String,
-        description: String?,
-        audioData: Data?,
-        audioFileName: String?,
-        videoData: Data?,
-        videoFileName: String?,
-        coverData: Data?,
-        coverFileName: String?,
-        postType: String
-    ) async throws {
-        print("[SupabaseService] uploadPost START")
-        let normalizedUserId = userId.lowercased()
-        print("[SupabaseService]   userId: \(userId) (normalized: \(normalizedUserId))")
-        print("[SupabaseService]   title: \(title)")
-        print("[SupabaseService]   description: \(description ?? "nil")")
-        print("[SupabaseService]   postType: \(postType)")
-        print("[SupabaseService]   audioData: \(audioData.map { "\($0.count) bytes" } ?? "nil"), fileName: \(audioFileName ?? "nil")")
-        print("[SupabaseService]   videoData: \(videoData.map { "\($0.count) bytes" } ?? "nil"), fileName: \(videoFileName ?? "nil")")
-        print("[SupabaseService]   coverData: \(coverData.map { "\($0.count) bytes" } ?? "nil"), fileName: \(coverFileName ?? "nil")")
-
-        var audioUrl: String?
-        var videoUrl: String?
-        var coverUrl: String?
-
-        // Upload audio to post-uploads/Posts/<user-id>/<file>
-        if let audioData, let audioFileName {
-            let path = "Posts/\(normalizedUserId)/\(audioFileName)"
-            print("[SupabaseService]   Uploading audio to: \(path)")
-            do {
-                try await client.storage
-                    .from("post-uploads")
-                    .upload(path, data: audioData, options: .init(contentType: "audio/mpeg"))
-                audioUrl = try client.storage
-                    .from("post-uploads")
-                    .getPublicURL(path: path)
-                    .absoluteString
-                print("[SupabaseService]   Audio uploaded OK: \(audioUrl ?? "")")
-            } catch {
-                print("[SupabaseService]   Audio upload FAILED: \(error)")
-                throw error
-            }
-        }
-
-        // Upload video to post-uploads/Videos/<user-id>/<file>
-        if let videoData, let videoFileName {
-            let path = "Videos/\(normalizedUserId)/\(videoFileName)"
-            print("[SupabaseService]   Uploading video to: \(path)")
-            do {
-                try await client.storage
-                    .from("post-uploads")
-                    .upload(path, data: videoData, options: .init(contentType: "video/mp4"))
-                videoUrl = try client.storage
-                    .from("post-uploads")
-                    .getPublicURL(path: path)
-                    .absoluteString
-                print("[SupabaseService]   Video uploaded OK: \(videoUrl ?? "")")
-            } catch {
-                print("[SupabaseService]   Video upload FAILED: \(error)")
-                throw error
-            }
-        }
-
-        // Upload cover art to post-uploads/Visuals/<user-id>/<file>
-        if let coverData, let coverFileName {
-            let path = "Visuals/\(normalizedUserId)/\(coverFileName)"
-            print("[SupabaseService]   Uploading cover to: \(path)")
-            do {
-                try await client.storage
-                    .from("post-uploads")
-                    .upload(path, data: coverData, options: .init(contentType: "image/jpeg"))
-                coverUrl = try client.storage
-                    .from("post-uploads")
-                    .getPublicURL(path: path)
-                    .absoluteString
-                print("[SupabaseService]   Cover uploaded OK: \(coverUrl ?? "")")
-            } catch {
-                print("[SupabaseService]   Cover upload FAILED: \(error)")
-                throw error
-            }
-        }
-
-        // Call RPC to create the track with the uploaded URLs
-        // PostgREST requires ALL params to match the function signature
-        let params: [String: Any] = [
-            "p_title": title,
-            "p_audio_url": audioUrl ?? NSNull(),
-            "p_cover_url": coverUrl ?? NSNull(),
-            "p_description": description ?? NSNull(),
-            "p_visibility": "public",
-            "p_location": NSNull(),
-            "p_visual_url": videoUrl ?? NSNull(),
-            "p_genre": NSNull(),
-            "p_occupation": NSNull(),
-            "p_credits": NSNull(),
-            "p_metadata": NSNull()
-        ]
-
-        print("[SupabaseService]   Calling RPC create_track with params: \(params)")
-        do {
-            let _: AnyJSON = try await performRpc("create_track", params: params)
-            print("[SupabaseService] uploadPost SUCCESS")
-        } catch {
-            print("[SupabaseService] uploadPost RPC FAILED: \(error)")
-            throw error
-        }
-    }
-
-    /// Generic RPC call to Supabase (no cache)
-    public func rpc<T: Decodable>(_ functionName: String, params: [String: Any]? = nil) async throws -> T {
-        return try await performRpc(functionName, params: params)
     }
 
     /// Generic RPC call with caching
@@ -2826,19 +1555,29 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     ) async throws -> T {
         let cacheKey = APICache.key(functionName, params: params)
 
-        // Return cached data if available
+        // Return cached (decoded) value if fresh.
         if let cached: T = await cache.get(cacheKey) {
-            print("[SupabaseService] rpc(\(functionName)) CACHE HIT")
+            debugLog("[SupabaseService] rpc(\(functionName)) CACHE HIT")
             return cached
         }
 
-        // Fetch from network
-        let result: T = try await performRpc(functionName, params: params)
-
-        // Store in cache
-        await cache.set(cacheKey, value: result, ttl: ttl)
-
-        return result
+        // Serialize params up front (Sendable) so the fetch closure can cross into the
+        // cache actor; concurrent misses for this key then share one round-trip.
+        let paramsData = try params.map { try JSONSerialization.data(withJSONObject: $0) }
+        let data = try await cache.coalescedData(cacheKey, ttl: ttl) { [self] in
+            try await performRpcData(functionName, paramsData: paramsData)
+        }
+        let value: T
+        do { value = try JSONDecoder().decode(T.self, from: data) }
+        catch {
+            // Log decode failures — a 200 whose body doesn't match the DTO would
+            // otherwise be SILENT (performRpcData already logged the 200 status), which
+            // hides "loaded fine but UI still shimmers" bugs.
+            debugLog("[SupabaseService] rpc(\(functionName)) DECODE ERROR: \(error)")
+            throw mapError(error)
+        }
+        await cache.storeDecoded(cacheKey, value)
+        return value
     }
 
     // MARK: - Private
@@ -2851,16 +1590,37 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
 
                 let response = try await client.rpc(functionName, params: anyJSON)
                     .execute()
-                print("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
+                debugLog("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
                 return try JSONDecoder().decode(T.self, from: response.data)
             } else {
                 let response = try await client.rpc(functionName)
                     .execute()
-                print("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
+                debugLog("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
                 return try JSONDecoder().decode(T.self, from: response.data)
             }
         } catch {
-            print("[SupabaseService] rpc(\(functionName)) ERROR: \(error)")
+            debugLog("[SupabaseService] rpc(\(functionName)) ERROR: \(error)")
+            throw mapError(error)
+        }
+    }
+
+    /// Runs an RPC and returns the raw response body WITHOUT decoding — the coalesced
+    /// cache path (`cachedRpc` → `APICache.coalescedData`) decodes once afterward, so
+    /// concurrent misses for a key share one network round-trip.
+    private func performRpcData(_ functionName: String, paramsData: Data?) async throws -> Data {
+        do {
+            if let paramsData {
+                let anyJSON = try JSONDecoder().decode(AnyJSON.self, from: paramsData)
+                let response = try await client.rpc(functionName, params: anyJSON).execute()
+                debugLog("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
+                return response.data
+            } else {
+                let response = try await client.rpc(functionName).execute()
+                debugLog("[SupabaseService] rpc(\(functionName)) status: \(response.status), bytes: \(response.data.count)")
+                return response.data
+            }
+        } catch {
+            debugLog("[SupabaseService] rpc(\(functionName)) ERROR: \(error)")
             throw mapError(error)
         }
     }
@@ -2878,7 +1638,7 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
                 _ = try await client.rpc(functionName).execute()
             }
         } catch {
-            print("[SupabaseService] rpc(\(functionName)) ERROR: \(error)")
+            debugLog("[SupabaseService] rpc(\(functionName)) ERROR: \(error)")
             throw mapError(error)
         }
     }
@@ -2894,206 +1654,6 @@ public final class SupabaseService: SupabaseServiceProtocol, Sendable {
     }
 }
 
-// MARK: - User Likes DTOs
-
-public struct ApiLikeArtist: Codable, Sendable {
-    public let userId: String
-    public let username: String?
-    public let profileImageUrl: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
-
-/// Used for both liked tracks (`get_user_likes`) and the saved library
-/// (`get_user_library`) — their shapes overlap; fields absent in one decode to nil.
-public struct ApiUserLike: Codable, Sendable, Identifiable {
-    public var id: String { trackId }
-    public let trackId: String
-    public let title: String
-    public let coverUrl: String?
-    public let audioUrl: String?
-    public let streams: Int?
-    public let createdAt: String?
-    public let savedAt: String?
-    public let genre: String?
-    public let durationMs: Int?
-    public let artist: ApiLikeArtist?
-
-    enum CodingKeys: String, CodingKey {
-        case trackId = "track_id"
-        case title
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case streams
-        case createdAt = "created_at"
-        case savedAt = "saved_at"
-        case genre
-        case durationMs = "duration_ms"
-        case artist
-    }
-}
-
-// MARK: - Track Detail DTO
-
-public struct ApiTrackDetailArtist: Codable, Sendable {
-    public let userId: String
-    public let username: String?
-    public let profileImageUrl: String?
-    public let accountType: String?
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case accountType = "account_type"
-    }
-}
-
-public struct ApiTrackDetail: Codable, Sendable, Identifiable {
-    public var id: String { trackId }
-    public let trackId: String
-    public let title: String
-    public let description: String?
-    public let genre: String?
-    public let visibility: String?
-    public let location: String?
-    public let occupation: String?
-    public let coverUrl: String?
-    public let audioUrl: String?
-    public let visualUrl: String?
-    public let streams: Int?
-    public let likes: Int?
-    public let saves: Int?
-    public let comments: Int?
-    public let credits: [ApiTrackCredit]?
-    public let metadata: ApiTrackMetadata?
-    public let createdAt: String?
-    public let artist: ApiTrackDetailArtist?
-
-    enum CodingKeys: String, CodingKey {
-        case trackId = "track_id"
-        case title, description, genre, visibility, location, occupation
-        case coverUrl = "cover_url"
-        case audioUrl = "audio_url"
-        case visualUrl = "visual_url"
-        case streams, likes, saves, comments, credits, metadata
-        case createdAt = "created_at"
-        case artist
-    }
-}
-
-/// A collaborator credited on a track. `get_track_metadata` returns these as a
-/// JSON array (one per `track_credits` row), or null when there are none.
-public struct ApiTrackCredit: Codable, Sendable, Identifiable {
-    public let userId: String?
-    public let username: String?
-    public let profileImageUrl: String?
-    public let accountType: String?
-    public let role: String?
-
-    public var id: String { "\(userId ?? "")|\(role ?? "")" }
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-        case accountType = "account_type"
-        case role
-    }
-}
-
-/// Free-form track metadata (`tracks.metadata` jsonb). Only `tags` is modeled;
-/// any other keys are ignored.
-public struct ApiTrackMetadata: Codable, Sendable {
-    public let tags: [String]?
-
-    enum CodingKeys: String, CodingKey {
-        case tags
-    }
-}
-
-// MARK: - Track Comments DTOs
-
-public struct ApiCommentUser: Codable, Sendable {
-    public let userId: String
-    public let username: String?
-    public let profileImageUrl: String?
-
-    public init(userId: String, username: String?, profileImageUrl: String?) {
-        self.userId = userId
-        self.username = username
-        self.profileImageUrl = profileImageUrl
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case userId = "user_id"
-        case username
-        case profileImageUrl = "profile_image_url"
-    }
-}
-
-/// A purchasable license tier for a track (free / creator / pro / exclusive).
-public struct ApiTrackLicense: Codable, Sendable, Identifiable {
-    public let id: String
-    public let trackId: String
-    public let licenseType: String
-    public let price: Double
-    public let currency: String?
-    public let terms: String?
-    public let available: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case id
-        case trackId = "track_id"
-        case licenseType = "license_type"
-        case price, currency, terms, available
-    }
-}
-
-public struct ApiTrackComment: Codable, Sendable, Identifiable {
-    public var id: String { commentId }
-    public let commentId: String
-    public let content: String
-    public let createdAt: String
-    /// nil for file comments (which carry `file_id` instead).
-    public let trackId: String?
-    public let parentId: String?
-    public let user: ApiCommentUser
-    public var replies: [ApiTrackComment]?
-    /// Playback position (seconds) this comment is pinned to, if any.
-    public let timestampSeconds: Double?
-    /// Optional end of a timestamped range.
-    public let timestampEndSeconds: Double?
-
-    public init(commentId: String, content: String, createdAt: String, trackId: String?, parentId: String?, user: ApiCommentUser, replies: [ApiTrackComment]?, timestampSeconds: Double? = nil, timestampEndSeconds: Double? = nil) {
-        self.commentId = commentId
-        self.content = content
-        self.createdAt = createdAt
-        self.trackId = trackId
-        self.parentId = parentId
-        self.user = user
-        self.replies = replies
-        self.timestampSeconds = timestampSeconds
-        self.timestampEndSeconds = timestampEndSeconds
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case commentId = "comment_id"
-        case content
-        case createdAt = "created_at"
-        case trackId = "track_id"
-        case parentId = "parent_id"
-        case user
-        case replies
-        case timestampSeconds = "timestamp_seconds"
-        case timestampEndSeconds = "timestamp_end_seconds"
-    }
-}
-
 // MARK: - Supabase Error Types
 
 public enum SupabaseError: Error, LocalizedError {
@@ -3106,24 +1666,84 @@ public enum SupabaseError: Error, LocalizedError {
     case decodingError(Error)
     case unknown(Int)
     
+    /// User-facing copy. Deliberately generic/actionable — the raw server text
+    /// (Postgres / PostgREST / constraint detail) is NEVER surfaced here; it's
+    /// available via `rawDetail` for logging + programmatic matching only.
     public var errorDescription: String? {
         switch self {
-        case .invalidURL:
-            return "Invalid URL"
-        case .invalidResponse:
-            return "Invalid response from Supabase"
-        case .unauthorized:
-            return "Unauthorized - check API key"
-        case .notFound:
-            return "Resource not found"
-        case .clientError(let code):
-            return "Client error: \(code)"
         case .serverError(let message):
-            return "Server error: \(message)"
-        case .decodingError(let error):
-            return "Decoding error: \(error.localizedDescription)"
-        case .unknown(let code):
-            return "Unknown error: \(code)"
+            return Self.friendly(rawDetail: message)
+        case .unauthorized:
+            return "Please sign in and try again."
+        case .notFound:
+            return "That content is no longer available."
+        case .invalidURL, .invalidResponse, .clientError, .decodingError, .unknown:
+            return "Something went wrong. Please try again."
         }
+    }
+
+    /// The raw server/system detail — for logging and for code that matches specific
+    /// error signatures. Never show this to users (see `errorDescription`).
+    public var rawDetail: String {
+        switch self {
+        case .serverError(let m): return m
+        case .decodingError(let e): return e.localizedDescription
+        case .invalidURL: return "invalidURL"
+        case .invalidResponse: return "invalidResponse"
+        case .unauthorized: return "unauthorized"
+        case .notFound: return "notFound"
+        case .clientError(let c): return "clientError \(c)"
+        case .unknown(let c): return "unknown \(c)"
+        }
+    }
+
+    /// Maps a raw server error string to safe, human copy. Known, user-actionable
+    /// signatures get specific messages; everything else falls back to a generic line
+    /// so Postgres / constraint internals never reach the UI. Raw text stays in
+    /// `debugLog` (logged at the call site before mapping).
+    static func friendly(rawDetail raw: String) -> String {
+        let s = raw.lowercased()
+        if s.contains("network error") || s.contains("offline") || s.contains("connection")
+            || s.contains("timed out") || s.contains("could not connect") || s.contains("internet") {
+            return "Can't reach Volspire. Check your connection and try again."
+        }
+        if s.contains("rate limit") || s.contains("too many") || s.contains("rate_limited") || s.contains("once every") {
+            return "You're doing that a bit too fast — give it a moment and try again."
+        }
+        if s.contains("not_authenticated") || s.contains("auth required") || s.contains("jwt") {
+            return "Please sign in and try again."
+        }
+        if s.contains("account_suspended") || s.contains("suspended") {
+            return "Your account is suspended. Contact support if you think this is a mistake."
+        }
+        if s.contains("user_unavailable") || s.contains("blocked") {
+            return "You can't do that with this user."
+        }
+        if s.contains("not_authorized") || s.contains("not_a_member") || s.contains("forbidden") || s.contains("permission") {
+            return "You don't have permission to do that."
+        }
+        if s.contains("unsupported_file_type") {
+            return "That file type isn't supported."
+        }
+        if s.contains("too_long") || s.contains("too long") || s.contains("value too long")
+            || s.contains("_length") || s.contains("check constraint") {
+            return "That's too long — please shorten it and try again."
+        }
+        if s.contains("duplicate") || s.contains("already exists") || s.contains("unique constraint") {
+            return "That already exists."
+        }
+        if s.contains("not found") || s.contains("no rows") {
+            return "That content is no longer available."
+        }
+        return "Something went wrong. Please try again."
+    }
+}
+
+public extension Error {
+    /// Raw server detail when this is a `SupabaseError` (for matching specific error
+    /// signatures); otherwise the system description. Never display this to users —
+    /// use `localizedDescription`, which is friendly for `SupabaseError`.
+    var serverRawDetail: String {
+        (self as? SupabaseError)?.rawDetail ?? localizedDescription
     }
 }

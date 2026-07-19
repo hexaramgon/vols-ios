@@ -191,8 +191,9 @@ struct UploadGradientOption: Identifiable {
     /// The tailwind gradient string stored in the DB (e.g. "from-violet-900 via-violet-950 to-black").
     let id: String
     let label: String
-    /// Approximation of the gradient's top colour for the swatch.
-    let top: Color
+    /// The gradient's top colour for the swatch — derived from `id`'s first stop via
+    /// the canonical Tailwind palette, not hand-converted rgb (which drifted slightly).
+    var top: Color { TailwindGradient.colors(from: id)?.first ?? Color(white: 0.2) }
 }
 
 struct UploadGradientPicker: View {
@@ -248,6 +249,100 @@ struct AudioClipDraft: Identifiable {
     var isComplete: Bool { hasFile && hasTitle }
 }
 
+// MARK: - Shared attach-file presentation (track upload + listing clips)
+
+/// Soft icon tile used across the upload forms' attach surfaces.
+struct UploadIconBox: View {
+    let icon: LucideIcon.Name
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white.opacity(0.06))
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.vBorder, lineWidth: 1)
+            LucideIcon(icon, .md)
+                .foregroundStyle(Color.vText2)
+        }
+        .frame(width: 40, height: 40)
+    }
+}
+
+/// The dashed "tap to choose" target — the ONE attach look, shared by the
+/// track upload's drop zones and the listing's clip rows.
+struct UploadDropZone: View {
+    let icon: LucideIcon.Name
+    let title: String
+    let hint: String
+    var error: Bool = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            UploadIconBox(icon: icon)
+
+            VStack(spacing: 4) {
+                Text(title)
+                    .font(.appCallout)
+                    .foregroundStyle(error ? UploadTheme.errorText : Color.vText2)
+                Text(hint)
+                    .font(.appFootnote)
+                    .foregroundStyle(Color.vText3)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.02))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(
+                    error ? UploadTheme.errorText.opacity(0.4) : UploadTheme.border,
+                    style: UploadTheme.dashed
+                )
+        )
+        .contentShape(.rect)
+    }
+}
+
+/// Attached-file summary (icon tile + name + size + trash) — shared chrome.
+struct UploadAttachedFileCard: View {
+    let icon: LucideIcon.Name
+    let name: String?
+    let bytes: Int
+    let clear: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            UploadIconBox(icon: icon)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name ?? "File")
+                    .font(.appBodyMedium)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(UploadClipRows.formatBytes(bytes))
+                    .font(.appFootnote)
+                    .foregroundStyle(Color.vText3)
+            }
+
+            Spacer()
+
+            Button(action: clear) {
+                LucideIcon(.trash2, .md)
+                    .foregroundStyle(Color.vText3)
+                    .frame(width: 44, height: 44)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .uploadFieldShell(cornerRadius: 16)
+    }
+}
+
 /// Card rows of (clip title + attach audio) plus a dashed "add" button.
 /// File picking stays with the caller (`onAttach` should open a picker and
 /// write the result back into the bound array).
@@ -255,6 +350,8 @@ struct UploadClipRows: View {
     @Binding var clips: [AudioClipDraft]
     var titlePlaceholder = "Clip title"
     var addLabel = "Add audio"
+    /// Fired when a clip preview starts playing (pause the app's music).
+    var onStartPlaying: () -> Void = {}
     let onAttach: (UUID) -> Void
 
     var body: some View {
@@ -311,55 +408,29 @@ struct UploadClipRows: View {
                 .buttonStyle(.plain)
             }
 
+            // Attached + empty states use the track upload's exact presentation
+            // (shared components), in the track's order: file card, then preview.
             if let data = row.data {
-                HStack(spacing: 10) {
-                    LucideIcon(.fileAudio, .sm)
-                        .foregroundStyle(Color.vText2)
-                    Text(row.fileName ?? "Audio file")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vText2)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(Self.formatBytes(data.count))
-                        .font(.appCaption)
-                        .foregroundStyle(Color.vText3)
-
-                    Spacer()
-
-                    Button {
-                        if let index = clips.firstIndex(where: { $0.id == row.id }) {
-                            clips[index].data = nil
-                            clips[index].fileName = nil
-                        }
-                    } label: {
-                        LucideIcon(.trash2, .sm)
-                            .foregroundStyle(Color.vText3)
-                            .frame(width: 36, height: 36)
-                            .contentShape(.rect)
+                UploadAttachedFileCard(icon: .fileAudio, name: row.fileName, bytes: data.count) {
+                    if let index = clips.firstIndex(where: { $0.id == row.id }) {
+                        clips[index].data = nil
+                        clips[index].fileName = nil
                     }
-                    .buttonStyle(.plain)
                 }
-                .padding(.leading, 4)
+
+                UploadPreviewPlayer(data: data, fileName: row.fileName, isVideo: false, onStartPlaying: onStartPlaying)
+                    // Fresh player if a different file is picked into this row.
+                    .id(row.fileName)
             } else {
                 Button {
                     onAttach(row.id)
                 } label: {
-                    HStack(spacing: 8) {
-                        LucideIcon(.upload, .sm)
-                        Text(missingFile ? "Audio required" : "Attach audio")
-                            .font(.appFootnote)
-                    }
-                    .foregroundStyle(missingFile ? UploadTheme.errorText : Color.vText3)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(
-                                missingFile ? UploadTheme.errorText.opacity(0.4) : UploadTheme.border,
-                                style: UploadTheme.dashed
-                            )
+                    UploadDropZone(
+                        icon: .fileAudio,
+                        title: missingFile ? "Audio required" : "Tap to choose an audio file",
+                        hint: "MP3, WAV, FLAC, AIFF",
+                        error: missingFile
                     )
-                    .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
@@ -379,6 +450,41 @@ struct UploadClipRows: View {
         bytes >= 1_000_000
             ? String(format: "%.1f MB", Double(bytes) / 1_000_000)
             : String(format: "%.0f KB", Double(bytes) / 1_000)
+    }
+}
+
+// MARK: - Success confirmation
+
+/// Full-screen confirmation card flashed over the app (from OverlaidRootView)
+/// after a create/upload form's sheet slides away — an explicit "it worked".
+struct UploadSuccessOverlay: View {
+    let title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.6).ignoresSafeArea()
+            VStack(spacing: 14) {
+                LucideIcon(.circleCheck, .hero)
+                    .foregroundStyle(Color.brand)
+                VStack(spacing: 3) {
+                    Text(title)
+                        .font(.appHeadline)
+                        .foregroundStyle(.white)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.appFootnote)
+                            .foregroundStyle(Color.vText2)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+            }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 28)
+            .frame(maxWidth: 300)
+            .background(Color.vBar, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
     }
 }
 
@@ -434,6 +540,15 @@ struct UploadTagInput: View {
                 .onSubmit {
                     add(input)
                     input = ""
+                }
+                // Space commits the tag too (matches the web tag input) — and a
+                // pasted "a b c" becomes tags a + b with "c" left editable.
+                .onChange(of: input) { _, newValue in
+                    guard newValue.contains(" ") else { return }
+                    var pieces = newValue.components(separatedBy: " ")
+                    let remainder = pieces.removeLast()
+                    pieces.forEach { add($0) }
+                    input = remainder
                 }
             }
             .padding(.horizontal, 14)
@@ -716,18 +831,20 @@ struct UploadPreviewPlayer: View {
             .disabled(player == nil)
             .opacity(player == nil ? 0.5 : 1)
 
-            Slider(
+            // The player-style bar, not a stock `Slider` — see `.inlineScrub`.
+            ElasticSlider(
                 value: Binding(get: { current }, set: { current = $0 }),
                 in: 0 ... max(duration, 0.1),
-                onEditingChanged: { editing in
-                    if editing {
+                onActive: { active in
+                    if active {
                         isSeeking = true
                     } else {
                         seek(to: current)
                     }
                 }
             )
-            .tint(.white)
+            .sliderStyle(.inlineScrub)
+            .frame(height: 22)
             .disabled(player == nil)
 
             Text("\(format(current)) / \(format(duration))")
@@ -838,9 +955,5 @@ struct UploadPreviewPlayer: View {
         }
     }
 
-    private func format(_ seconds: Double) -> String {
-        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
-        let s = Int(seconds.rounded())
-        return "\(s / 60):" + String(format: "%02d", s % 60)
-    }
+    private func format(_ seconds: Double) -> String { seconds.durationLabel }
 }

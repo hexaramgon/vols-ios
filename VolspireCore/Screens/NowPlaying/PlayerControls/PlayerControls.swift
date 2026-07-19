@@ -12,6 +12,7 @@ import SwiftUI
 
 struct PlayerControls: View {
     @Environment(PlayerController.self) var model
+    @Environment(Dependencies.self) private var dependencies
     /// Opens (toggles) the comments panel — wired from the now-playing pager.
     var onComment: () -> Void = {}
     /// Shared comments state — the action row morphs into this comment input bar.
@@ -36,6 +37,13 @@ struct PlayerControls: View {
     @State private var transportHeight: CGFloat = 190
     /// Debounces the height measurement — see `transportStack`.
     @State private var measureWork: DispatchWorkItem?
+    // Track "…" options (share / report song / report + block artist) — App Store 1.2.
+    @State private var showTrackOptions = false
+    @State private var showReportSong = false
+    @State private var showReportArtist = false
+    @State private var showBlockArtist = false
+    @State private var pendingPlayerAction: PlayerTrackAction?
+    @State private var optionsSheetHeight: CGFloat = 320
 
     var body: some View {
         GeometryReader { geo in
@@ -123,7 +131,7 @@ private extension PlayerControls {
         UIColor.palette.playerCard.self
     }
 
-    /// The bottom row morphs between the action row (AirPlay · Comments · Share)
+    /// The bottom row morphs between the action row (AirPlay · Comments · "…")
     /// and the comment input bar when comments open.
     @ViewBuilder
     var bottomBar: some View {
@@ -137,7 +145,7 @@ private extension PlayerControls {
     }
 
     /// Bottom row pinned under the transport controls: AirPlay (left) ·
-    /// "Comments" (center) · Share (right).
+    /// "Comments" (center) · track options "…" (right).
     var bottomActionsRow: some View {
         HStack(spacing: 0) {
             AirPlayButton(size: 24)
@@ -150,12 +158,16 @@ private extension PlayerControls {
             Spacer(minLength: 0)
 
             Button {
-                shareTrack()
+                showTrackOptions = true
             } label: {
-                LucideIcon(.share2, .xl)
+                LucideIcon(.ellipsis, .xl)
                     .foregroundStyle(Color(palette.translucent))
             }
             .buttonStyle(.plain)
+            // Workspace files aren't real tracks — no share/report/block options.
+            // Kept in layout (invisible) so the Comments pill stays centered.
+            .opacity(model.currentFileId == nil ? 1 : 0)
+            .allowsHitTesting(model.currentFileId == nil)
         }
         .padding(.horizontal, ViewConst.playerCardPaddings)
     }
@@ -169,16 +181,7 @@ private extension PlayerControls {
         }
         AnalyticsService.shared?.log(.shareClicked, trackId: model.state.currentMediaID?.value, metadata: ["kind": "track", "method": "share_sheet"])
 
-        let activityVC = UIActivityViewController(activityItems: [shareText], applicationActivities: nil)
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootVC = windowScene.windows.first?.rootViewController {
-            var presenter = rootVC
-            while let presented = presenter.presentedViewController {
-                presenter = presented
-            }
-            activityVC.popoverPresentationController?.sourceView = presenter.view
-            presenter.present(activityVC, animated: true)
-        }
+        UIApplication.presentActivitySheet([shareText])
     }
 
     /// A text "Comments" pill button that opens the comments panel.
@@ -242,6 +245,23 @@ private extension PlayerControls {
                 .padding(.trailing, ViewConst.playerCardPaddings)
             }
         }
+        .sheet(isPresented: $showTrackOptions, onDismiss: runPendingPlayerAction) { trackOptionsSheet }
+        .sheet(isPresented: $showReportSong) {
+            if let id = optionsTrackId {
+                ReportSheet(targetType: .track, targetId: id, subject: model.display.title)
+            }
+        }
+        .sheet(isPresented: $showReportArtist) {
+            if let id = optionsArtistId {
+                ReportSheet(targetType: .user, targetId: id, subject: "@\(optionsArtistName)")
+            }
+        }
+        .confirmationDialog("Block @\(optionsArtistName)?", isPresented: $showBlockArtist, titleVisibility: .visible) {
+            Button("Block", role: .destructive) { blockCurrentArtist() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You won't see their tracks and they can't message you. Unblock anytime in Settings.")
+        }
     }
 
     /// Save (bookmark) button — to the left of the effects button.
@@ -266,6 +286,84 @@ private extension PlayerControls {
                 .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
         }
     }
+
+    // MARK: - Track options ("…")
+
+    private enum PlayerTrackAction { case viewArtist, share, reportSong, reportArtist, block }
+
+    private var optionsTrackId: String? { model.state.currentMediaID?.value }
+    private var optionsArtistId: String? { model.trackDetail?.artist?.userId }
+    private var optionsArtistName: String {
+        model.trackDetail?.artist?.username ?? (model.display.subtitle.isEmpty ? "artist" : model.display.subtitle)
+    }
+
+    /// Slide-up options sheet — matches the folder / listing / track sheets.
+    private var trackOptionsSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                SheetHeader(icon: .music, title: model.display.title, subtitle: "@\(optionsArtistName)") {
+                    showTrackOptions = false
+                }
+                VStack(spacing: 0) {
+                    if optionsArtistId != nil {
+                        optionRow(.user, "View artist") { pendingPlayerAction = .viewArtist; showTrackOptions = false }
+                    }
+                    optionRow(.share2, "Share track") { pendingPlayerAction = .share; showTrackOptions = false }
+                    optionRow(.flag, "Report song") { pendingPlayerAction = .reportSong; showTrackOptions = false }
+                    if optionsArtistId != nil {
+                        optionRow(.flag, "Report artist") { pendingPlayerAction = .reportArtist; showTrackOptions = false }
+                        optionRow(.ban, "Block artist", tint: .vDestructive) { pendingPlayerAction = .block; showTrackOptions = false }
+                    }
+                }
+                .padding(.top, 6)
+            }
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { optionsSheetHeight = $0 })
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .environment(\.colorScheme, .dark)
+        .presentationDetents([.height(optionsSheetHeight + ViewConst.safeAreaInsets.bottom + 8)])
+        .presentationDragIndicator(.visible)
+        .sheetBackground()
+    }
+
+    private func optionRow(_ icon: LucideIcon.Name, _ title: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                LucideIcon(icon, .lg).foregroundStyle(tint).frame(width: 26)
+                Text(title).font(.appBody).foregroundStyle(tint)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 15)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func runPendingPlayerAction() {
+        guard let action = pendingPlayerAction else { return }
+        pendingPlayerAction = nil
+        switch action {
+        case .viewArtist:   if let id = optionsArtistId { model.pendingProfileNavigation = id }
+        case .share:        shareTrack()
+        case .reportSong:   showReportSong = true
+        case .reportArtist: showReportArtist = true
+        case .block:        showBlockArtist = true
+        }
+    }
+
+    private func blockCurrentArtist() {
+        guard let id = optionsArtistId else { return }
+        Task {
+            try? await dependencies.supabaseService.blockUser(id)
+            // The playing track belongs to the artist just blocked — stop and
+            // clear the player entirely (same teardown as sign-out; the player
+            // overlay unmounts once the display empties).
+            dependencies.mediaPlayer.reset()
+            model.resetForSignOut()
+        }
+    }
 }
 
 #Preview {
@@ -276,4 +374,5 @@ private extension PlayerControls {
             .frame(height: 300)
     }
     .environment(playerController)
+    .environment(Dependencies.stub)
 }

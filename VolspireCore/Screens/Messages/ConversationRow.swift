@@ -60,18 +60,6 @@ struct ConversationRow: View {
     }
 
     private var avatar: some View {
-        Group {
-            if let url = item.avatarURL {
-                KFImage(url).downsampled(to: 46).resizable().scaledToFill()
-            } else {
-                Text(String(item.username.first ?? "?").uppercased())
-                    .font(.appBodyLargeSemibold)
-                    .foregroundStyle(Color.vText2)
-            }
-        }
-        .frame(width: 46, height: 46)
-        .background(Color.vSurface)
-        .clipShape(Circle())
-        .overlay(Circle().strokeBorder(Color.vBorder))
+        AvatarView(url: item.avatarURL, name: item.username, size: 46)
     }
 }

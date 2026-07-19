@@ -4,7 +4,6 @@
 //
 //
 
-import Combine
 import SwiftUI
 
 public struct PlayerButton<Content: View>: View {
@@ -12,20 +11,14 @@ public struct PlayerButton<Content: View>: View {
     @Environment(\.playerButtonConfig) var config
     @State private var showCircle = false
     @State private var pressed = false
-    private let onPressed: (() -> Void)?
-    private let onPressing: ((TimeInterval) -> Void)?
     private let onEnded: (() -> Void)?
     private let label: Content?
 
     public init(
         label: (() -> Content)? = nil,
-        onPressed: (() -> Void)? = nil,
-        onPressing: ((TimeInterval) -> Void)? = nil,
         onEnded: (() -> Void)? = nil
     ) {
         self.label = label?()
-        self.onPressed = onPressed
-        self.onPressing = onPressing
         self.onEnded = onEnded
     }
 
@@ -39,18 +32,12 @@ public struct PlayerButton<Content: View>: View {
             .scaleEffect(pressed && config.showsPressFeedback ? 0.85 : 1)
             .contentShape(.circle)
             .onPressGesture(
-                interval: config.updateInterval,
                 onPressed: {
                     guard isEnabled else { return }
                     withAnimation {
                         showCircle = true
                         pressed = true
                     }
-                    onPressed?()
-                },
-                onPressing: { time in
-                    guard isEnabled else { return }
-                    onPressing?(time)
                 },
                 onEnded: {
                     guard isEnabled else { return }
@@ -87,7 +74,6 @@ extension EnvironmentValues {
 }
 
 public struct PlayerButtonConfig {
-    let updateInterval: TimeInterval
     let size: CGFloat
     let labelColor: Color
     let tint: Color
@@ -98,7 +84,6 @@ public struct PlayerButtonConfig {
     let showsPressFeedback: Bool
 
     public init(
-        updateInterval: TimeInterval = 0.1,
         size: CGFloat = 68,
         labelColor: Color = .init(UIColor.label),
         tint: Color = .init(UIColor.tintColor),
@@ -106,26 +91,12 @@ public struct PlayerButtonConfig {
         disabledColor: Color = .iconSecondary,
         showsPressFeedback: Bool = true
     ) {
-        self.updateInterval = updateInterval
         self.size = size
         self.labelColor = labelColor
         self.tint = tint
         self.pressedColor = pressedColor
         self.disabledColor = disabledColor
         self.showsPressFeedback = showsPressFeedback
-    }
-}
-
-extension PlayerButton where Content == EmptyView {
-    init(
-        onPressed: (() -> Void)? = nil,
-        onPressing: ((TimeInterval) -> Void)? = nil,
-        onEnded: (() -> Void)? = nil
-    ) {
-        label = nil
-        self.onPressed = onPressed
-        self.onPressing = onPressing
-        self.onEnded = onEnded
     }
 }
 
@@ -139,12 +110,6 @@ extension PlayerButton where Content == EmptyView {
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 34, height: 34)
 
-                },
-                onPressed: {
-                    print("onPressed Button")
-                },
-                onPressing: { time in
-                    print("onPressing \(time) Button")
                 },
                 onEnded: {
                     print("onEnded Button")

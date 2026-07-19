@@ -30,13 +30,16 @@ struct AppView: View {
                 case .authenticated:
                     OverlaidRootView()
                         .environment(dependencies.playerController)
-                        .environment(\.managedObjectContext, dependencies.dataController.container.viewContext)
                 case .unauthenticated:
                     LoginScreen()
                 }
             }
             .preferredColorScheme(.dark)
             .environment(\.font, .geist(17, relativeTo: .body))
+            // App-wide: tapping inert space drops the keyboard (fields/buttons
+            // still win their taps). Sheets get it via sheetBackground();
+            // full-screen covers apply it to their own roots.
+            .tapToDismissKeyboard()
             // Smooth launch/auth transition (loading → app). Doesn't affect tab switching.
             .animation(.easeInOut(duration: 0.3), value: dependencies.authManager.state)
 
@@ -65,7 +68,9 @@ struct AppView: View {
         // with the true unread count (computed server-side).
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                PushNotificationManager.shared.clearBadge()
+                // Reflect the true unread count (not 0) on foreground, so the badge
+                // stays accurate as conversations are read.
+                Task { await PushNotificationManager.shared.refreshBadge() }
             }
         }
         .task {

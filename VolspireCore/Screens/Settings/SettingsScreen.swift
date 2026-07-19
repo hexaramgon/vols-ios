@@ -39,7 +39,16 @@ struct SettingsScreen: View {
                         NotificationSettingsScreen()
                     } label: {
                         SettingsListRow(icon: .bell, title: "Notifications",
-                                        subtitle: "Pick what you hear about")
+                                        subtitle: "Pick which pushes you get")
+                    }
+                    .buttonStyle(.plain)
+
+                    divider
+                    NavigationLink {
+                        BlockedAccountsScreen()
+                    } label: {
+                        SettingsListRow(icon: .ban, title: "Blocked accounts",
+                                        subtitle: "Manage who you've blocked")
                     }
                     .buttonStyle(.plain)
 

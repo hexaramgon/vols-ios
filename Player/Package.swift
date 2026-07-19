@@ -16,6 +16,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../MediaLibrary/"),
+        .package(path: "../SharedUtilities/"),
         .package(url: "https://github.com/AudioKit/AudioKit", from: "5.6.0"),
     ],
     targets: [
@@ -23,6 +24,7 @@ let package = Package(
             name: "Player",
             dependencies: [
                 "MediaLibrary",
+                "SharedUtilities",
                 .product(name: "AudioKit", package: "AudioKit"),
             ]
         )

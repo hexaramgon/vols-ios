@@ -103,7 +103,7 @@ private extension AnalyticsScreen {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
         .onChange(of: chartDays) { _, _ in scrubIndex = nil }
     }
 
@@ -155,7 +155,7 @@ private extension AnalyticsScreen {
 private extension AnalyticsScreen {
     var statsRow: some View {
         HStack(spacing: 12) {
-            statTile(value: viewModel.totalListeners.profileCompact, label: "Unique listeners", icon: .users)
+            statTile(value: viewModel.totalListeners.compactCount, label: "Unique listeners", icon: .users)
             statTile(value: formatTime(viewModel.avgListenSeconds), label: "Avg. listen time", icon: .clock)
         }
     }
@@ -168,7 +168,7 @@ private extension AnalyticsScreen {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 16))
+        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 16))
     }
 }
 
@@ -212,7 +212,7 @@ private extension AnalyticsScreen {
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+            .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
         }
     }
 
@@ -230,7 +230,7 @@ private extension AnalyticsScreen {
                         .background(Color.white.opacity(0.06), in: Capsule())
                 }
             }
-            Text(value.profileCompact)
+            Text(value.compactCount)
                 .font(.appTitle).foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.6)
                 .contentTransition(.numericText())
@@ -274,7 +274,7 @@ private extension AnalyticsScreen {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
     }
 }
 
@@ -297,7 +297,7 @@ private extension AnalyticsScreen {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
     }
 
     func trackRow(rank: Int, track: TrackAnalyticsItem) -> some View {
@@ -308,13 +308,13 @@ private extension AnalyticsScreen {
             ArtworkView(track.coverURL.map { .webImage($0) } ?? .placeholder(name: track.title), cornerRadius: 8)
                 .frame(width: 46, height: 46)
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.title).font(.appBodyMedium).foregroundStyle(.white).lineLimit(1)
-                Text("\(track.uniqueListeners.profileCompact) listeners · \(formatTime(Int(track.avgListenTime))) avg")
-                    .font(.appCaption).foregroundStyle(Color.vText3).lineLimit(1)
+                Text(track.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
+                Text("\(track.uniqueListeners.compactCount) listeners · \(formatTime(Int(track.avgListenTime))) avg")
+                    .font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                Text(track.streams.profileCompact).font(.appBodyMedium).foregroundStyle(.white).monospacedDigit()
+                Text(track.streams.compactCount).font(.appBodyMedium).foregroundStyle(.white).monospacedDigit()
                 Text("streams").font(.appCaption).foregroundStyle(Color.vText3)
             }
             LucideIcon(.chevronRight, .xs)
@@ -334,22 +334,14 @@ private extension AnalyticsScreen {
             .foregroundStyle(Color.vText3)
     }
 
-    func formatTime(_ seconds: Int) -> String {
-        "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
-    }
+    func formatTime(_ seconds: Int) -> String { seconds.durationLabel }
 
     var emptyState: some View {
-        VStack(spacing: 12) {
-            LucideIcon(.chartLine, .hero)
-                .foregroundStyle(Color.vText3.opacity(0.7))
-            Text("No analytics yet").font(.appHeadline).foregroundStyle(.white)
-            Text("Upload a track and your streams, listeners and plays will show up here.")
-                .font(.appFootnote)
-                .foregroundStyle(Color.vText3)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 40)
+        EmptyStateView(
+            icon: .chartLine,
+            title: "No analytics yet",
+            message: "Upload a track and your streams, listeners and plays will show up here."
+        )
         .padding(.vertical, 80)
     }
 }
@@ -370,7 +362,7 @@ private extension AnalyticsScreen {
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+            .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
 
             // Two stat tiles.
             HStack(spacing: 12) {
@@ -382,7 +374,7 @@ private extension AnalyticsScreen {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(14)
-                    .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 16))
+                    .background(Color.vCard, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
 
@@ -403,7 +395,7 @@ private extension AnalyticsScreen {
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+            .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
         }
         .padding(.horizontal, ViewConst.screenPaddings)
         .shimmering()

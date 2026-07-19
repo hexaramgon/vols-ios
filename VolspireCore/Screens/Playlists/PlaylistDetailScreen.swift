@@ -51,7 +51,6 @@ struct PlaylistDetailScreen: View {
         content
             .task(id: viewModel.playlistId) {
                 viewModel.mediaState = dependencies.mediaState
-                viewModel.player = dependencies.mediaPlayer
                 viewModel.currentUserId = dependencies.authManager.currentUserId
                 await viewModel.load()
             }
@@ -138,19 +137,6 @@ struct PlaylistDetailScreen: View {
         .scrollDisabled(true)
     }
 
-    private func placeholder(icon: LucideIcon.Name, title: String, subtitle: String?) -> some View {
-        VStack(spacing: 10) {
-            LucideIcon(icon, .hero).foregroundStyle(Color.vText3)
-            Text(title).font(.appBodyLargeSemibold).foregroundStyle(.white)
-            if let subtitle {
-                Text(subtitle).font(.appFootnote).foregroundStyle(Color.vText2).multilineTextAlignment(.center)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 40)
-        .background(Color.vBase.ignoresSafeArea())
-    }
-
     private var footer: String {
         let n = viewModel.tracks.count
         let tracks = "\(n) track\(n == 1 ? "" : "s")"
@@ -234,7 +220,6 @@ private struct EditCoverPreview: View {
                 .foregroundStyle(.black)
                 .frame(width: 30, height: 30)
                 .background(.white, in: Circle())
-                .overlay(Circle().stroke(.black.opacity(0.35), lineWidth: 2))
                 .offset(x: 5, y: 5)
         }
     }
@@ -351,13 +336,7 @@ private extension View {
             .enableSwipeBack()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(action: onBack) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
-                    }
-                    .buttonStyle(.plain)
+                    BackButton(action: onBack)
                 }
             }
     }

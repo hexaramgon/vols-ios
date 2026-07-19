@@ -5,8 +5,6 @@
 //  Service creation — mirrors the web's service-create page: type +
 //  gradient + cover, details, per-tier packages, deliverables, process
 //  steps, portfolio clips, tags, FAQs, and the create_service RPC.
-//  (The profile's CreateServiceScreen handles quick edits; this is the
-//  full marketplace listing form.)
 //
 
 import DesignSystem
@@ -31,16 +29,16 @@ let serviceTypes: [ServiceTypeOption] = [
     .init(id: "Other", icon: .briefcase),
 ]
 
-/// Web GRADIENT_OPTIONS (service-create).
+/// Web GRADIENT_OPTIONS (service-create) — swatch top colour derived via TailwindGradient.
 let serviceGradients: [UploadGradientOption] = [
-    .init(id: "from-blue-950 via-slate-950 to-black", label: "Blue", top: Color(red: 0.09, green: 0.15, blue: 0.33)),
-    .init(id: "from-purple-950 via-violet-950 to-black", label: "Violet", top: Color(red: 0.23, green: 0.03, blue: 0.39)),
-    .init(id: "from-rose-950 via-pink-950 to-black", label: "Rose", top: Color(red: 0.30, green: 0.02, blue: 0.10)),
-    .init(id: "from-cyan-950 via-teal-950 to-black", label: "Cyan", top: Color(red: 0.03, green: 0.20, blue: 0.27)),
-    .init(id: "from-amber-950 via-yellow-950 to-black", label: "Amber", top: Color(red: 0.27, green: 0.10, blue: 0.01)),
-    .init(id: "from-emerald-950 via-green-950 to-black", label: "Emerald", top: Color(red: 0.01, green: 0.17, blue: 0.13)),
-    .init(id: "from-orange-950 via-red-950 to-black", label: "Orange", top: Color(red: 0.26, green: 0.08, blue: 0.03)),
-    .init(id: "from-neutral-800 via-neutral-900 to-black", label: "Slate", top: Color(white: 0.15)),
+    .init(id: "from-blue-950 via-slate-950 to-black", label: "Blue"),
+    .init(id: "from-purple-950 via-violet-950 to-black", label: "Violet"),
+    .init(id: "from-rose-950 via-pink-950 to-black", label: "Rose"),
+    .init(id: "from-cyan-950 via-teal-950 to-black", label: "Cyan"),
+    .init(id: "from-amber-950 via-yellow-950 to-black", label: "Amber"),
+    .init(id: "from-emerald-950 via-green-950 to-black", label: "Emerald"),
+    .init(id: "from-orange-950 via-red-950 to-black", label: "Orange"),
+    .init(id: "from-neutral-800 via-neutral-900 to-black", label: "Slate"),
 ]
 
 let serviceCurrencies = ["USD", "EUR", "GBP", "CAD", "AUD"]

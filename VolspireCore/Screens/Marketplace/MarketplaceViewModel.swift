@@ -10,6 +10,7 @@ import Foundation
 import Kingfisher
 import Observation
 import Services
+import SharedUtilities
 
 @Observable @MainActor
 final class MarketplaceViewModel {
@@ -69,7 +70,7 @@ final class MarketplaceViewModel {
             services = data.services ?? []
             loadingState = .loaded
         } catch {
-            print("[MarketplaceVM] load: \(error)")
+            debugLog("[MarketplaceVM] load: \(error)")
             if isEmpty { loadingState = .error(error.localizedDescription) }
         }
         collabListings = (try? await collabTask) ?? collabListings
@@ -187,7 +188,7 @@ final class MarketplaceViewModel {
             boardListings = try await service.getListings(category: boardCategory)
             boardState = .loaded
         } catch {
-            print("[MarketplaceVM] loadBoard: \(error)")
+            debugLog("[MarketplaceVM] loadBoard: \(error)")
             if boardListings.isEmpty { boardState = .error(error.localizedDescription) }
         }
     }

@@ -18,6 +18,13 @@ extension Color {
     /// `Color.vBase` call sites don't need renaming. Change the background in
     /// exactly one place: `Palette.swift`'s `appBase`.
     static let vBase = Color.appBase
+    /// Alias for `Color.appBar` (DesignSystem) — the one chrome tone for every
+    /// header / nav bar / tab bar. Change it in `Palette.swift`'s `appBar`.
+    static let vBar = Color.appBar
+    /// Alias for `Color.appCard` (DesignSystem) — the subtle card / glassy-
+    /// control fill (empty-state CTA cards, profile hero cards & buttons).
+    /// Change it in `Palette.swift`'s `appCard`.
+    static let vCard = Color.appCard
     /// Card / surface fill (≈ neutral-900).
     static let vSurface = Color(white: 0.105)
     /// Hairline borders.
@@ -32,6 +39,10 @@ extension Color {
     /// Error / failure text — web `text-red-400`. The single app error red; pair
     /// with `ErrorBanner` for inline errors. Replaces the ~5 ad-hoc reds.
     static let vError = Color(red: 0.97, green: 0.44, blue: 0.44)
+    /// Destructive-action red (delete). Distinct from `vError` (validation red).
+    static let vDestructive = Color(red: 1, green: 0.37, blue: 0.37)
+    /// Owner / crown gold.
+    static let vOwnerGold = Color(red: 1, green: 0.84, blue: 0)
     /// Unread / notification dot — web `bg-red-500` (#EF4444). The one color for
     /// every unread indicator: tab-bar badge, header bell, notification and
     /// conversation rows. Distinct from `vError` (red-400), which is for errors.
@@ -66,18 +77,20 @@ enum ProfileTab: String, CaseIterable, Hashable {
 /// approximating the web app's `SERVICE_GRADIENTS` / `SERVICE_ICONS`.
 enum ServiceStyle {
     static func colors(for type: String) -> [Color] {
-        let top: Color
+        // Resolve the tailwind-900 token via the canonical palette instead of
+        // hand-converted rgb (the old values drifted slightly from the real hex).
+        let token: String
         switch type {
-        case "Mixing":       top = Color(red: 0.118, green: 0.227, blue: 0.541) // blue-900
-        case "Mastering":    top = Color(red: 0.298, green: 0.114, blue: 0.584) // violet-900
-        case "Production":   top = Color(red: 0.533, green: 0.075, blue: 0.216) // rose-900
-        case "Vocal Tuning": top = Color(red: 0.086, green: 0.306, blue: 0.388) // cyan-900
-        case "Songwriting":  top = Color(red: 0.471, green: 0.208, blue: 0.059) // amber-900
-        case "Sound Design": top = Color(red: 0.024, green: 0.306, blue: 0.231) // emerald-900
-        case "Recording":    top = Color(red: 0.486, green: 0.176, blue: 0.071) // orange-900
-        default:             top = Color(white: 0.15)                            // neutral-800
+        case "Mixing":       token = "blue-900"
+        case "Mastering":    token = "violet-900"
+        case "Production":   token = "rose-900"
+        case "Vocal Tuning": token = "cyan-900"
+        case "Songwriting":  token = "amber-900"
+        case "Sound Design": token = "emerald-900"
+        case "Recording":    token = "orange-900"
+        default:             token = "neutral-800"
         }
-        return [top, .vBase]
+        return [TailwindGradient.color(token) ?? Color(white: 0.15), .vBase]
     }
 
     static func icon(for type: String) -> LucideIcon.Name {

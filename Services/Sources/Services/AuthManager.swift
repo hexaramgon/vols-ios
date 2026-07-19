@@ -42,6 +42,12 @@ public final class AuthManager {
         errorMessage = message
     }
 
+    /// Sets a user-facing error from a raw error, routing it through `friendly` so
+    /// SDK / internal detail never reaches the UI.
+    public func setError(from error: Error) {
+        errorMessage = friendly(error)
+    }
+
     /// Translates raw Supabase auth errors into actionable, human copy.
     /// Falls back to the raw message for anything unrecognised.
     private func friendly(_ error: Error) -> String {
@@ -330,7 +336,7 @@ public final class AuthManager {
             try await client.auth.signOut()
         } catch {
             // Best-effort revoke failed — the local session is already gone.
-            print("[AuthManager] signOut revoke failed (ignored): \(error)")
+            debugLog("[AuthManager] signOut revoke failed (ignored): \(error)")
         }
         // Also end the Google SDK's own session so the next Google sign-in
         // shows the account picker instead of silently reusing the last one.

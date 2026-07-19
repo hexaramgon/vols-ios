@@ -9,6 +9,7 @@
 import Foundation
 import Observation
 import Services
+import SharedUtilities
 
 struct TrackAnalyticsItem: Identifiable {
     let id: String
@@ -71,7 +72,7 @@ final class AnalyticsViewModel {
             }
             loadFailed = false
         } catch {
-            print("[AnalyticsVM] Failed to load analytics: \(error)")
+            debugLog("[AnalyticsVM] Failed to load analytics: \(error)")
             loadFailed = true
         }
         engagement = try? await engagementResult

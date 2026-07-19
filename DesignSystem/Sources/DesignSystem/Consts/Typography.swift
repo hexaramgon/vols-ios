@@ -71,8 +71,6 @@ public extension Font {
     static let appTitleXXL = Font.geist(28, weight: .bold)
     /// Prominent screen titles above `appLargeTitle` (27pt).
     static let appTitleXL = Font.geist(27, weight: .bold)
-    /// Semibold sibling of `appLargeTitle` (24pt).
-    static let appLargeTitleSemibold = Font.geist(24, weight: .semibold)
     /// Semibold sibling of `appTitle` (22pt).
     static let appTitleSemibold = Font.geist(22, weight: .semibold)
     /// Section / sheet titles between `appTitle`(22) and `appTitle3`(18) — 20pt.
@@ -81,16 +79,12 @@ public extension Font {
     static let appTitle2Semibold = Font.geist(20, weight: .semibold)
     /// Regular 20pt title.
     static let appTitle2Regular = Font.geist(20)
-    /// Regular sibling of `appTitle3` (18pt).
-    static let appTitle3Regular = Font.geist(18)
     /// Large body / prominent row titles (17pt).
     static let appBodyLarge = Font.geist(17)
     /// Medium 17pt.
     static let appBodyLargeMedium = Font.geist(17, weight: .medium)
     /// Semibold 17pt — sheet headers, prominent row titles.
     static let appBodyLargeSemibold = Font.geist(17, weight: .semibold)
-    /// Bold 17pt.
-    static let appBodyLargeBold = Font.geist(17, weight: .bold)
     /// Bold sibling of `appHeadline` (16pt).
     static let appHeadlineBold = Font.geist(16, weight: .bold)
     /// Bold sibling of `appCallout` (15pt).

@@ -213,20 +213,28 @@ private extension ExpandableNowPlaying {
                 // the controls. Scrims keep the top (status bar) and bottom (transport)
                 // legible; a blur fades in as the comments panel slides over it.
                 if model.isPortraitVideo, let avPlayer = model.videoAVPlayer {
-                    portraitVideoBackdrop(avPlayer: avPlayer, minimized: controlsMinimized)
-                        // Pinned to a constant full-screen size — NOT maxWidth/maxHeight,
-                        // and no safe-area participation anywhere inside (see
-                        // immersiveBackdrop). Flexible or safe-area-expanded bounds
-                        // change as the card is dragged/collapsed, and any bounds
-                        // change re-crops the aspect-fill video mid-gesture. Fixed
-                        // bounds → the video only fades and slides, never re-fits.
-                        .frame(width: UIScreen.size.width, height: UIScreen.size.height)
-                        .clipShape(.rect(cornerRadius: isFullyExpanded ? 0 : UIScreen.deviceCornerRadius))
-                        // The radius flips the moment a drag starts (progress < 1) —
-                        // ease it in so full-bleed corners don't pop.
-                        .animation(.easeOut(duration: 0.18), value: isFullyExpanded)
-                        .opacity(expanded ? 1 : 0)
-                        .animation(.playerExpandAnimation, value: expanded)
+                    // Layout-neutral wrapper: the backdrop is pinned to a fixed
+                    // full-screen frame below, and a fixed-size ZStack child
+                    // forces the COLLAPSED card that wide too (the mini player
+                    // rendered past its 8pt margins whenever a video was
+                    // playing). An overlay draws without contributing to layout.
+                    Color.clear
+                        .overlay {
+                            portraitVideoBackdrop(avPlayer: avPlayer, minimized: controlsMinimized)
+                                // Pinned to a constant full-screen size — NOT maxWidth/maxHeight,
+                                // and no safe-area participation anywhere inside (see
+                                // immersiveBackdrop). Flexible or safe-area-expanded bounds
+                                // change as the card is dragged/collapsed, and any bounds
+                                // change re-crops the aspect-fill video mid-gesture. Fixed
+                                // bounds → the video only fades and slides, never re-fits.
+                                .frame(width: UIScreen.size.width, height: UIScreen.size.height)
+                                .clipShape(.rect(cornerRadius: isFullyExpanded ? 0 : UIScreen.deviceCornerRadius))
+                                // The radius flips the moment a drag starts (progress < 1) —
+                                // ease it in so full-bleed corners don't pop.
+                                .animation(.easeOut(duration: 0.18), value: isFullyExpanded)
+                                .opacity(expanded ? 1 : 0)
+                                .animation(.playerExpandAnimation, value: expanded)
+                        }
                         .allowsHitTesting(false)
                 }
                 // Fullscreen visualizer → same full-bleed treatment as portrait
@@ -234,25 +242,31 @@ private extension ExpandableNowPlaying {
                 // comments blur, and immersive minimize. Mounted only while
                 // expanded so it costs nothing when docked.
                 if expanded, model.showVisualizer, model.visualizerAvailable {
-                    immersiveBackdrop(minimized: controlsMinimized) {
-                        // Brightness/saturation mute ≈ the web player's dark
-                        // vignette, applied in the composite shader for free.
-                        MetalVisualizer(
-                            audioTap: model.visualizerTap,
-                            quality: visualizerLowPower ? .lowPower : .standard,
-                            brightness: 0.75,
-                            saturation: 0.85
-                        )
-                    }
-                    // Same fixed-size pin as the portrait video: immersiveBackdrop's
-                    // children no longer ignore the safe area, so full-bleed comes
-                    // from this frame.
-                    .frame(width: UIScreen.size.width, height: UIScreen.size.height)
-                    .clipShape(.rect(cornerRadius: isFullyExpanded ? 0 : UIScreen.deviceCornerRadius))
-                    // Same corner ease as the portrait video above.
-                    .animation(.easeOut(duration: 0.18), value: isFullyExpanded)
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
+                    // Same layout-neutral overlay wrapper as the portrait video —
+                    // while the removal transition runs during a collapse, the
+                    // fixed frame would otherwise widen the shrinking card.
+                    Color.clear
+                        .overlay {
+                            immersiveBackdrop(minimized: controlsMinimized) {
+                                // Brightness/saturation mute ≈ the web player's dark
+                                // vignette, applied in the composite shader for free.
+                                MetalVisualizer(
+                                    audioTap: model.visualizerTap,
+                                    quality: visualizerLowPower ? .lowPower : .standard,
+                                    brightness: 0.75,
+                                    saturation: 0.85
+                                )
+                            }
+                            // Same fixed-size pin as the portrait video: immersiveBackdrop's
+                            // children no longer ignore the safe area, so full-bleed comes
+                            // from this frame.
+                            .frame(width: UIScreen.size.width, height: UIScreen.size.height)
+                            .clipShape(.rect(cornerRadius: isFullyExpanded ? 0 : UIScreen.deviceCornerRadius))
+                            // Same corner ease as the portrait video above.
+                            .animation(.easeOut(duration: 0.18), value: isFullyExpanded)
+                        }
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
                 }
                 CompactNowPlaying(
                     expanded: $expanded,

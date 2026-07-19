@@ -80,7 +80,7 @@ struct LibraryScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-                .zIndex(1) // keep the header's bottom shadow above the scrolling content
+                .zIndex(1) // keep the header (and its sliding search reveal) above the scrolling content
             ScrollView {
                 Group {
                     if !didLoad {
@@ -173,7 +173,7 @@ private extension LibraryScreen {
             }
         } expansion: {
             // Inside the header chrome so the bar background sits behind the
-            // field and the shadow falls below it — not bleeding onto the page.
+            // field — not floating over the page content.
             if showSearchField {
                 searchRow
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -228,7 +228,7 @@ private extension LibraryScreen {
     /// "See all" action on the right.
     func sectionHead(_ title: String, seeAll: (() -> Void)? = nil) -> some View {
         HStack(alignment: .center) {
-            Text(title).font(.appTitle3Bold).foregroundStyle(.white)
+            Text(title).font(.appFont.sectionTitle).foregroundStyle(.white)
             Spacer(minLength: 0)
             if let seeAll {
                 Button(action: seeAll) {
@@ -300,7 +300,7 @@ private extension LibraryScreen {
 private extension LibraryScreen {
     var playlistsSection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            sectionHead("Playlists", seeAll: playlistsVM.playlists.isEmpty ? nil : { router.navigateToPlaylists() })
+            playlistsHead
 
             if !playlistsLoading, playlistsVM.playlists.isEmpty {
                 // Empty: a slim full-width card with a real CTA instead of a
@@ -316,8 +316,6 @@ private extension LibraryScreen {
                         } else {
                             ForEach(playlistsVM.playlists) { playlistCard($0) }
                                 .transition(.opacity)
-                            createPlaylistTile
-                                .transition(.opacity)
                         }
                     }
                     .padding(.horizontal, ViewConst.screenPaddings)
@@ -331,24 +329,40 @@ private extension LibraryScreen {
         .animation(.easeInOut(duration: 0.3), value: playlistsLoading)
     }
 
-    /// Trailing tile in the rail — the create entry point once playlists
-    /// exist (the empty state has its own CTA row). The original dashed
-    /// "create" tile, mirroring the Workspace create-folder tile.
-    var createPlaylistTile: some View {
-        Button { playlistsVM.showCreate = true } label: {
-            VStack(spacing: 9) {
-                LucideIcon(.plus, .lg).foregroundStyle(Color.vText2)
-                Text("Create a playlist").font(.appFootnoteMedium).foregroundStyle(Color.vText2)
+    /// "Playlists" section head with the gradient "New" pill once playlists
+    /// exist (the empty state has its own CTA row) — replaces the old dashed
+    /// trailing tile in the rail — plus the usual "See all". Same pattern as
+    /// the Home Workspace tab's Folders header.
+    var playlistsHead: some View {
+        HStack(alignment: .center, spacing: 14) {
+            Text("Playlists").font(.appFont.sectionTitle).foregroundStyle(.white)
+            Spacer(minLength: 0)
+            if !playlistsVM.playlists.isEmpty {
+                Button { playlistsVM.showCreate = true } label: {
+                    HStack(spacing: 5) {
+                        LucideIcon(.plus, .sm)
+                        Text("New")
+                    }
+                    .font(.appFootnoteMedium)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(LinearGradient.sendAccent, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .contentShape(.rect(cornerRadius: 11))
+                }
+                .buttonStyle(LibraryPress())
+                Button { router.navigateToPlaylists() } label: {
+                    HStack(spacing: 2) {
+                        Text("See all").font(.appFootnoteMedium)
+                        LucideIcon(.chevronRight, .xs)
+                    }
+                    .foregroundStyle(.white)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
             }
-            .frame(width: 158, height: 158)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.03)))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.16), style: StrokeStyle(lineWidth: 1.2, dash: [6, 5]))
-            )
-            .contentShape(.rect(cornerRadius: 16))
         }
-        .buttonStyle(LibraryPress())
+        .padding(.horizontal, ViewConst.screenPaddings)
     }
 
     /// Compact empty state: one line of copy + a prominent Create button.
@@ -379,7 +393,7 @@ private extension LibraryScreen {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.04)))
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.vCard))
         .padding(.horizontal, ViewConst.screenPaddings)
     }
 
@@ -403,8 +417,8 @@ private extension LibraryScreen {
                     .frame(width: 158, height: 158)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(playlist.title).font(.appSubheadlineSemibold).foregroundStyle(.white).lineLimit(1)
-                    Text("\(playlist.trackCount ?? 0) tracks").font(.appCaption).foregroundStyle(Color.vText2).lineLimit(1)
+                    Text(playlist.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
+                    Text("\(playlist.trackCount ?? 0) tracks").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
                 }
                 .frame(width: 158, alignment: .leading)
             }
@@ -512,11 +526,11 @@ private extension LibraryScreen {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title)
-                    .font(.appCalloutSemibold)
+                    .font(.appFont.trackTitle)
                     .foregroundStyle(isActive ? .white : .white.opacity(0.95))
                     .lineLimit(1)
                 if let artist = row.artist, !artist.isEmpty {
-                    Text("@\(artist)").font(.appFootnote).foregroundStyle(Color.vText2).lineLimit(1)
+                    Text("@\(artist)").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
                 }
             }
 

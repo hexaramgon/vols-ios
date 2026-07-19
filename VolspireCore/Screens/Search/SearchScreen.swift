@@ -58,12 +58,7 @@ struct SearchScreen: View {
 private extension SearchScreen {
     var searchBar: some View {
         HStack(spacing: 12) {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-            .buttonStyle(.plain)
+            BackButton(shadow: false)
 
             HStack(spacing: 10) {
                 LucideIcon(.search, .md).foregroundStyle(Color.vText2)
@@ -134,7 +129,7 @@ private extension SearchScreen {
     func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title.uppercased())
-                .font(.appCaptionBold).tracking(0.8)
+                .font(.appFont.sectionLabel).tracking(0.6)
                 .foregroundStyle(Color.vText3)
                 .padding(.horizontal, 14)
                 .padding(.bottom, 6)
@@ -204,7 +199,7 @@ private extension SearchScreen {
             artistAvatar(artist.profileImageUrl, name: artist.username)
             rowText(
                 title: "@\(artist.username ?? "unknown")",
-                subtitle: artist.monthlyListeners.map { "\(formatCount($0)) monthly listeners" }
+                subtitle: artist.monthlyListeners.map { "\($0.compactCount) monthly listeners" }
             )
             Spacer(minLength: 8)
         } onTap: {
@@ -245,9 +240,9 @@ private extension SearchScreen {
 
     func rowText(title: String, subtitle: String?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.appCalloutSemibold).foregroundStyle(.white).lineLimit(1)
+            Text(title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
             if let subtitle, !subtitle.isEmpty {
-                Text(subtitle).font(.appFootnote).foregroundStyle(Color.vText2).lineLimit(1)
+                Text(subtitle).font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
             }
         }
     }
@@ -269,19 +264,7 @@ private extension SearchScreen {
     }
 
     func artistAvatar(_ url: String?, name: String?) -> some View {
-        Group {
-            if let url, let u = URL(string: url) {
-                KFImage(u).downsampled(to: 50).resizable().scaledToFill()
-            } else {
-                ZStack {
-                    Color.vSurface
-                    Text(String(name?.first ?? "?").uppercased())
-                        .font(.appBodyLargeBold).foregroundStyle(Color.vText2)
-                }
-            }
-        }
-        .frame(width: 50, height: 50)
-        .clipShape(Circle())
+        AvatarView(urlString: url, name: name, size: 50)
     }
 
     func priceTag(_ price: Double?) -> some View {
@@ -313,13 +296,6 @@ private extension SearchScreen {
         return p == p.rounded() ? "$\(Int(p))" : String(format: "$%.2f", p)
     }
 
-    func formatCount(_ n: Int) -> String {
-        switch n {
-        case 1_000_000...: return String(format: "%.1fM", Double(n) / 1_000_000)
-        case 1_000...: return String(format: "%.0fK", Double(n) / 1_000)
-        default: return "\(n)"
-        }
-    }
 }
 
 #Preview {

@@ -125,17 +125,6 @@ private struct NoHighlightButtonStyle: ButtonStyle {
     }
 }
 
-extension PlayerButtonConfig {
-    static var expandedPlayer: Self {
-        Self(
-            labelColor: .init(Palette.PlayerCard.opaque),
-            tint: .init(Palette.PlayerCard.translucent.withAlphaComponent(0.3)),
-            pressedColor: .init(Palette.PlayerCard.opaque),
-            disabledColor: .init(Palette.PlayerCard.translucent)
-        )
-    }
-}
-
 #Preview {
     @Previewable @State var playerController = PlayerController()
     ZStack(alignment: .top) {

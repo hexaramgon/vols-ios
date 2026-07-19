@@ -13,6 +13,7 @@ import UniformTypeIdentifiers
 
 struct CreateListingScreen: View {
     @State var viewModel: CreateListingViewModel
+    @Environment(PlayerController.self) private var playerController
     @Environment(\.dismiss) private var dismiss
     @State private var showAudioPicker = false
     @State private var pickingAttachmentID: UUID?
@@ -43,6 +44,8 @@ struct CreateListingScreen: View {
                 .padding(.bottom, 24)
             }
             .scrollDismissesKeyboard(.interactively)
+            // Tap on inert space drops the keyboard (fields/buttons still win the tap).
+            .tapToDismissKeyboard()
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomBar
             }
@@ -64,6 +67,7 @@ struct CreateListingScreen: View {
         }
         .onChange(of: viewModel.uploadState) { _, newValue in
             if newValue == .success {
+                // The confirmation card flashes at the root once this slides away.
                 dismiss()
             }
         }
@@ -103,8 +107,7 @@ struct CreateListingScreen: View {
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background {
-            // Same chrome tone as the Library header / tab bar (~#121212).
-            Color(white: 0.07)
+            Color.vBar
                 .overlay(alignment: .top) {
                     Rectangle()
                         .fill(Color.vBorder)
@@ -211,7 +214,14 @@ struct CreateListingScreen: View {
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText2)
 
-            UploadClipRows(clips: $viewModel.attachments) { rowId in
+            UploadClipRows(
+                clips: $viewModel.attachments,
+                onStartPlaying: {
+                    // Previewing a clip pauses the app's music — same behaviour
+                    // as the track upload's preview.
+                    if playerController.state.isPlaying { playerController.onPlayPause() }
+                }
+            ) { rowId in
                 pickingAttachmentID = rowId
                 showAudioPicker = true
             }

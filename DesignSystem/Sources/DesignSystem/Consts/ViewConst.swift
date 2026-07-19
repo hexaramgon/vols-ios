@@ -20,23 +20,12 @@ public extension ViewConst {
     static let headerIconSize: CGFloat = 24
     /// Back-chevron glyph size in pushed-screen nav bars.
     static let backIconSize: CGFloat = 16
-    static let itemPeekAmount: CGFloat = 36
     static let compactNowPlayingHeight: CGFloat = 56
 
     static var safeAreaInsets: EdgeInsets {
         MainActor.assumeIsolated {
             EdgeInsets(UIApplication.keyWindow?.safeAreaInsets ?? .zero)
         }
-    }
-
-    static func itemWidth(
-        forItemsPerScreen count: Int,
-        spacing: CGFloat = 0,
-        containerWidth: CGFloat
-    ) -> CGFloat {
-        let totalSpacing = spacing * CGFloat(count)
-        let availableWidth = containerWidth - screenPaddings - itemPeekAmount - totalSpacing
-        return availableWidth / CGFloat(count)
     }
 }
 

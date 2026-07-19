@@ -6,6 +6,7 @@
 
 import DesignSystem
 import Foundation
+import MediaLibrary
 import Services
 import SwiftUI
 
@@ -45,6 +46,21 @@ final class UnreadCounts {
     /// Optimistic zero when the notifications screen opens (the server marks
     /// them read at the same moment).
     func clearNotifications() { notifications = 0 }
+}
+
+private struct IsActiveRootTabKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    /// True when the enclosing root tab is the one currently shown. RootTabView keeps
+    /// every visited tab mounted (at opacity 0), so views that run timers/animations
+    /// use this to pause work while their tab is hidden. Defaults true (previews /
+    /// standalone use).
+    var isActiveRootTab: Bool {
+        get { self[IsActiveRootTabKey.self] }
+        set { self[IsActiveRootTabKey.self] = newValue }
+    }
 }
 
 struct RootTabView: View {
@@ -102,9 +118,11 @@ struct RootTabView: View {
     }
 
     init() {
-        // Near-black chrome to match the app's dark theme; Geist nav-bar titles.
+        // The app chrome tone — keep in sync with `Color.appBar` (0.07). A plain
+        // UIColor literal: bridging SwiftUI Color→UIColor during scene init is
+        // the kind of thing we don't want anywhere near the boot path.
         // (The bottom bar is now a custom SwiftUI view, so no UITabBar appearance here.)
-        let barColor = UIColor(white: 0.07, alpha: 1) // ~#121212
+        let barColor = UIColor(white: 0.07, alpha: 1)
 
         let navBarAppearance = UINavigationBarAppearance()
         navBarAppearance.configureWithOpaqueBackground()
@@ -127,6 +145,7 @@ struct RootTabView: View {
                         tab.destinationView(router: router(for: tab))
                             .opacity(selectedTab == tab ? 1 : 0)
                             .allowsHitTesting(selectedTab == tab)
+                            .environment(\.isActiveRootTab, selectedTab == tab)
                     }
                 }
             }
@@ -200,12 +219,26 @@ struct RootTabView: View {
                     router(for: selectedTab).navigateToProfile(userId: userId)
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .openPushNotification)) { _ in
+                routePendingPush()
+            }
+            // Fired when the post-publish confirmation card finishes: open what
+            // the user just posted — their track in the expanded player, or
+            // their listing's detail page.
+            .onReceive(NotificationCenter.default.publisher(for: .openOwnPost)) { note in
+                if let trackId = note.userInfo?["trackId"] as? String {
+                    openTrackFromPush(trackId, fallbackToNotifications: false)
+                } else if let listingId = note.userInfo?["listingId"] as? String {
+                    openListingFromPush(listingId, fallbackToNotifications: false)
+                }
+            }
 
         }
-        .environment(conversationState)
         .environment(unreadCounts)
         // Unread dots refresh at every moment the counts can change.
         .task { await unreadCounts.refresh() }
+        // Cold launch: route a push tapped before the UI was ready to receive it.
+        .task { routePendingPush() }
         .onChange(of: selectedTab) { _, _ in
             Task { await unreadCounts.refresh() }
         }
@@ -218,6 +251,91 @@ struct RootTabView: View {
         }
         .task { await loadProfileAvatar() }
         .task { AnalyticsService.shared?.log(.pageView, metadata: ["to": .string(analyticsName(selectedTab))]) }
+    }
+
+    /// Deep-links a tapped push notification to the entity it references
+    /// (message → conversation, folder share → folder, else → notifications).
+    private func routePendingPush() {
+        guard let info = PushInbox.pending else { return }
+        PushInbox.pending = nil
+        let r = router(for: selectedTab)
+        visitedTabs.insert(selectedTab)
+        switch info["type"] {
+        case "message":
+            guard let convoId = info["convo_id"] else { return }
+            r.navigateToConversation(ActiveConversation(
+                convoId: convoId,
+                otherUserId: info["sender_id"],
+                username: info["title"] ?? "Conversation",
+                avatarURL: nil
+            ))
+        case "activity":
+            if let type = info["object_type"], type.contains("folder"), let id = info["object_id"] {
+                // Share / upload / add in a folder → open the folder itself.
+                openFolderFromPush(id)
+            } else if info["object_type"] == "track", let id = info["object_id"] {
+                // Comment / like / save on a track → open the track itself.
+                openTrackFromPush(id)
+            } else if info["object_type"] == "listing", let id = info["object_id"] {
+                // A response to your collab listing → open the listing.
+                openListingFromPush(id)
+            } else {
+                r.navigateToNotifications()
+            }
+        default:
+            break
+        }
+    }
+
+    /// A listing push opens the listing detail — fetched fresh so responses
+    /// and counts are current; notifications page as the fallback (own-post
+    /// opens fail quietly instead — there's no sensible fallback screen).
+    private func openListingFromPush(_ listingId: String, fallbackToNotifications: Bool = true) {
+        Task {
+            guard let listing = try? await dependencies.supabaseService.getListing(listingId: listingId) else {
+                if fallbackToNotifications { router(for: selectedTab).navigateToNotifications() }
+                return
+            }
+            router(for: selectedTab).navigateToCollabListing(listing)
+        }
+    }
+
+    /// A folder push resolves the real folder first (its name — the screen
+    /// header) instead of navigating with a "Folder" placeholder; the
+    /// recipient is a member, so it's in their folder list.
+    private func openFolderFromPush(_ folderId: String) {
+        Task {
+            let name = (try? await dependencies.supabaseService.getUserFolders())?
+                .first { $0.folderId.lowercased() == folderId.lowercased() }?.name ?? "Folder"
+            router(for: selectedTab).navigateToFolder(folderId: folderId, folderName: name)
+        }
+    }
+
+    /// A track push opens the track: fetch it, start playback, and expand the
+    /// player (that's the app's track view — comments included). Falls back to
+    /// the notifications page if the track can't be loaded (deleted/offline);
+    /// own-post opens fail quietly instead.
+    private func openTrackFromPush(_ trackId: String, fallbackToNotifications: Bool = true) {
+        Task {
+            let storage = StorageService()
+            guard let track = (try? await dependencies.supabaseService.getTracksByIds([trackId]))?.first,
+                  let audioURL = storage.resolveTrackUrl(track.audioUrl).flatMap({ URL(string: $0) })
+            else {
+                if fallbackToNotifications { router(for: selectedTab).navigateToNotifications() }
+                return
+            }
+            let media = Media(
+                id: MediaID(track.trackId),
+                meta: MediaMeta(
+                    artwork: storage.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) },
+                    title: track.title ?? "Track",
+                    artist: track.artistUsername,
+                    audioURL: audioURL
+                )
+            )
+            playerController.playSingle(media)
+            playerController.pendingExpand = true
+        }
     }
 
     /// Loads the signed-in user's avatar so the Profile tab shows their photo (like the web).
@@ -313,10 +431,10 @@ struct RootTabView: View {
         .padding(.top, 8)
         .padding(.bottom, 4)
         .background {
-            Color(white: 0.07)
+            Color.vBar
                 .overlay(alignment: .top) {
                     Rectangle()
-                        .fill(Color.white.opacity(0.08))
+                        .fill(Color.vBorder)
                         .frame(height: 0.5)
                 }
                 .ignoresSafeArea(edges: .bottom)

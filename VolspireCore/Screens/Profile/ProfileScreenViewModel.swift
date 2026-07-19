@@ -12,6 +12,7 @@ import Observation
 import Player
 import Services
 import SwiftUI
+import SharedUtilities
 
 // MARK: - UI Models
 
@@ -53,7 +54,7 @@ struct UserPack: Identifiable {
     let gradient: String?
     let isPublished: Bool
 
-    var priceLabel: String { price <= 0 ? "Free" : "$\(price == price.rounded() ? String(format: "%.0f", price) : String(format: "%.2f", price))" }
+    var priceLabel: String { price.priceLabel(free: true) }
 }
 
 struct ProfileService: Identifiable, Hashable {
@@ -106,6 +107,11 @@ final class ProfileScreenViewModel {
     var loadingState: ProfileLoadingState = .idle
     var isFollowing: Bool = false
     var isTogglingFollow: Bool = false
+    /// Blocked (either direction) or suspended — the screen shows a
+    /// "User unavailable" state instead of the profile.
+    var isUnavailable: Bool = false
+    /// The viewer blocked this user — the unavailable state offers Unblock.
+    var viewerHasBlocked: Bool = false
     /// `none` | `pending` | `accepted` — collaborator relationship with the viewer.
     var collaboratorStatus: String = "none"
     var collabConvoId: String?
@@ -130,11 +136,6 @@ final class ProfileScreenViewModel {
         let base = q.isEmpty ? myCollabTracks : myCollabTracks.filter { $0.title.lowercased().contains(q) }
         return Array(base.prefix(8))
     }
-    var showCreateService: Bool = false
-    var isCreatingService: Bool = false
-    var editingService: ProfileService? = nil
-    var isEditingService: Bool = false
-
     /// Drives the track "…" options sheet (own tracks only).
     var trackOptionsTrack: ProfileTrack? = nil
     /// Non-nil once `startEditingTrack` resolves — drives the edit fullScreenCover.
@@ -176,38 +177,51 @@ final class ProfileScreenViewModel {
         profileUserId = userId
 
         do {
-            let profile = try await supabaseService.getUserProfile(userId: userId)
-
-            username = profile.username ?? "Unknown"
-            bio = profile.bio ?? ""
-            profileImageURL = profile.profileImageUrl.flatMap { URL(string: $0) }
-            bannerImageURL = profile.bannerImageUrl.flatMap { URL(string: $0) }
-            location = profile.location ?? ""
-            tags = profile.tags ?? []
-            accountType = profile.accountType
-            followersCount = profile.followersCount ?? 0
-            monthlyListenersCount = profile.monthlyListenersCount
-            trackCount = profile.trackCount
-            isFollowing = profile.isFollowing ?? false
-            collaboratorStatus = profile.collaboratorStatus ?? "none"
-            collabConvoId = profile.collabConvoId
-            tracks = profile.tracks.map { track in
-                // Resolve bare `post-uploads` paths to full public URLs.
-                ProfileTrack(
-                    id: track.id,
-                    title: track.title,
-                    coverURL: storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) },
-                    audioURL: storageService.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) },
-                    streams: track.streams ?? 0,
-                    isPrivate: (track.visibility ?? "public") != "public"
-                )
-            }
-            apiServices = profile.services
-            services = profile.services.map { mapService($0) }
+            apply(try await supabaseService.getUserProfile(userId: userId))
             loadingState = .loaded
         } catch {
             loadingState = .error(error.localizedDescription)
         }
+    }
+
+    /// Background refresh (e.g. after publishing a track) — refetches and swaps
+    /// the data in place WITHOUT flipping `loadingState`, so the page never
+    /// drops back to the skeleton; a failed refetch keeps what's on screen.
+    func refreshProfile(userId: String) async {
+        guard loadingState == .loaded else { return await loadProfile(userId: userId) }
+        guard let profile = try? await supabaseService.getUserProfile(userId: userId) else { return }
+        apply(profile)
+    }
+
+    private func apply(_ profile: ApiUserProfile) {
+        username = profile.username ?? "Unknown"
+        bio = profile.bio ?? ""
+        profileImageURL = profile.profileImageUrl.flatMap { URL(string: $0) }
+        bannerImageURL = profile.bannerImageUrl.flatMap { URL(string: $0) }
+        location = profile.location ?? ""
+        tags = profile.tags ?? []
+        accountType = profile.accountType
+        followersCount = profile.followersCount ?? 0
+        monthlyListenersCount = profile.monthlyListenersCount
+        trackCount = profile.trackCount
+        isFollowing = profile.isFollowing ?? false
+        isUnavailable = profile.isUnavailable ?? false
+        viewerHasBlocked = profile.viewerHasBlocked ?? false
+        collaboratorStatus = profile.collaboratorStatus ?? "none"
+        collabConvoId = profile.collabConvoId
+        tracks = profile.tracks.map { track in
+            // Resolve bare `post-uploads` paths to full public URLs.
+            ProfileTrack(
+                id: track.id,
+                title: track.title,
+                coverURL: storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) },
+                audioURL: storageService.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) },
+                streams: track.streams ?? 0,
+                isPrivate: (track.visibility ?? "public") != "public"
+            )
+        }
+        apiServices = profile.services
+        services = profile.services.map { mapService($0) }
     }
 
     /// Loads "Featured On" — tracks by other artists that credit this user.
@@ -240,7 +254,7 @@ final class ProfileScreenViewModel {
                 )
             }
         } catch {
-            print("[ProfileVM] Failed to load credited tracks: \(error)")
+            debugLog("[ProfileVM] Failed to load credited tracks: \(error)")
         }
     }
 
@@ -249,7 +263,7 @@ final class ProfileScreenViewModel {
         do {
             listings = try await supabaseService.getUserListings(userId: userId)
         } catch {
-            print("[ProfileVM] Failed to load listings: \(error)")
+            debugLog("[ProfileVM] Failed to load listings: \(error)")
         }
     }
 
@@ -291,7 +305,7 @@ final class ProfileScreenViewModel {
                 )
             }
         } catch {
-            print("[ProfileVM] Failed to load packs: \(error)")
+            debugLog("[ProfileVM] Failed to load packs: \(error)")
         }
     }
 
@@ -307,56 +321,12 @@ final class ProfileScreenViewModel {
         }
     }
 
-    func createService(title: String, description: String, serviceType: String, price: Double, currency: String, deliveryTimeDays: Int?) async {
-        guard !isCreatingService else { return }
-        isCreatingService = true
-        do {
-            let svc = try await supabaseService.createUserService(
-                title: title,
-                description: description,
-                serviceType: serviceType,
-                price: price,
-                currency: currency,
-                deliveryTimeDays: deliveryTimeDays
-            )
-            services.append(mapService(svc))
-            showCreateService = false
-        } catch {
-            print("[ProfileVM] Failed to create service: \(error)")
-        }
-        isCreatingService = false
-    }
-
-    func updateService(serviceId: String, title: String, description: String, serviceType: String, price: Double, currency: String, deliveryTimeDays: Int?) async {
-        guard !isEditingService else { return }
-        isEditingService = true
-        do {
-            let svc = try await supabaseService.updateUserService(
-                serviceId: serviceId,
-                title: title,
-                description: description,
-                serviceType: serviceType,
-                price: price,
-                currency: currency,
-                deliveryTimeDays: deliveryTimeDays,
-                isActive: nil
-            )
-            if let idx = services.firstIndex(where: { $0.id == serviceId }) {
-                services[idx] = mapService(svc)
-            }
-            editingService = nil
-        } catch {
-            print("[ProfileVM] Failed to update service: \(error)")
-        }
-        isEditingService = false
-    }
-
     /// Fetches the full track detail and opens the edit fullScreenCover.
     func startEditingTrack(_ trackId: String) async {
         do {
             editingTrackDetail = try await supabaseService.getTrackMetadata(trackId: trackId)
         } catch {
-            print("[ProfileVM] Failed to load track for editing: \(error)")
+            debugLog("[ProfileVM] Failed to load track for editing: \(error)")
         }
     }
 
@@ -378,7 +348,7 @@ final class ProfileScreenViewModel {
                 isPrivate: (detail.visibility ?? "public") != "public"
             )
         } catch {
-            print("[ProfileVM] Failed to refresh track: \(error)")
+            debugLog("[ProfileVM] Failed to refresh track: \(error)")
         }
     }
 
@@ -391,7 +361,7 @@ final class ProfileScreenViewModel {
             trackCount = max(0, trackCount - 1)
             return true
         } catch {
-            print("[ProfileVM] Failed to delete track: \(error)")
+            debugLog("[ProfileVM] Failed to delete track: \(error)")
             return false
         }
     }
@@ -411,7 +381,7 @@ final class ProfileScreenViewModel {
             }
             return true
         } catch {
-            print("[ProfileVM] Failed to update track visibility: \(error)")
+            debugLog("[ProfileVM] Failed to update track visibility: \(error)")
             return false
         }
     }
@@ -419,9 +389,7 @@ final class ProfileScreenViewModel {
     private func mapService(_ svc: ApiUserService) -> ProfileService {
         let priceStr: String
         if let p = svc.price {
-            let symbols = ["USD": "$", "EUR": "€", "GBP": "£"]
-            let sym = symbols[svc.currency ?? "USD"] ?? (svc.currency ?? "$")
-            priceStr = "\(sym)\(String(format: p == p.rounded() ? "%.0f" : "%.2f", p))"
+            priceStr = p.priceLabel(currency: svc.currency)
         } else {
             priceStr = "N/A"
         }
@@ -468,7 +436,7 @@ final class ProfileScreenViewModel {
                     )
                 }
         } catch {
-            print("[ProfileVM] loadMyTracksForCollab failed: \(error)")
+            debugLog("[ProfileVM] loadMyTracksForCollab failed: \(error)")
         }
     }
 
@@ -519,8 +487,22 @@ final class ProfileScreenViewModel {
             } else {
                 collabError = "Couldn't send your request. Please try again."
             }
-            print("[ProfileVM] sendCollab failed: \(error)")
+            debugLog("[ProfileVM] sendCollab failed: \(error)")
             return false
+        }
+    }
+
+    /// Ends an accepted collaboration: the backend deletes the relationship and
+    /// archives the pair's DM for this user; locally the Collab button and the
+    /// hero badge reset immediately.
+    func removeCollaborator(userId: String) async {
+        guard collaboratorStatus == "accepted" else { return }
+        do {
+            try await supabaseService.removeCollaborator(userId: userId)
+            collaboratorStatus = "none"
+            collabConvoId = nil
+        } catch {
+            debugLog("[ProfileVM] removeCollaborator failed: \(error)")
         }
     }
 
@@ -538,7 +520,7 @@ final class ProfileScreenViewModel {
         } catch {
             isFollowing = !next
             followersCount = max(0, followersCount + (next ? -1 : 1))
-            print("[ProfileVM] Failed to toggle follow: \(error)")
+            debugLog("[ProfileVM] Failed to toggle follow: \(error)")
         }
         isTogglingFollow = false
     }
@@ -598,7 +580,7 @@ final class ProfileScreenViewModel {
             profileImageURL = try await supabaseService.uploadAvatar(userId: userId, imageData: imageData)
             return true
         } catch {
-            print("[ProfileVM] Failed to upload avatar: \(error)")
+            debugLog("[ProfileVM] Failed to upload avatar: \(error)")
             return false
         }
     }
@@ -609,7 +591,7 @@ final class ProfileScreenViewModel {
             bannerImageURL = try await supabaseService.uploadBanner(userId: userId, imageData: imageData)
             return true
         } catch {
-            print("[ProfileVM] Failed to upload banner: \(error)")
+            debugLog("[ProfileVM] Failed to upload banner: \(error)")
             return false
         }
     }
@@ -638,7 +620,7 @@ final class ProfileScreenViewModel {
             return true
         } catch {
             profileUpdateError = error.localizedDescription
-            print("[ProfileVM] Failed to save profile: \(error)")
+            debugLog("[ProfileVM] Failed to save profile: \(error)")
             return false
         }
     }

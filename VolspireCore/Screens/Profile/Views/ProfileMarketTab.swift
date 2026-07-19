@@ -52,7 +52,8 @@ private extension ProfileMarketTab {
                 // Title on the left, category pill on the far right.
                 HStack(alignment: .top, spacing: 10) {
                     Text(listing.title)
-                        .font(.appHeadline)
+                        // Same style as the home feed's listing titles.
+                        .font(.appFont.trackTitle)
                         .foregroundStyle(.white)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -92,14 +93,16 @@ private extension ProfileMarketTab {
         .buttonStyle(RowHighlightButtonStyle(cornerRadius: 0))
     }
 
-    /// Home-style category tag — a capsule pill at the top right of the row.
+    /// The brand category chip — same treatment as the home feed rows and the
+    /// listing detail (accent gradient, white label).
     func categoryPill(_ listing: ApiListing) -> some View {
         Text(categoryLabel(listing.category))
-            .font(.appLabel)
-            .foregroundStyle(Color.vText2)
+            .font(.appCaption2Semibold)
+            .foregroundStyle(.white)
             .lineLimit(1)
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(Color.vSurface, in: Capsule())
+            .fixedSize()
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(LinearGradient.sendAccent, in: Capsule())
     }
 
     func statusBadge(_ listing: ApiListing) -> some View {
@@ -110,6 +113,7 @@ private extension ProfileMarketTab {
             Text(isOpen ? "Open" : "Closed")
                 .font(.appCaption2Semibold)
                 .foregroundStyle(tint)
+                .fixedSize()
         }
     }
 
@@ -138,6 +142,9 @@ private extension ProfileMarketTab {
             Text("\(count ?? 0)")
                 .font(.appCaptionMedium)
                 .monospacedDigit()
+                // Never compress the counts — sharing a line with the spacer +
+                // status + time squeezed them into clipped glyph slivers.
+                .fixedSize()
         }
         .foregroundStyle(Color.vText3)
     }
@@ -195,7 +202,7 @@ private extension ProfileMarketTab {
                 Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
                 HStack(spacing: 5) {
                     LucideIcon(.download, .xs)
-                    Text("\(pack.downloads.profileCompact) downloads").font(.appCaption2)
+                    Text("\(pack.downloads.compactCount) downloads").font(.appCaption2)
                     if let files = pack.fileCount {
                         Text("· \(files) files").font(.appCaption2).foregroundStyle(Color.vText3.opacity(0.8))
                     }

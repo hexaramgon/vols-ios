@@ -32,14 +32,6 @@ public struct MediaList: Identifiable, Hashable, Equatable, Sendable {
     }
 }
 
-public extension MediaList {
-    static let empty: MediaList = .init(
-        id: .init("empty"),
-        meta: .init(artwork: nil, title: ""),
-        items: []
-    )
-}
-
 /// A unique identifier for a media list (playlist/album).
 public struct MediaListID: Hashable, Equatable, Sendable, CustomStringConvertible {
     public let value: String

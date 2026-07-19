@@ -58,6 +58,7 @@ struct CreatePackScreen: View {
                 .padding(.bottom, 24)
             }
             .scrollDismissesKeyboard(.interactively)
+            .tapToDismissKeyboard()
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomBar
             }
@@ -106,33 +107,19 @@ struct CreatePackScreen: View {
                 statusRow(hint, color: Color.vText3)
             }
 
-            Button {
+            PrimaryButton(
+                viewModel.isEditing ? "Save Changes" : "Publish Pack",
+                busy: isUploading,
+                enabled: viewModel.canPublish
+            ) {
                 Task { await viewModel.publish() }
-            } label: {
-                HStack(spacing: 10) {
-                    if isUploading {
-                        ProgressView()
-                            .tint(.black)
-                    }
-                    Text(isUploading ? (viewModel.isEditing ? "Saving…" : "Uploading…")
-                        : (viewModel.isEditing ? "Save Changes" : "Publish Pack"))
-                        .font(.appHeadline)
-                }
-                .foregroundStyle(.black)
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(.white, in: Capsule())
             }
-            .buttonStyle(.plain)
-            .disabled(!viewModel.canPublish || isUploading)
-            .opacity(viewModel.canPublish && !isUploading ? 1 : 0.3)
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background {
-            // Same chrome tone as the Library header / tab bar (~#121212).
-            Color(white: 0.07)
+            Color.vBar
                 .overlay(alignment: .top) {
                     Rectangle()
                         .fill(Color.vBorder)

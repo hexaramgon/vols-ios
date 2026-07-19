@@ -94,7 +94,13 @@ struct ImageCropperView: View {
                                 .scaledToFit()
                                 .frame(width: boxW, height: boxH)
                         } else {
-                            Color.black.frame(width: boxW, height: boxH)
+                            // Sharp aspect-fit stand-in while the blur-fill renders —
+                            // same placement as the final render, only the letterbox
+                            // bars change when it lands.
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: boxW, height: boxH)
                         }
                     case .crop:
                         ZoomableImageScrollView(image: image, cropper: cropper)
@@ -137,12 +143,17 @@ struct ImageCropperView: View {
         // between giant black gaps).
         .ignoresSafeArea()
         .preferredColorScheme(.dark)
-        // Render the blur-fill up front so switching to Fit is instant and the
-        // preview matches the exported bytes exactly. (Crop-only skips it.)
-        .onAppear {
-            if allowsFitMode, fitImage == nil {
-                fitImage = BlurFill.render(image, size: outputCanvas)
-            }
+        // Render the blur-fill once so the Fit preview matches the exported bytes
+        // exactly. Off the main thread: the Gaussian blur on a full-size photo is
+        // slow enough to freeze the cover presentation (the header and Fit/Crop
+        // toggle drew visibly late). (Crop-only skips it.)
+        .task {
+            guard allowsFitMode, fitImage == nil else { return }
+            let source = image
+            let canvas = outputCanvas
+            fitImage = await Task.detached(priority: .userInitiated) {
+                BlurFill.render(source, size: canvas)
+            }.value
         }
     }
 
@@ -191,6 +202,10 @@ struct ImageCropperView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 9)
                         .background(mode == option ? Color.white : Color.clear, in: Capsule())
+                        // The unselected side's background is clear, and clear
+                        // doesn't hit-test — without this only the text glyphs
+                        // were tappable.
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
@@ -199,7 +214,6 @@ struct ImageCropperView: View {
         .background(Color.white.opacity(0.08), in: Capsule())
         .frame(maxWidth: 260)
         .frame(maxWidth: .infinity)
-        .animation(.easeOut(duration: 0.18), value: mode)
     }
 
     private func done() {

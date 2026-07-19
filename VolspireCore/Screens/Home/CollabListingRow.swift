@@ -25,7 +25,8 @@ struct CollabListingRow: View {
                 VStack(alignment: .leading, spacing: 7) {
                     headerLine
                     Text(listing.title)
-                        .font(.appHeadline)
+                        // Same style as the home track titles, so the feed reads as one.
+                        .font(.appFont.trackTitle)
                         .foregroundStyle(.white)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -54,12 +55,13 @@ struct CollabListingRow: View {
     /// `username · 3h` on the left, the category as a chip on the right.
     private var headerLine: some View {
         HStack(spacing: 6) {
-            Text(listing.author.username)
-                .font(.appCalloutSemibold)
-                .foregroundStyle(.white)
+            // The home track cards' artist treatment: "@name" in grey caption.
+            Text("@\(listing.author.username)")
+                .font(.appFont.trackSubtitle)
+                .foregroundStyle(Color.vText3)
                 .lineLimit(1)
             Text("· \(MessageTime.ago(MessageTime.parse(listing.createdAt)))")
-                .font(.appCaption)
+                .font(.appFont.trackSubtitle)
                 .foregroundStyle(Color.vText3)
                 .lineLimit(1)
             Spacer(minLength: 8)
@@ -70,11 +72,12 @@ struct CollabListingRow: View {
     private var categoryChip: some View {
         Text(listing.category.replacingOccurrences(of: "_", with: " ").capitalized)
             .font(.appCaption2Semibold)
-            .foregroundStyle(Color.vText2)
+            .foregroundStyle(.white)
             .lineLimit(1)
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background(Color.vSurface, in: Capsule())
+            // Brand accent — matches the listing detail's category chip.
+            .background(LinearGradient.sendAccent, in: Capsule())
     }
 
     private func tagRow(_ tags: [String]) -> some View {
@@ -107,17 +110,10 @@ struct CollabListingRow: View {
     }
 
     private var avatar: some View {
-        Group {
-            if let url = listing.author.profileImageUrl.flatMap({ URL(string: $0) }) {
-                KFImage(url).downsampled(to: 44).resizable().scaledToFill()
-            } else {
-                Text(String(listing.author.username.first ?? "?").uppercased())
-                    .font(.appHeadline)
-                    .foregroundStyle(Color.vText2)
-            }
-        }
-        .frame(width: 44, height: 44)
-        .background(Color.vSurface)
-        .clipShape(Circle())
+        AvatarView(urlString: listing.author.profileImageUrl, name: listing.author.username, size: 38)
+            // Optically align the circle's top with the "@name" cap height —
+            // the taller category chip centers the username a few points below
+            // the row's geometric top, so without this the avatar rides high.
+            .padding(.top, 4)
     }
 }

@@ -11,10 +11,8 @@ import Services
 
 @MainActor
 class Dependencies: Observable {
-    let apiService: APIService
     let supabaseService: SupabaseService
     let authManager: AuthManager
-    let dataController: DataController
     let mediaState: MediaState
     let mediaPlayer: MediaPlayer
     let playerController: PlayerController
@@ -24,20 +22,16 @@ class Dependencies: Observable {
     let listenAnalytics: ListenAnalyticsTracker
 
     init(
-        apiService: APIService,
         supabaseService: SupabaseService,
         authManager: AuthManager,
-        dataController: DataController,
         mediaState: MediaState,
         mediaPlayer: MediaPlayer,
         playerController: PlayerController,
         analytics: AnalyticsService,
         listenAnalytics: ListenAnalyticsTracker
     ) {
-        self.apiService = apiService
         self.supabaseService = supabaseService
         self.authManager = authManager
-        self.dataController = dataController
         self.mediaState = mediaState
         self.mediaPlayer = mediaPlayer
         self.playerController = playerController
@@ -67,10 +61,8 @@ extension Dependencies {
         let playerController = PlayerController()
         playerController.analytics = analytics
         return Dependencies(
-            apiService: APIService(baseURL: ""),
             supabaseService: SupabaseService(),
             authManager: AuthManager(),
-            dataController: DataController(),
             mediaState: DefaultMediaState.stub,
             mediaPlayer: mediaPlayer,
             playerController: playerController,
@@ -80,7 +72,6 @@ extension Dependencies {
     }()
 
     static func make() -> Dependencies {
-        let dataController = DataController()
         let mediaState = DefaultMediaState()
         let mediaPlayer = MediaPlayer()
         mediaPlayer.mediaState = mediaState
@@ -89,7 +80,6 @@ extension Dependencies {
         playerController.player = mediaPlayer
         playerController.mediaState = mediaState
 
-        let apiService = APIService(baseURL: "https://volspire.ru")
         let supabaseService = SupabaseService()
         let authManager = AuthManager()
 
@@ -101,10 +91,8 @@ extension Dependencies {
         let listenAnalytics = ListenAnalyticsTracker(player: mediaPlayer, analytics: analytics)
 
         return Dependencies(
-            apiService: apiService,
             supabaseService: supabaseService,
             authManager: authManager,
-            dataController: dataController,
             mediaState: mediaState,
             mediaPlayer: mediaPlayer,
             playerController: playerController,

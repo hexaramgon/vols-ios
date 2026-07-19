@@ -30,6 +30,10 @@ struct NowPlayingCommentsPanel: View {
     /// Comment whose options sheet (report / delete) is showing — opened by a
     /// long-press on the row, or the own-comment "…".
     @State private var optionsComment: ApiTrackComment?
+    /// Staged when "Report" is tapped; presented once the options sheet has
+    /// dismissed (avoids a sheet-over-sheet transition).
+    @State private var pendingReportComment: ApiTrackComment?
+    @State private var reportingComment: ApiTrackComment?
 
     /// Non-nil when a workspace file is playing — its comments load instead of track ones.
     private var currentFileId: String? { controller.currentFileId }
@@ -52,13 +56,27 @@ struct NowPlayingCommentsPanel: View {
         // runs on expand (e.g. track metadata), or it won't show until a swipe.
         .task(id: currentFileId ?? currentTrackId) { await model.loadComments(trackId: currentTrackId, fileId: currentFileId) }
         .task { await model.loadCurrentUser() }
-        .sheet(item: $optionsComment) { comment in
+        .sheet(item: $optionsComment, onDismiss: {
+            if let comment = pendingReportComment {
+                pendingReportComment = nil
+                reportingComment = comment
+            }
+        }) { comment in
             CommentOptionsSheet(
                 comment: comment,
                 isOwn: model.isOwn(comment),
                 onReply: { model.replyingTo = comment },
-                onReport: { reportComment(comment) },
+                onReport: { pendingReportComment = comment },
                 onDelete: { model.delete(commentId: comment.commentId, trackId: currentTrackId, fileId: currentFileId) }
+            )
+        }
+        .sheet(item: $reportingComment) { comment in
+            // This panel shows track comments or workspace-file comments; report
+            // each against its own target type so moderation matches.
+            ReportSheet(
+                targetType: currentFileId != nil ? .fileComment : .trackComment,
+                targetId: comment.commentId,
+                subject: comment.user.username.map { "@\($0)" } ?? "Comment"
             )
         }
     }
@@ -181,10 +199,7 @@ struct NowPlayingCommentsPanel: View {
                         .font(.appCaption2)
                         .foregroundStyle(.white.opacity(0.3))
                 }
-                Text(comment.content)
-                    .font(.appCalloutRegular)
-                    .foregroundStyle(.white.opacity(0.9))
-                    .fixedSize(horizontal: false, vertical: true)
+                ExpandableText(comment.content)
 
                 if !isReply {
                     Button("Reply") { model.replyingTo = comment }
@@ -216,18 +231,7 @@ struct NowPlayingCommentsPanel: View {
 
     @ViewBuilder
     private func avatar(_ urlString: String?, name: String?, size: CGFloat) -> some View {
-        Group {
-            if let urlString, let url = URL(string: urlString) {
-                KFImage(url).downsampled(to: size).resizable().scaledToFill()
-            } else {
-                Text((name?.first).map { String($0).uppercased() } ?? "?")
-                    .font(.appFootnoteSemibold)
-                    .foregroundStyle(.white.opacity(0.7))
-            }
-        }
-        .frame(width: size, height: size)
-        .background(Color.white.opacity(0.15))
-        .clipShape(Circle())
+        AvatarView(urlString: urlString, name: name, size: size)
     }
 
     /// Navigates to a commenter's profile. Setting `pendingProfileNavigation`
@@ -244,18 +248,10 @@ struct NowPlayingCommentsPanel: View {
         controller.pendingProfileNavigation = userId
     }
 
-    /// Reports a comment. Placeholder — there's no report backend yet (neither iOS
-    /// nor web has a report RPC); wire this to one when it exists.
-    private func reportComment(_ comment: ApiTrackComment) {
-        print("[Comments] report requested: \(comment.commentId)")
-    }
-
-    /// Parses an ISO-8601 date string and returns a relative time label.
+    /// Parses an ISO-8601 date string and returns a relative time label
+    /// in the app-wide compact vocabulary ("5m" / "2h").
     private func relativeTime(from dateString: String) -> String {
-        guard let date = MessageTime.parse(dateString) else { return "" }
-        let relative = RelativeDateTimeFormatter()
-        relative.unitsStyle = .abbreviated
-        return relative.localizedString(for: date, relativeTo: .now)
+        MessageTime.ago(MessageTime.parse(dateString))
     }
 }
 
@@ -337,16 +333,5 @@ private struct CommentOptionsSheet: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Shared card background
-
-extension View {
-    /// Card backing shared by the now-playing comments panel and the info-strip
-    /// About/Credits panel. A plain light translucent grey (matching the
-    /// "Comments" button) — no material, so it reads the same everywhere.
-    func nowPlayingCardBackground() -> some View {
-        background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }

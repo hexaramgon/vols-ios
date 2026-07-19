@@ -9,6 +9,7 @@
 import Foundation
 import Observation
 import Services
+import SharedUtilities
 
 /// The notification toggles surfaced in Settings (mirrors the web's
 /// `notificationItems`). `messages` is preserved by the RPC but not shown here.
@@ -58,13 +59,6 @@ enum NotificationPref: String, CaseIterable, Identifiable {
 final class SettingsViewModel {
     private(set) var prefs: [String: Bool] = [:]
     private(set) var prefsLoaded = false
-    var prefsError: String?
-
-    // Account summary for the settings header.
-    private(set) var accountUsername = ""
-    private(set) var accountAvatarURL: URL?
-    private(set) var accountType: String?
-    private(set) var accountLoaded = false
 
     private let service: SupabaseService
 
@@ -74,20 +68,6 @@ final class SettingsViewModel {
 
     func isOn(_ pref: NotificationPref) -> Bool {
         prefs[pref.rawValue] ?? true
-    }
-
-    /// Loads the signed-in user's name + avatar for the settings header.
-    func loadAccount(userId: String?) async {
-        guard let userId, !userId.isEmpty else { return }
-        do {
-            let profile = try await service.getUserProfile(userId: userId)
-            accountUsername = profile.username ?? ""
-            accountAvatarURL = profile.profileImageUrl.flatMap { URL(string: $0) }
-            accountType = profile.accountType
-        } catch {
-            print("[SettingsVM] Failed to load account: \(error)")
-        }
-        accountLoaded = true
     }
 
     func loadPreferences() async {
@@ -100,7 +80,7 @@ final class SettingsViewModel {
                 prefs = Dictionary(uniqueKeysWithValues: NotificationPref.allCases.map { ($0.rawValue, true) })
                 prefsLoaded = true
             }
-            print("[SettingsVM] Failed to load notification prefs: \(error)")
+            debugLog("[SettingsVM] Failed to load notification prefs: \(error)")
         }
     }
 
@@ -108,13 +88,11 @@ final class SettingsViewModel {
     func toggle(_ pref: NotificationPref, to value: Bool) async {
         let previous = prefs[pref.rawValue] ?? true
         prefs[pref.rawValue] = value
-        prefsError = nil
         do {
             prefs = Self.dictionary(from: try await service.updateNotificationPreference(key: pref.rawValue, value: value))
         } catch {
             prefs[pref.rawValue] = previous
-            prefsError = "Couldn't save. Try again."
-            print("[SettingsVM] Failed to update notification pref: \(error)")
+            debugLog("[SettingsVM] Failed to update notification pref: \(error)")
         }
     }
 

@@ -497,7 +497,7 @@ final class UploadTrackViewModel {
                 .map { .init(tier: $0.rawValue, price: Double(tierPrice[$0] ?? "") ?? 0) }
 
             let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
-            try await supabaseService.createTrackV2(
+            let newTrackId = try await supabaseService.createTrackV2(
                 userId: userId,
                 title: title.trimmingCharacters(in: .whitespaces),
                 description: trimmedDescription.isEmpty ? nil : trimmedDescription,
@@ -516,6 +516,13 @@ final class UploadTrackViewModel {
                 lookingForCollab: lookingForCollab
             )
             uploadState = .success
+            NotificationCenter.default.post(name: .ownContentPosted, object: nil, userInfo: [
+                "confirmationTitle": "Track uploaded",
+                "confirmationSubtitle": title.trimmingCharacters(in: .whitespaces),
+                // Once the confirmation card dismisses, the app opens the new
+                // track in the expanded player (see RootTabView).
+                "trackId": newTrackId,
+            ])
         } catch {
             uploadState = .error(error.localizedDescription)
         }

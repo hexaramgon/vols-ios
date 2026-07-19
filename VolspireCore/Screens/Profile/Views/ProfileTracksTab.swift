@@ -69,7 +69,7 @@ struct ProfileTracksTab: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.appBodyLargeBold)
+            .font(.appFont.sectionTitle)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -82,10 +82,10 @@ struct ProfileTracksTab: View {
                 .frame(width: 64, height: 64)
             VStack(alignment: .leading, spacing: 4) {
                 Text(track.title)
-                    .font(.appHeadline).foregroundStyle(.white).lineLimit(1)
+                    .font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
                 HStack(spacing: 4) {
                     Image(systemName: "play.fill").font(.system(size: 9))
-                    Text("\(track.streams.formatted()) streams").font(.appFootnote)
+                    Text("\(track.streams.formatted()) streams").font(.appFont.trackSubtitle)
                 }
                 .foregroundStyle(Color.vText3)
             }
@@ -123,7 +123,7 @@ struct ProfileTracksTab: View {
     private func streamsTrailing(_ streams: Int) -> some View {
         HStack(spacing: 4) {
             Image(systemName: "play.fill").font(.system(size: 8))
-            Text(streams.profileCompact)
+            Text(streams.compactCount)
         }
         .font(.appCaption)
         .foregroundStyle(Color.vText3)

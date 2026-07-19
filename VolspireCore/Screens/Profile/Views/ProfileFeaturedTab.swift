@@ -36,10 +36,9 @@ struct ProfileFeaturedTab: View {
                     dimmed: track.isUnavailable
                 ) {
                     if track.isUnavailable {
-                        Text(track.unavailableReason == "delisted" ? "Unavailable" : "Private")
-                            .font(.appCaption).foregroundStyle(.white.opacity(0.4)).lineLimit(1)
+                        roleChip(track.unavailableReason == "delisted" ? "Unavailable" : "Private", dimmed: true)
                     } else if !track.role.isEmpty {
-                        Text(track.role).font(.appFootnote).foregroundStyle(.white.opacity(0.4)).lineLimit(1)
+                        roleChip(track.role.capitalized)
                     }
                 }
                 .opacity(track.isUnavailable ? 0.55 : 1)
@@ -47,5 +46,19 @@ struct ProfileFeaturedTab: View {
             }
         }
         .padding(.horizontal, 8)
+    }
+
+    /// The credited role as a quiet chip — same scale as the category chips
+    /// but neutral (roles are metadata, not a brand accent). Tombstones
+    /// ("Private"/"Unavailable") share the shape, dimmed.
+    private func roleChip(_ text: String, dimmed: Bool = false) -> some View {
+        Text(text)
+            .font(.appCaption2Semibold)
+            .foregroundStyle(dimmed ? Color.vText3 : Color.vText2)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(Color.white.opacity(0.07), in: Capsule())
     }
 }

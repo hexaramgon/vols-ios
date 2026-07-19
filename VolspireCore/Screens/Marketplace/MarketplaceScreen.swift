@@ -433,7 +433,7 @@ private extension MarketplaceScreen {
             title: listing.title,
             subtitle: "@\(listing.author.username)",
             metaIcon: .users,
-            metaValue: "\((listing.responseCount ?? 0).profileCompact)"
+            metaValue: "\((listing.responseCount ?? 0).compactCount)"
         ) { router.navigateToCollabListing(listing) }
     }
 
@@ -460,13 +460,7 @@ private extension MarketplaceScreen {
         }
     }
 
-    func isoDate(_ s: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: s)
-    }
+    func isoDate(_ s: String) -> Date? { MessageTime.parse(s) }
 }
 
 // MARK: - Cards
@@ -477,7 +471,7 @@ private extension MarketplaceScreen {
                    gradient: TailwindGradient.colors(from: pack.gradient),
                    topLeft: pack.packType ?? "Pack", topRight: priceLabel(pack.price),
                    title: pack.name, subtitle: "@\(pack.creator?.username ?? "unknown")",
-                   metaIcon: .download, metaValue: "\((pack.downloads ?? 0).profileCompact)") {
+                   metaIcon: .download, metaValue: "\((pack.downloads ?? 0).compactCount)") {
             router.navigateToMarketplacePack(pack)
         }
     }
@@ -593,9 +587,7 @@ private extension MarketplaceScreen {
     }
 
     func priceLabel(_ price: Double?) -> String {
-        let p = price ?? 0
-        if p <= 0 { return "Free" }
-        return p == p.rounded() ? "$\(Int(p))" : String(format: "$%.2f", p)
+        (price ?? 0).priceLabel(free: true)
     }
 }
 

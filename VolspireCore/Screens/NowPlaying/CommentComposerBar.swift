@@ -293,18 +293,7 @@ struct CommentComposerBar: View {
 
     @ViewBuilder
     private func avatar(_ urlString: String?, name: String?, size: CGFloat) -> some View {
-        Group {
-            if let urlString, let url = URL(string: urlString) {
-                KFImage(url).downsampled(to: size).resizable().scaledToFill()
-            } else {
-                Text((name?.first).map { String($0).uppercased() } ?? "?")
-                    .font(.appFootnoteSemibold)
-                    .foregroundStyle(.white.opacity(0.7))
-            }
-        }
-        .frame(width: size, height: size)
-        .background(Color.white.opacity(0.15))
-        .clipShape(Circle())
+        AvatarView(urlString: urlString, name: name, size: size)
     }
 
     /// Frosted, darkened bar that extends far down so the gap to the keyboard stays

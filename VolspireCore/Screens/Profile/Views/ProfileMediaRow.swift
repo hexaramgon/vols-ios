@@ -50,7 +50,7 @@ struct ProfileMediaRow<Trailing: View>: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     Text(title)
-                        .font(.appCallout)
+                        .font(.appFont.trackTitle)
                         .foregroundStyle(isActive ? .white : .white.opacity(0.92))
                         .lineLimit(1)
                     if lock {
@@ -58,8 +58,8 @@ struct ProfileMediaRow<Trailing: View>: View {
                     }
                 }
                 Text(subtitle)
-                    .font(.appFootnote)
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(.appFont.trackSubtitle)
+                    .foregroundStyle(Color.vText3)
                     .lineLimit(1)
             }
 

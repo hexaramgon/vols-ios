@@ -11,6 +11,7 @@
 import DesignSystem
 import Services
 import SwiftUI
+import SharedUtilities
 
 struct AddToPlaylistSheet: View {
     let trackId: String
@@ -111,7 +112,7 @@ struct AddToPlaylistSheet: View {
             return true
         } catch {
             errorText = "Couldn't create the playlist. Please try again."
-            print("[AddToPlaylistSheet] create failed: \(error)")
+            debugLog("[AddToPlaylistSheet] create failed: \(error)")
             return false
         }
     }
@@ -125,8 +126,8 @@ struct AddToPlaylistSheet: View {
                 ArtworkView(cover(playlist.coverUrl).map { .webImage($0) } ?? .placeholder(name: playlist.title), cornerRadius: 9)
                     .frame(width: 48, height: 48)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(playlist.title).font(.appCalloutSemibold).foregroundStyle(.white).lineLimit(1)
-                    Text("\(trackCount(playlist)) tracks").font(.appCaption).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                    Text(playlist.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
+                    Text("\(trackCount(playlist)) tracks").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 if addingId == playlist.playlistId {
@@ -160,7 +161,7 @@ struct AddToPlaylistSheet: View {
                 countAdjust[id, default: 0] += 1
             }
         } catch {
-            print("[AddToPlaylistSheet] toggle failed: \(error)")
+            debugLog("[AddToPlaylistSheet] toggle failed: \(error)")
         }
         addingId = nil
     }

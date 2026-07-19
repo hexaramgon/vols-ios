@@ -13,6 +13,7 @@ import DesignSystem
 import Kingfisher
 import Services
 import SwiftUI
+import SharedUtilities
 
 struct MarketplaceDetailScreen: View {
     @Environment(Router.self) private var router
@@ -130,13 +131,7 @@ struct MarketplaceDetailScreen: View {
     }
 
     private var backButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 2, y: 1) // legible over the cover
-        }
-        .buttonStyle(.plain)
+        BackButton()
     }
 
     /// Crossfade progress for the title bar as the cover scrolls away.
@@ -148,10 +143,10 @@ struct MarketplaceDetailScreen: View {
 
     /// Solid bar that fades in behind the centred title + back button on scroll.
     private var collapsingTitleBar: some View {
-        Color(white: 0.1)
+        Color.vBar
             .frame(height: ViewConst.safeAreaInsets.top + 44)
             .overlay(alignment: .bottom) {
-                Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5)
+                Rectangle().fill(Color.vBorder).frame(height: 0.5)
             }
             .opacity(titleBarOpacity)
             .ignoresSafeArea(edges: .top)
@@ -256,7 +251,7 @@ private extension MarketplaceDetailScreen {
                 }
                 if canRemove {
                     optionRow(systemImage: "trash", title: "Remove from marketplace",
-                              tint: Color(red: 1, green: 0.37, blue: 0.37)) {
+                              tint: Color.vDestructive) {
                         pendingRemove = true
                         showOptions = false
                     }
@@ -311,7 +306,7 @@ private extension MarketplaceDetailScreen {
             )
             dismiss()
         } catch {
-            print("[MarketplaceDetail] remove failed: \(error)")
+            debugLog("[MarketplaceDetail] remove failed: \(error)")
         }
     }
 }
@@ -400,13 +395,13 @@ private extension MarketplaceDetailScreen {
         var out: [MarketplaceMetaStat] = []
         switch item {
         case let .pack(p):
-            if let dl = packDetail?.downloads ?? p.downloads { out.append(.init(icon: .download, label: "\(fmtCount(dl)) downloads")) }
+            if let dl = packDetail?.downloads ?? p.downloads { out.append(.init(icon: .download, label: "\(dl.compactCount) downloads")) }
             if let f = packDetail?.fileCount ?? p.fileCount { out.append(.init(icon: .package, label: "\(f) files")) }
-            if let l = packDetail?.likes, l > 0 { out.append(.init(icon: .heart, label: "\(fmtCount(l)) likes")) }
+            if let l = packDetail?.likes, l > 0 { out.append(.init(icon: .heart, label: "\(l.compactCount) likes")) }
         case let .service(s):
             if let dt = serviceDetail?.deliveryTimeDays ?? s.deliveryTimeDays { out.append(.init(icon: .clock, label: "\(dt)-day delivery")) }
             if let rev = serviceDetail?.revisions { out.append(.init(icon: .refreshCw, label: "\(rev) revisions")) }
-            if let l = serviceDetail?.likes, l > 0 { out.append(.init(icon: .heart, label: "\(fmtCount(l)) likes")) }
+            if let l = serviceDetail?.likes, l > 0 { out.append(.init(icon: .heart, label: "\(l.compactCount) likes")) }
         }
         if let r = avgRating, r > 0 {
             let label = reviewCount.map { "\(String(format: "%.1f", r)) (\($0))" } ?? String(format: "%.1f", r)
@@ -546,31 +541,13 @@ private extension MarketplaceDetailScreen {
     }
 
     var sellerAvatar: some View {
-        Group {
-            if let s = creatorAvatar, let url = URL(string: s) {
-                KFImage(url).downsampled(to: 44).resizable().scaledToFill()
-            } else {
-                Text(String(creatorName.first ?? "?").uppercased())
-                    .font(.appCalloutBold).foregroundStyle(Color.vText2)
-            }
-        }
-        .frame(width: 44, height: 44)
-        .background(Color.white.opacity(0.08))
-        .clipShape(Circle())
+        AvatarView(urlString: creatorAvatar, name: creatorName, size: 44)
     }
 
     var ctaButton: some View {
-        Button {
+        PrimaryButton("View Creator Profile", enabled: creatorId != nil) {
             if let id = creatorId { router.navigateToProfile(userId: id) }
-        } label: {
-            Text("View Creator Profile")
-                .font(.appHeadline).foregroundStyle(.black)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 15)
-                .background(Color.white, in: Capsule())
         }
-        .buttonStyle(.plain)
-        .disabled(creatorId == nil)
     }
 }
 
@@ -580,7 +557,7 @@ private extension MarketplaceDetailScreen {
     func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title.uppercased())
-                .font(.appCaptionBold).tracking(0.8)
+                .font(.appFont.sectionLabel).tracking(0.6)
                 .foregroundStyle(Color.vText3)
             content()
         }
@@ -902,11 +879,7 @@ private extension MarketplaceDetailScreen {
 
 private extension MarketplaceDetailScreen {
     func priceText(_ price: Double?, currency: String?) -> String {
-        let p = price ?? 0
-        if p <= 0 { return "Free" }
-        let num = p == p.rounded() ? "\(Int(p))" : String(format: "%.2f", p)
-        if let currency, currency.uppercased() != "USD" { return "\(num) \(currency.uppercased())" }
-        return "$\(num)"
+        (price ?? 0).priceLabel(currency: currency, free: true)
     }
 
     /// The "What's included" checklist, mirroring the web pack sidebar.
@@ -930,13 +903,6 @@ private extension MarketplaceDetailScreen {
         }
     }
 
-    func fmtCount(_ n: Int) -> String {
-        switch n {
-        case 1_000_000...: return String(format: "%.1fM", Double(n) / 1_000_000)
-        case 1_000...: return String(format: "%.0fK", Double(n) / 1_000)
-        default: return "\(n)"
-        }
-    }
 
     func formatBytes(_ bytes: Int) -> String {
         let kb = Double(bytes) / 1024

@@ -59,15 +59,20 @@ private extension AudioEffectsSheet {
 
     var speedSlider: some View {
         VStack(spacing: 8) {
-            Slider(
-                value: Binding(get: { speedValue }, set: { localSpeed = $0 }),
+            // The player-style bar, not a stock `Slider` (see `.inlineScrub`);
+            // the old `step: 0.01` becomes rounding in the binding's setter.
+            ElasticSlider(
+                value: Binding(
+                    get: { Double(speedValue) },
+                    set: { localSpeed = Float(($0 / 0.01).rounded() * 0.01) }
+                ),
                 in: 0.25 ... 2.0,
-                step: 0.01,
-                onEditingChanged: { editing in
-                    if !editing, let val = localSpeed { commitSpeed(val) }
+                onActive: { active in
+                    if !active, let val = localSpeed { commitSpeed(val) }
                 }
             )
-            .tint(.white)
+            .sliderStyle(.inlineScrub)
+            .frame(height: 22)
             // Tick as the speed moves through each 0.05× step (quantised so it's a
             // gentle ratchet, not a continuous buzz).
             .sensoryFeedback(.selection, trigger: Int((speedValue / 0.05).rounded()))

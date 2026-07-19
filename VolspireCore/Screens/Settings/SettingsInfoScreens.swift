@@ -38,18 +38,50 @@ struct SettingsDoc {
 /// last-updated line, then the sections.
 struct SettingsDocScreen: View {
     let doc: SettingsDoc
+    /// True when presented modally (the signup Terms/Privacy links): sheet
+    /// chrome — drag indicator + a floating X — instead of the pushed-screen
+    /// nav bar, which pads for the window's status-bar inset and renders a
+    /// dead band + stray back chevron inside a sheet.
+    var inSheet = false
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(PlayerController.self) private var playerController
+    // Optional: also presented from the pre-login signup flow, which has no
+    // PlayerController in the environment.
+    @Environment(PlayerController.self) private var playerController: PlayerController?
 
     /// Clears the custom tab bar + home indicator + (when present) the floating
     /// mini-player — none of which are part of this pushed screen's safe area.
     private var bottomInset: CGFloat {
-        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
+        let mini = (playerController?.display.title.isEmpty ?? true) ? 0 : ViewConst.compactNowPlayingHeight + 16
         return ViewConst.safeAreaInsets.bottom + 52 + mini
     }
 
+    @ViewBuilder
     var body: some View {
+        if inSheet {
+            docScroll(topPadding: 24, bottomPadding: 32)
+                .overlay(alignment: .topTrailing) {
+                    Button { dismiss() } label: {
+                        LucideIcon(.x, .md)
+                            .foregroundStyle(.white.opacity(0.8))
+                            .frame(width: 32, height: 32)
+                            .background(Color.white.opacity(0.08), in: Circle())
+                            .padding(6) // pads the hit area out to 44pt
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 8)
+                    .padding(.top, 8)
+                }
+                .presentationDragIndicator(.visible)
+                .sheetBackground()
+        } else {
+            docScroll(topPadding: 6, bottomPadding: bottomInset)
+                .appNavBar(title: doc.title) { dismiss() }
+        }
+    }
+
+    private func docScroll(topPadding: CGFloat, bottomPadding: CGFloat) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text(doc.eyebrow.uppercased())
@@ -90,11 +122,10 @@ struct SettingsDocScreen: View {
                 }
             }
             .padding(.horizontal, ViewConst.screenPaddings)
-            .padding(.top, 6)
-            .padding(.bottom, bottomInset)
+            .padding(.top, topPadding)
+            .padding(.bottom, bottomPadding)
         }
         .scrollIndicators(.hidden)
-        .appNavBar(title: doc.title) { dismiss() }
     }
 
     private func bodyText(_ text: String) -> some View {
@@ -207,16 +238,18 @@ struct HelpCenterScreen: View {
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText2)
 
+            // PrimaryButton .inline metrics (42pt, appSubheadlineSemibold) with a
+            // leading icon the component doesn't model.
             Button {
                 openURL(URL(string: "mailto:management@volspire.com")!)
             } label: {
                 HStack(spacing: 8) {
-                    LucideIcon(.mail, .md)
-                    Text("Email support").font(.appCalloutSemibold)
+                    LucideIcon(.mail, .sm)
+                    Text("Email support").font(.appSubheadlineSemibold)
                 }
                 .foregroundStyle(.black)
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                .frame(height: 42)
                 .background(.white, in: Capsule())
             }
             .buttonStyle(.plain)
@@ -302,7 +335,7 @@ enum HelpContent {
         ),
         FAQ(
             question: "How do I report harassment, abuse, or another safety issue?",
-            answer: "Email management@volspire.com and include the username, track URL, or message thread, plus a brief description of what happened. We review every report and act on policy violations — see our Terms for the full list of prohibited content.",
+            answer: "Tap the “…” menu on any track, comment, profile, message, or listing and choose Report, then pick a reason. You can also Block someone from their profile or a conversation to instantly hide their content and stop them from contacting you. We review every report and act on violations within 24 hours. For anything urgent, you can still email management@volspire.com.",
             category: "Privacy & Safety"
         ),
     ]
@@ -314,7 +347,7 @@ extension SettingsDoc {
     static let terms = SettingsDoc(
         eyebrow: "Legal",
         title: "Terms of Service",
-        updated: "May 30, 2026",
+        updated: "July 14, 2026",
         sections: [
             Section(title: "1. Acceptance of Terms", body: """
             By creating an account or using Volspire (the "Platform"), you agree to be bound by these Terms of Service ("Terms"). If you do not agree to these Terms, do not use the Platform.
@@ -363,6 +396,8 @@ extension SettingsDoc {
             • Is illegal under any applicable local, state, national, or international law
 
             Uploading copyrighted material without authorization is a serious violation of these Terms and of applicable copyright law, including the Digital Millennium Copyright Act (DMCA). We will respond to valid takedown notices and may remove infringing content, suspend repeat infringers, and cooperate with rights holders and law enforcement.
+
+            ZERO TOLERANCE. Volspire has zero tolerance for objectionable content and for abusive behavior. Content that any user reports as objectionable — including harassment, hate speech, sexual content, content that sexualizes or endangers minors, or threats of violence — is reviewed and, where it violates these Terms, removed within 24 hours, and the responsible account may be suspended or permanently terminated. You can report content, or block another user, at any time from within the app.
             """),
             Section(title: "7. Content Removal and Account Suspension", body: """
             Volspire reserves the right — but is not obligated — to review, remove, or disable access to any User Content at any time, for any reason, with or without notice, including but not limited to content that we determine in our sole discretion violates these Terms, infringes third-party rights, or is otherwise harmful to users or the Platform.

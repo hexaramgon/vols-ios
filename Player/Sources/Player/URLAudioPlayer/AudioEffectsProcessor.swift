@@ -16,15 +16,15 @@ import AVFoundation
 import Foundation
 
 @MainActor
-public final class AudioEffectsProcessor {
-    public private(set) var currentEffects: AudioEffects = .default
+final class AudioEffectsProcessor {
+    private(set) var currentEffects: AudioEffects = .default
 
-    public init() {}
+    init() {}
 
     /// Apply effects across the VariSpeed + TimePitch pair. Only one node is
     /// ever non-neutral; the unused node is reset to 1.0 first so speed is never
     /// momentarily applied twice while switching modes.
-    public func apply(_ effects: AudioEffects, variSpeed: VariSpeed, timePitch: TimePitch) {
+    func apply(_ effects: AudioEffects, variSpeed: VariSpeed, timePitch: TimePitch) {
         currentEffects = effects
         let rate = AUValue(effects.speed)
 
@@ -42,12 +42,12 @@ public final class AudioEffectsProcessor {
     }
 
     /// Re-apply the current effects (e.g. after resuming or seeking).
-    public func reapply(variSpeed: VariSpeed, timePitch: TimePitch) {
+    func reapply(variSpeed: VariSpeed, timePitch: TimePitch) {
         apply(currentEffects, variSpeed: variSpeed, timePitch: timePitch)
     }
 
     /// Effective playback rate (speed), used to keep the muted video layer in sync.
-    public var playbackRate: Float {
+    var playbackRate: Float {
         currentEffects.speed
     }
 }

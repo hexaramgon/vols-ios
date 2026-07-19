@@ -10,6 +10,7 @@ import DesignSystem
 import Services
 import SwiftUI
 import UniformTypeIdentifiers
+import SharedUtilities
 
 private enum FolderAction { case edit, members, delete }
 
@@ -59,7 +60,7 @@ struct FolderContentsScreen: View {
             case let .success(urls):
                 viewModel.enqueueUploads(urls: urls)
             case let .failure(error):
-                print("[FolderContents] File picker error: \(error)")
+                debugLog("[FolderContents] File picker error: \(error)")
             }
         }
         .alert("Something went wrong", isPresented: .init(
@@ -332,13 +333,8 @@ private extension FolderContentsScreen {
     }
 
     func stateView(icon: LucideIcon.Name, title: String, message: String) -> some View {
-        VStack(spacing: 10) {
-            LucideIcon(icon, .hero).foregroundStyle(Color.vText3)
-            Text(title).font(.appTitle3).foregroundStyle(.white)
-            Text(message).font(.appSubheadline).foregroundStyle(Color.vText2).multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.55)
-        .padding(.horizontal, 40)
+        EmptyStateView(icon: icon, title: title, message: message)
+            .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.55)
     }
 }
 
@@ -360,7 +356,7 @@ private extension FolderContentsScreen {
                 folderRow(icon: .users, title: "Manage members") {
                     pendingAction = .members; viewModel.showOptions = false
                 }
-                folderRow(icon: .trash2, title: "Delete folder", tint: Color(red: 1, green: 0.37, blue: 0.37)) {
+                folderRow(icon: .trash2, title: "Delete folder", tint: Color.vDestructive) {
                     pendingAction = .delete; viewModel.showOptions = false
                 }
             }
@@ -407,7 +403,7 @@ private extension FolderContentsScreen {
                 folderRow(icon: .share2, title: "Share") {
                     shareFile(file)
                 }
-                folderRow(icon: .trash2, title: "Delete", tint: Color(red: 1, green: 0.37, blue: 0.37)) {
+                folderRow(icon: .trash2, title: "Delete", tint: Color.vDestructive) {
                     // Stage + close the sheet; the confirmation dialog presents
                     // from the screen once the sheet is gone (see onDismiss).
                     fileToDelete = file
@@ -446,13 +442,7 @@ private extension FolderContentsScreen {
         AnalyticsService.shared?.log(.shareClicked, metadata: ["kind": "file", "method": "share_sheet"])
         let items: [Any] = (file.fileUrl ?? file.trackAudioUrl).flatMap { URL(string: $0) }.map { [$0] }
             ?? [file.name]
-        let activityVC = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let root = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController else { return }
-        var presenter = root
-        while let presented = presenter.presentedViewController { presenter = presented }
-        activityVC.popoverPresentationController?.sourceView = presenter.view
-        presenter.present(activityVC, animated: true)
+        UIApplication.presentActivitySheet(items)
     }
 
     /// Runs the chosen action once the options sheet finishes dismissing.
@@ -597,16 +587,16 @@ private struct ManageMembersSheet: View {
                 Spacer(minLength: 8)
                 if isOwnerMember {
                     HStack(spacing: 4) {
-                        Image(systemName: "crown.fill").font(.system(size: 10)).foregroundStyle(Color(red: 1, green: 0.84, blue: 0))
-                        Text("Owner").font(.appLabel).foregroundStyle(Color(red: 1, green: 0.84, blue: 0))
+                        Image(systemName: "crown.fill").font(.system(size: 10)).foregroundStyle(Color.vOwnerGold)
+                        Text("Owner").font(.appLabel).foregroundStyle(Color.vOwnerGold)
                     }
                     .padding(.horizontal, 9).padding(.vertical, 5)
-                    .background(Color(red: 1, green: 0.84, blue: 0).opacity(0.12), in: Capsule())
+                    .background(Color.vOwnerGold.opacity(0.12), in: Capsule())
                 } else if viewModel.memberActionId == member.userId {
                     ProgressView().controlSize(.small).tint(.white)
                 } else {
                     Button { Task { await viewModel.removeMember(member) } } label: {
-                        LucideIcon(.circleX, .lg).foregroundStyle(Color(red: 1, green: 0.37, blue: 0.37))
+                        LucideIcon(.circleX, .lg).foregroundStyle(Color.vDestructive)
                     }
                     .buttonStyle(.plain)
                 }
@@ -634,20 +624,8 @@ private struct ManageMembersSheet: View {
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
     private func avatar(_ url: URL?) -> some View {
-        Group {
-            if let url {
-                ArtworkView(.webImage(url), cornerRadius: 19)
-            } else {
-                ZStack {
-                    Color.white.opacity(0.08)
-                    LucideIcon(.user, .md).foregroundStyle(.white.opacity(0.5))
-                }
-            }
-        }
-        .frame(width: 38, height: 38)
-        .clipShape(Circle())
+        AvatarView(url: url, name: nil, size: 38)
     }
 
     private func roleDescription(_ role: String) -> String {

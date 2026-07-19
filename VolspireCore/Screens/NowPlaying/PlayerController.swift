@@ -12,6 +12,7 @@ import Services
 import SwiftUI
 import UIKit
 import Visualizer
+import SharedUtilities
 
 @Observable @MainActor
 final class PlayerController {
@@ -38,7 +39,7 @@ final class PlayerController {
     /// True while the current track is loading/buffering (no audio yet) — the UI
     /// shows a spinner in place of the play/pause glyph.
     var isBuffering = false
-    var commandProfile: CommandProfile = .init(isLiveStream: false, isSwitchTrackEnabled: false)
+    var commandProfile: CommandProfile = .init(isSwitchTrackEnabled: false)
     var colors: [UIColor] = []
     var progress: PlaybackProgress?
     var isScrubbing: Bool = false
@@ -68,6 +69,19 @@ final class PlayerController {
     var currentFileId: String?
     /// Set to request the player auto-expand (e.g. tapping a workspace file).
     var pendingExpand = false
+    /// Track-About payload for the centered glass modal. Set by the info strip;
+    /// RENDERED BY OverlaidRootView as an in-hierarchy overlay — a material
+    /// inside a fullScreenCover can't blur through the presentation boundary,
+    /// so presenting it would lose the glass look.
+    struct AboutModalPayload: Equatable {
+        let artwork: Artwork
+        let title: String
+        let description: String?
+        let tags: [String]
+    }
+
+    var aboutModal: AboutModalPayload?
+
     /// media-id → file-id for the current workspace queue. Only file items appear;
     /// track-reference items are absent so they read as normal tracks.
     private var fileIdByMediaId: [String: String] = [:]
@@ -120,10 +134,6 @@ final class PlayerController {
     private var cancellables = Set<AnyCancellable>()
     private let supabaseService = SupabaseService()
     private var lastFetchedTrackId: String?
-
-    var isLiveStream: Bool {
-        commandProfile.isLiveStream
-    }
 
     /// True when the current video is clearly portrait (taller than wide) — drives
     /// the full-bleed TikTok/Reels-style backdrop in the expanded player.
@@ -260,7 +270,7 @@ final class PlayerController {
         } catch {
             isLiked = !next
             likeCount = max(0, likeCount + (next ? -1 : 1))
-            print("[PlayerController] toggleLike failed: \(error)")
+            debugLog("[PlayerController] toggleLike failed: \(error)")
         }
     }
 
@@ -278,7 +288,7 @@ final class PlayerController {
         } catch {
             isSaved = !next
             saveCount = max(0, saveCount + (next ? -1 : 1))
-            print("[PlayerController] toggleSave failed: \(error)")
+            debugLog("[PlayerController] toggleSave failed: \(error)")
         }
     }
 }
@@ -392,7 +402,7 @@ private extension PlayerController {
             // tracks, and clearing would bounce a full-screen video's panel up. The
             // next track's `updateDisplay` sets it correctly (or clears it if the
             // next track is confirmed non-video).
-            colors = [UIColor(.graySecondary)]
+            colors = [] // no artwork → the background's brand-wash fallback
         }
     }
 
@@ -418,33 +428,45 @@ private extension PlayerController {
             trackDetail = nil; isLiked = false; isSaved = false; likeCount = 0; saveCount = 0
             return
         }
-        guard let trackId = state.currentMediaID?.value,
-              trackId != lastFetchedTrackId else { return }
-        lastFetchedTrackId = trackId
-        trackDetail = nil
-        isLiked = false
-        isSaved = false
-        likeCount = 0
-        saveCount = 0
+        guard let trackId = state.currentMediaID?.value else { return }
+        // Already have THIS track's detail? Nothing to do. Case-insensitive because a
+        // MediaID.value and the RPC's `track_id` can differ in case across queue sources
+        // ([[user-id-casing]]). Keying off the loaded detail (not `lastFetchedTrackId`)
+        // is what self-heals: landing on a track whose fetch was dropped/superseded
+        // during rapid skipping still (re)fetches instead of early-returning.
+        if let loaded = trackDetail?.trackId,
+           loaded.caseInsensitiveCompare(trackId) == .orderedSame { return }
 
-        // The audio engine persists effects across tracks, so unless "carry" is on
-        // we reset to default when the track changes (new track starts at 1×).
-        if !persistAudioEdits, audioEffects != .default {
-            applyEffects(.default)
+        // Reset per-track UI state + audio effects ONLY on a genuine track change — a
+        // self-healing re-fetch of the SAME track must NOT wipe the user's speed/pitch.
+        if lastFetchedTrackId?.caseInsensitiveCompare(trackId) != .orderedSame {
+            lastFetchedTrackId = trackId
+            trackDetail = nil
+            isLiked = false
+            isSaved = false
+            likeCount = 0
+            saveCount = 0
+            // New track starts at 1× unless "carry edits" is on.
+            if !persistAudioEdits, audioEffects != .default {
+                applyEffects(.default)
+            }
         }
         Task {
             do {
                 let detail = try await supabaseService.getTrackMetadata(trackId: trackId)
-                guard lastFetchedTrackId == trackId else { return } // track changed mid-fetch
+                // Write only if this track is STILL the one playing — guard against the
+                // CURRENT media id (what `detailLoaded` compares), not the last-requested
+                // one, so a superseded fetch can't leave the strip stuck shimmering.
+                guard state.currentMediaID?.value.caseInsensitiveCompare(trackId) == .orderedSame else { return }
                 trackDetail = detail
                 likeCount = detail.likes ?? 0
                 saveCount = detail.saves ?? 0
             } catch {
-                print("[PlayerController] getTrackMetadata failed: \(error)")
+                debugLog("[PlayerController] getTrackMetadata failed: \(error)")
             }
             // Save/like state — separate RPC, mirrors the web's get_track_interaction_status.
             if let status = try? await supabaseService.getTrackInteractionStatus(trackId: trackId) {
-                guard lastFetchedTrackId == trackId else { return }
+                guard state.currentMediaID?.value.caseInsensitiveCompare(trackId) == .orderedSame else { return }
                 isLiked = status.isLiked
                 isSaved = status.isSaved
             }
@@ -453,13 +475,16 @@ private extension PlayerController {
 }
 
 extension MediaMeta {
+    /// Dominant artwork colours — EMPTY when there's no artwork (or extraction
+    /// fails), so the player background falls back to the brand wash instead of
+    /// tinting grey. (Both consumers are NowPlayingBackground instances.)
     var colors: [Color] {
         get async {
-            guard let artwork else { return [.graySecondary] }
+            guard let artwork else { return [] }
             return await artwork
                 .image?
                 .dominantColorFrequencies(with: .high)?
-                .map { Color(uiColor: $0.color) } ?? [.graySecondary]
+                .map { Color(uiColor: $0.color) } ?? []
         }
     }
 }

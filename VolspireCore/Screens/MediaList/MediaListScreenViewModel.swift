@@ -109,7 +109,7 @@ class MediaListScreenViewModel {
             else { try await supabaseService.unsaveTrack(trackId: key) }
         } catch {
             if willSave { savedTrackIDs.remove(key) } else { savedTrackIDs.insert(key) }
-            print("[MediaListVM] toggleSave failed: \(error)")
+            debugLog("[MediaListVM] toggleSave failed: \(error)")
         }
         savingTrackIDs.remove(key)
     }
@@ -127,7 +127,7 @@ class MediaListScreenViewModel {
             try await supabaseService.addTrackToPlaylist(playlistId: playlistId, trackId: trackId)
             return true
         } catch {
-            print("[MediaListVM] addToPlaylist: \(error)")
+            debugLog("[MediaListVM] addToPlaylist: \(error)")
             return false
         }
     }
@@ -137,7 +137,7 @@ class MediaListScreenViewModel {
         do {
             return try await supabaseService.getTrackMetadata(trackId: trackId).artist?.userId
         } catch {
-            print("[MediaListVM] artistUserId: \(error)")
+            debugLog("[MediaListVM] artistUserId: \(error)")
             return nil
         }
     }
@@ -145,21 +145,6 @@ class MediaListScreenViewModel {
     /// Resolves a playlist's bare cover path to a public URL (for the picker rows).
     func playlistCover(_ path: String?) -> URL? {
         storageService.resolveTrackUrl(path).flatMap { URL(string: $0) }
-    }
-
-    func swipeButtons(mediaID: MediaID) -> [MediaListSwipeButton] {
-        [.delete]
-    }
-
-    func onSwipeActions(mediaID: MediaID, button: MediaListSwipeButton) {
-        Task {
-            switch button {
-            case .delete:
-                await mediaState?.removeTrack(mediaID)
-            case .download:
-                break
-            }
-        }
     }
 
     var footer: LocalizedStringKey {

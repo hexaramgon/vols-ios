@@ -60,7 +60,6 @@ enum HomeLoadingState: Equatable {
 @MainActor
 class HomeScreenViewModel {
     var loadingState: HomeLoadingState = .idle
-    var errorMessage: String?
 
     // Sections — mirror the web app's home buckets (`get_home_tracks`).
     var popularTracks: [HomeTrack] = []
@@ -103,6 +102,12 @@ class HomeScreenViewModel {
     // Collab listings (lazy-loaded the first time the Collab tab opens).
     var collabListings: [ApiListing] = []
     var listingsLoaded = false
+
+    // Create-folder sheet on the Workspace tab.
+    var showCreateFolder = false
+    var newFolderName = ""
+    var newFolderDescription = ""
+    var isCreatingFolder = false
 
     /// Random shuffle seed for the explore feed (`get_home_feed`). Fresh per VM
     /// (i.e. per app session) and re-rolled on pull-to-refresh, so the recs vary
@@ -159,7 +164,6 @@ class HomeScreenViewModel {
         guard loadingState != .loading else { return }
 
         loadingState = .loading
-        errorMessage = nil
 
         do {
             let response = try await supabaseService.getHomeTracks()
@@ -172,7 +176,6 @@ class HomeScreenViewModel {
             // No network / RPC failure: surface the empty/error state rather than
             // filling the screen with placeholder "seed" tracks.
             loadingState = .error(error.localizedDescription)
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -188,13 +191,113 @@ class HomeScreenViewModel {
         _ = await (home, artistRail, feed, listings)
     }
 
+    /// True while any pull-to-refresh is running. The system's refresh spinner
+    /// anchors at the scroll view's very top — hidden behind the fixed header —
+    /// so the screen floats its own indicator below the header off this flag.
+    var isPullRefreshing = false
+    private var pullRefreshCount = 0 {
+        didSet { isPullRefreshing = pullRefreshCount > 0 }
+    }
+
     func refresh() async {
+        pullRefreshCount += 1
+        defer { pullRefreshCount -= 1 }
+        await supabaseService.invalidateHomeCaches() // bypass the TTL cache — a pull means "fetch fresh"
         loadingState = .idle
         feedLoaded = false
         feedSeed = Int.random(in: 1 ... 1_000_000) // fresh shuffle on pull-to-refresh
         async let home: Void = loadHomeData()
         async let feed: Void = loadTracksFeed()
+        // The All tab also shows the Collab rail, so refresh listings with it.
+        async let listings: Void = refreshListings()
+        _ = await (home, feed, listings)
+    }
+
+    // MARK: - Pull-to-refresh (aux tabs)
+
+    // In-place refetchers: the tab keeps showing its current content while the
+    // fetch is in flight, and only a confirmed response replaces it — a pull
+    // never drops a tab back to its skeleton (see the defensive-loading rule).
+
+    func refreshFollowing() async {
+        pullRefreshCount += 1
+        defer { pullRefreshCount -= 1 }
+        await supabaseService.invalidateHomeCaches()
+        if let fresh = try? await supabaseService.getFollowingFeed() {
+            followingTracks = mapTracks(fresh)
+            prefetchCovers(followingTracks)
+            followingLoaded = true
+        }
+    }
+
+    func refreshArtists() async {
+        pullRefreshCount += 1
+        defer { pullRefreshCount -= 1 }
+        await supabaseService.invalidateHomeCaches()
+        if let fresh = try? await supabaseService.getExploreArtists() {
+            artists = mapArtists(fresh)
+            prefetchArtistAvatars(artists)
+            artistsLoaded = true
+        }
+    }
+
+    func refreshListings() async {
+        pullRefreshCount += 1
+        defer { pullRefreshCount -= 1 }
+        // Uncached RPC — always fresh.
+        if let fresh = try? await supabaseService.getListings(category: nil) {
+            collabListings = fresh
+            listingsLoaded = true
+        }
+    }
+
+    func refreshFolders() async {
+        pullRefreshCount += 1
+        defer { pullRefreshCount -= 1 }
+        await supabaseService.invalidateHomeCaches()
+        async let activity = supabaseService.getWorkspaceActivity(limit: 100)
+        if let fresh = try? await supabaseService.getUserFolders() {
+            folders = fresh
+            foldersLoaded = true
+        }
+        workspaceActivity = (try? await activity) ?? workspaceActivity
+    }
+
+    /// After the user posts content (track or listing, `ownContentPosted`):
+    /// refetch the home surfaces that could include it — the rails and the
+    /// collab listings — in place, without any loading-state churn.
+    func refreshAfterOwnPost() async {
+        await supabaseService.invalidateHomeCaches()
+        async let listings: Void = refreshListings()
+        if let response = try? await supabaseService.getHomeTracks() {
+            popularTracks = mapTracks(response.popularTracks)
+            demos = mapTracks(response.demos)
+            samples = mapTracks(response.samples)
+            prefetchCovers(popularTracks + demos + samples)
+            loadingState = .loaded
+        }
+        _ = await listings
+    }
+
+    /// Refetches every loaded server surface after a block/unblock — the server
+    /// filters the blocked party out of each read, so the in-memory copies are
+    /// stale. Keeps the current feed seed (re-filter, not reshuffle) and only
+    /// re-runs the aux tabs that had actually loaded.
+    func refreshAfterBlockChange() async {
+        let hadFollowing = followingLoaded
+        let hadArtists = artistsLoaded
+        let hadListings = listingsLoaded
+        loadingState = .idle
+        feedLoaded = false
+        followingLoaded = false
+        artistsLoaded = false
+        listingsLoaded = false
+        async let home: Void = loadHomeData()
+        async let feed: Void = loadTracksFeed()
         _ = await (home, feed)
+        if hadFollowing { await loadFollowing() }
+        if hadArtists { await loadArtists() }
+        if hadListings { await loadListings() }
     }
 
     // MARK: - Explore tabs
@@ -203,25 +306,69 @@ class HomeScreenViewModel {
         guard !feedLoaded else { return }
         feedLoaded = true
         do { feedTracks = mapTracks(try await supabaseService.getExploreTracksFeed(seed: feedSeed)); prefetchCovers(feedTracks) }
-        catch { feedLoaded = false; print("[HomeVM] tracks feed: \(error)") }
+        catch { feedLoaded = false; debugLog("[HomeVM] tracks feed: \(error)") }
     }
+
+    /// Re-entry guard — separate from `followingLoaded`, which must stay false
+    /// (skeleton showing) until a response actually arrives, so the tab never
+    /// flashes "Nothing here yet" mid-fetch (defensive empty states).
+    private var followingLoadInFlight = false
 
     func loadFollowing() async {
-        guard !followingLoaded else { return }
-        followingLoaded = true
-        do { followingTracks = mapTracks(try await supabaseService.getFollowingFeed()); prefetchCovers(followingTracks) }
-        catch { followingLoaded = false; print("[HomeVM] following: \(error)") }
+        guard !followingLoaded, !followingLoadInFlight else { return }
+        followingLoadInFlight = true
+        do {
+            followingTracks = mapTracks(try await supabaseService.getFollowingFeed())
+            prefetchCovers(followingTracks)
+            followingLoaded = true
+        } catch { debugLog("[HomeVM] following: \(error)") }
+        followingLoadInFlight = false
     }
 
+    /// Re-entry guard for `loadFolders` — separate from `foldersLoaded`, which
+    /// must stay false (skeleton showing) until a response actually arrives.
+    private var foldersLoadInFlight = false
+
     func loadFolders() async {
-        guard !foldersLoaded else { return }
-        foldersLoaded = true
+        // Defensive: only a confirmed response flips `foldersLoaded`, so the
+        // tab shows its skeleton — never "No folders yet" — while the fetch is
+        // in flight. A failed load leaves it false and the next visit retries.
+        guard !foldersLoaded, !foldersLoadInFlight else { return }
+        foldersLoadInFlight = true
         // Generous limit: the RPC is already scoped to the past month and the
         // rail groups client-side, so fetch the whole window.
         async let activity = supabaseService.getWorkspaceActivity(limit: 100)
-        do { folders = try await supabaseService.getUserFolders() }
-        catch { print("[HomeVM] loadFolders: \(error)") }
+        do {
+            folders = try await supabaseService.getUserFolders()
+            foldersLoaded = true
+        } catch {
+            debugLog("[HomeVM] loadFolders: \(error)")
+        }
         workspaceActivity = (try? await activity) ?? []
+        foldersLoadInFlight = false
+    }
+
+    /// Creates a folder from the Workspace tab's CTA / grid tile, then reloads
+    /// the folders — same trim + guard behaviour as the Workspace screen.
+    func createFolder() async {
+        guard !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        isCreatingFolder = true
+        do {
+            let desc = newFolderDescription.trimmingCharacters(in: .whitespaces)
+            try await supabaseService.createFolder(
+                name: newFolderName.trimmingCharacters(in: .whitespaces),
+                description: desc.isEmpty ? nil : desc
+            )
+            newFolderName = ""
+            newFolderDescription = ""
+            showCreateFolder = false
+            // Refetch in place — the grid updates without dropping back to the
+            // skeleton; keep the current list if the refetch fails.
+            folders = (try? await supabaseService.getUserFolders()) ?? folders
+        } catch {
+            debugLog("[HomeVM] createFolder: \(error)")
+        }
+        isCreatingFolder = false
     }
 
     /// Resolves an activity actor's avatar (bare storage path or full URL).
@@ -229,28 +376,43 @@ class HomeScreenViewModel {
         storageService.avatarUrl(pathOrUrl: pathOrUrl).flatMap { URL(string: $0) }
     }
 
+    /// Same defensive shape as `loadFollowing` — flag flips on response only.
+    private var artistsLoadInFlight = false
+
     func loadArtists() async {
-        guard !artistsLoaded else { return }
-        artistsLoaded = true
+        guard !artistsLoaded, !artistsLoadInFlight else { return }
+        artistsLoadInFlight = true
         do {
-            artists = try await supabaseService.getExploreArtists().map {
-                ExploreArtistItem(
-                    id: $0.userId,
-                    username: $0.username ?? "unknown",
-                    avatarURL: $0.profileImageUrl.flatMap { URL(string: $0) },
-                    monthlyListeners: $0.monthlyListeners ?? 0,
-                    isFollowing: $0.isFollowing ?? false
-                )
-            }
+            artists = mapArtists(try await supabaseService.getExploreArtists())
             prefetchArtistAvatars(artists)
-        } catch { artistsLoaded = false; print("[HomeVM] artists: \(error)") }
+            artistsLoaded = true
+        } catch { debugLog("[HomeVM] artists: \(error)") }
+        artistsLoadInFlight = false
     }
 
+    private func mapArtists(_ items: [ApiExploreArtist]) -> [ExploreArtistItem] {
+        items.map {
+            ExploreArtistItem(
+                id: $0.userId,
+                username: $0.username ?? "unknown",
+                avatarURL: $0.profileImageUrl.flatMap { URL(string: $0) },
+                monthlyListeners: $0.monthlyListeners ?? 0,
+                isFollowing: $0.isFollowing ?? false
+            )
+        }
+    }
+
+    /// Same defensive shape as `loadFollowing` — flag flips on response only.
+    private var listingsLoadInFlight = false
+
     func loadListings() async {
-        guard !listingsLoaded else { return }
-        listingsLoaded = true
-        do { collabListings = try await supabaseService.getListings(category: nil) }
-        catch { listingsLoaded = false; print("[HomeVM] listings: \(error)") }
+        guard !listingsLoaded, !listingsLoadInFlight else { return }
+        listingsLoadInFlight = true
+        do {
+            collabListings = try await supabaseService.getListings(category: nil)
+            listingsLoaded = true
+        } catch { debugLog("[HomeVM] listings: \(error)") }
+        listingsLoadInFlight = false
     }
 
     // MARK: - Cover prefetch

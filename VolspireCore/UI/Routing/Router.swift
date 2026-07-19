@@ -10,14 +10,11 @@ import SwiftUI
 
 enum Route: Hashable, Equatable {
     case mediaList(_ items: [Media], listMeta: MediaList.Meta?, showSave: Bool = true)
-    case mediaItem(_ item: Media)
-    case downloaded
     case profile(_ userId: String)
     case search(_ query: String)
     case notifications
     case messages
     case settings
-    case workspace
     case playlists
     case playlist(playlistId: String, title: String)
     case folderContents(folderId: String, folderName: String)
@@ -34,14 +31,6 @@ class Router {
 
     func navigateToMedia(items: [Media], listMeta: MediaList.Meta?, showSave: Bool = true) {
         path.append(Route.mediaList(items, listMeta: listMeta, showSave: showSave))
-    }
-
-    func navigateToMedia(item: Media) {
-        path.append(Route.mediaItem(item))
-    }
-
-    func navigateToDownloaded() {
-        path.append(Route.downloaded)
     }
 
     func navigateToProfile(userId: String) {
@@ -62,10 +51,6 @@ class Router {
 
     func navigateToSettings() {
         path.append(Route.settings)
-    }
-
-    func navigateToWorkspace() {
-        path.append(Route.workspace)
     }
 
     func navigateToPlaylists() {
@@ -165,14 +150,11 @@ extension Route {
     var analyticsName: String {
         switch self {
         case .mediaList: "media_list"
-        case .mediaItem: "track"
-        case .downloaded: "downloaded"
         case .profile: "profile"
         case .search: "search"
         case .notifications: "notifications"
         case .messages: "messages"
         case .settings: "settings"
-        case .workspace: "workspace"
         case .playlists: "playlists"
         case .playlist: "playlist"
         case .folderContents: "folder"
@@ -187,7 +169,6 @@ extension Route {
     /// The primary entity id for the screen, when there is one.
     var analyticsId: String? {
         switch self {
-        case let .mediaItem(item): item.id.value
         case let .profile(userId): userId
         case let .search(query): query
         case let .playlist(playlistId, _): playlistId

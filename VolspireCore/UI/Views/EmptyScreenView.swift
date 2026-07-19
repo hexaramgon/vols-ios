@@ -2,36 +2,38 @@
 //  EmptyScreenView.swift
 //  Volspire
 //
-//
 
+import DesignSystem
 import SwiftUI
 
-struct EmptyScreenView: View {
-    let systemImage: String
+/// The app's standard empty-state placeholder — a Lucide hero icon, a title, and
+/// an optional message. Use this instead of re-rolling per-screen empty-state
+/// VStacks so they stay visually consistent.
+struct EmptyStateView: View {
+    let icon: LucideIcon.Name
     let title: String
-    let description: String
+    var message: String? = nil
 
     var body: some View {
-        VStack(spacing: 0) {
-            Image(systemName: systemImage)
-                .font(.system(size: 48))
-                .foregroundStyle(Color(.palette.stroke))
-            Text(title)
-                .font(.appTitleSemibold)
-                .padding(.top, 16)
-            Text(description)
-                .font(.appBodyLarge)
-                .padding(.top, 8)
-                .foregroundStyle(Color(.palette.textTertiary))
+        VStack(spacing: 10) {
+            LucideIcon(icon, .hero).foregroundStyle(Color.vText3)
+            Text(title).font(.appTitle3).foregroundStyle(.white)
+            if let message {
+                Text(message)
+                    .font(.appSubheadline)
+                    .foregroundStyle(Color.vText2)
+                    .multilineTextAlignment(.center)
+            }
         }
-        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 40)
     }
 }
 
 #Preview {
-    EmptyScreenView(
-        systemImage: "icloud.and.arrow.down",
-        title: "Download Music to Listen Offline",
-        description: "Downloaded tracks will appear here."
+    EmptyStateView(
+        icon: .inbox,
+        title: "Nothing here yet",
+        message: "Content will show up here once it's available."
     )
 }

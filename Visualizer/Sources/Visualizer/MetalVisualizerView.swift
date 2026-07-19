@@ -92,13 +92,11 @@ public final class MetalVisualizerView: MTKView {
 
     public var onPresetChange: ((String) -> Void)?
 
-    /// Defaults to the ported pack presets so the out-of-box look matches the
-    /// web app. Assign `PresetLibrary.all` to include the original demos.
+    /// Defaults to the ported pack presets (`PresetLibrary.pack`) so the
+    /// out-of-box look matches the web app.
     public var presets: [VisualizerPreset] = PresetLibrary.pack {
         didSet { if currentIndex >= presets.count { currentIndex = 0 } }
     }
-
-    public var presetNames: [String] { presets.map(\.name) }
 
     /// Pin a preset by name; nil resumes cycling. Trails carry across the
     /// switch naturally — the feedback texture is preserved.

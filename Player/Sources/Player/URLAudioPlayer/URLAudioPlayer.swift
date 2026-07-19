@@ -18,8 +18,8 @@ import UIKit
 #endif
 
 @MainActor
-public final class URLAudioPlayer {
-    public weak var delegate: URLAudioPlayerDelegate?
+final class URLAudioPlayer {
+    weak var delegate: URLAudioPlayerDelegate?
 
     // MARK: - AudioKit nodes (used for ALL playback audio)
 
@@ -32,13 +32,12 @@ public final class URLAudioPlayer {
     /// Post-effects output node for audio-reactive visuals (the visualizer's
     /// tap installs here). The mixer is created once and never replaced, so a
     /// tap survives engine stop/start cycles.
-    public var visualizerAudioNode: AVAudioNode { mixer.avAudioNode }
+    var visualizerAudioNode: AVAudioNode { mixer.avAudioNode }
 
     // MARK: - AVPlayer (video display only — muted)
 
     private var videoPlayer: AVPlayer?
     private var videoPlayerItem: AVPlayerItem?
-    private var videoStatusObservation: NSKeyValueObservation?
 
     // MARK: - Timers / tasks
 
@@ -55,22 +54,22 @@ public final class URLAudioPlayer {
 
     private static let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "avi", "webm"]
 
-    public let effectsProcessor = AudioEffectsProcessor()
+    let effectsProcessor = AudioEffectsProcessor()
     private var tempFileURL: URL?
     private var extractedAudioURL: URL?
     private var loadedFileURL: URL?
     private var pausedAtTime: TimeInterval?
     private var isVideoMode = false
-    public private(set) var currentURL: URL?
-    public private(set) var duration: TimeInterval = 0
-    public private(set) var elapsedTime: TimeInterval = 0
+    private(set) var currentURL: URL?
+    private(set) var duration: TimeInterval = 0
+    private(set) var elapsedTime: TimeInterval = 0
 
     /// The intended playback state once the current URL finishes loading. Lets a
     /// pause issued mid-load actually stick instead of auto-playing when it loads.
     private var shouldPlayWhenReady = true
     /// True while the current URL is downloading/decoding and no audio is playing
     /// yet — the UI shows a loading state instead of an ambiguous play/pause.
-    public private(set) var isBuffering = false
+    private(set) var isBuffering = false
 
     private func setBuffering(_ value: Bool) {
         guard isBuffering != value else { return }
@@ -78,16 +77,13 @@ public final class URLAudioPlayer {
         delegate?.urlAudioPlayer(self, didChangeBuffering: value)
     }
 
-    /// Set for video files so the UI can display the video layer.
-    public private(set) var avPlayer: AVPlayer?
-
     /// Tokens for the foreground/background observers (removed on deinit).
     nonisolated(unsafe) private var foregroundObserver: NSObjectProtocol?
     nonisolated(unsafe) private var backgroundObserver: NSObjectProtocol?
 
     // MARK: - Init
 
-    public init() {
+    init() {
         // Graph: AudioPlayer → VariSpeed (resampling) → TimePitch (phase vocoder) → Mixer.
         // VariSpeed handles varispeed (pitch follows speed) cleanly; TimePitch handles
         // tempo-only changes when "preserve pitch" is on. Only one is active at a time.
@@ -137,7 +133,7 @@ public final class URLAudioPlayer {
 
     // MARK: - Public Interface
 
-    public func applyEffects(_ effects: AudioEffects) {
+    func applyEffects(_ effects: AudioEffects) {
         effectsProcessor.apply(effects, variSpeed: variSpeed, timePitch: timePitch)
         // If video mode, also sync AVPlayer rate to match speed
         if isVideoMode {
@@ -145,7 +141,7 @@ public final class URLAudioPlayer {
         }
     }
 
-    public func play(url: URL) {
+    func play(url: URL) {
         if currentURL == url, akPlayer.isPlaying { return }
         // Keep the engine running across the switch so the audio session never goes
         // idle while the next track downloads — otherwise iOS shows the lock-screen
@@ -180,7 +176,7 @@ public final class URLAudioPlayer {
     /// Download an upcoming track to a local file ahead of time so playing it
     /// later is gapless (no download gap, no lock-screen pause on skip). No-op for
     /// local files, videos, or URLs already prefetched / in flight.
-    public func prefetch(url: URL) {
+    func prefetch(url: URL) {
         guard !url.isFileURL,
               !Self.videoExtensions.contains(url.pathExtension.lowercased()),
               prefetchedFiles[url] == nil,
@@ -188,27 +184,37 @@ public final class URLAudioPlayer {
         else { return }
 
         let task = URLSession.shared.downloadTask(with: url) { [weak self] tmpURL, _, error in
+            // Move the temp file SYNCHRONOUSLY here — URLSession deletes it the moment
+            // this delegate closure returns, so the previous `Task { @MainActor }` hop
+            // moved it too late and always failed ("No such file or directory"), which
+            // silently disabled prefetch/gapless. Only the state update hops to main.
+            guard error == nil, let tmpURL else {
+                Task { @MainActor [weak self] in self?.prefetchTasks[url] = nil }
+                return
+            }
+            let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent("prefetch-\(UUID().uuidString)")
+                .appendingPathExtension(ext)
+            let moved: URL?
+            do {
+                try FileManager.default.moveItem(at: tmpURL, to: dest)
+                moved = dest
+            } catch {
+                print("URLAudioPlayer: Prefetch move failed – \(error)")
+                moved = nil
+            }
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.prefetchTasks[url] = nil
-                guard error == nil, let tmpURL else { return }
-                let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension
-                let dest = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("prefetch-\(UUID().uuidString)")
-                    .appendingPathExtension(ext)
-                do {
-                    try FileManager.default.moveItem(at: tmpURL, to: dest)
-                    self.prefetchedFiles[url] = dest
-                } catch {
-                    print("URLAudioPlayer: Prefetch move failed – \(error)")
-                }
+                if let moved { self.prefetchedFiles[url] = moved }
             }
         }
         prefetchTasks[url] = task
         task.resume()
     }
 
-    public func resume() {
+    func resume() {
         shouldPlayWhenReady = true
         // Still loading — playback will start automatically once it's ready.
         guard !isBuffering else { return }
@@ -218,7 +224,7 @@ public final class URLAudioPlayer {
         }
     }
 
-    public func pause() {
+    func pause() {
         shouldPlayWhenReady = false
         pauseAudio()
         if isVideoMode {
@@ -226,11 +232,11 @@ public final class URLAudioPlayer {
         }
     }
 
-    public func stop() {
+    func stop() {
         cleanup()
     }
 
-    public func seek(to time: TimeInterval) {
+    func seek(to time: TimeInterval) {
         seekAudio(to: time)
         if isVideoMode {
             let cmTime = CMTime(seconds: time, preferredTimescale: 600)
@@ -252,7 +258,6 @@ private extension URLAudioPlayer {
         let vp = AVPlayer(playerItem: item)
         vp.isMuted = true  // Audio comes from AudioKit
         videoPlayer = vp
-        avPlayer = vp
         delegate?.urlAudioPlayer(self, didSetupVideoPlayer: vp)
     }
 
@@ -302,11 +307,9 @@ private extension URLAudioPlayer {
 
     func cleanupVideo() {
         videoPlayer?.pause()
-        videoStatusObservation = nil
         videoPlayer?.replaceCurrentItem(with: nil)
         videoPlayerItem = nil
         videoPlayer = nil
-        avPlayer = nil
         delegate?.urlAudioPlayer(self, didSetupVideoPlayer: nil)
     }
 
@@ -488,21 +491,38 @@ private extension URLAudioPlayer {
         // resume doesn't restart the track from the beginning.
         let current = akPlayer.currentTime
         pausedAtTime = current > 0 ? current : elapsedTime
-        // Pause (not stop): the scheduled audio stays queued, so resume can
-        // continue in place. The completion handler is disarmed because an
-        // engine teardown mid-pause can fire it spuriously (phantom
-        // "track finished" → auto-skip); resume re-arms it.
+        // The completion handler is disarmed because an engine teardown mid-pause can
+        // fire it spuriously (phantom "track finished" → auto-skip); resume re-arms it.
         akPlayer.completionHandler = nil
         akPlayer.pause()
+        // Stop the engine so the audio session goes IDLE and iOS shows the lock-screen
+        // controls as PAUSED. A running engine keeps the session "active/playing" — the
+        // exact reason track SWITCHES keep it running (via a different path that doesn't
+        // call pauseAudio) to avoid a paused flash. On a real user/interruption pause we
+        // WANT paused, so we stop it. resumeAudio restarts the engine; if stopping drops
+        // the queued audio, its fallback reloads + seeks back to `pausedAtTime`.
+        engine.stop()
 
         stopProgressUpdates()
     }
 
     func seekAudio(to time: TimeInterval) {
-        guard let fileURL = loadedFileURL else { return }
         akPlayer.completionHandler = nil
+        // A full load() is still required — AudioKit's seek(time:) needs the edit-time
+        // reset that load() performs (a bare seek mis-seeks to start/end). But reuse the
+        // player's already-open AVAudioFile via load(file:) so we DON'T reopen it from
+        // disk on every scrub release AND every repeat-one loop boundary. load(url:) is
+        // literally `AVAudioFile(forReading:)` + `load(file:)` internally, so this is
+        // the same schedule/edit-time reset minus the disk read. Falls back to the URL
+        // reopen if the open file isn't available.
         do {
-            try akPlayer.load(url: fileURL)
+            if let file = akPlayer.file {
+                try akPlayer.load(file: file)
+            } else if let fileURL = loadedFileURL {
+                try akPlayer.load(url: fileURL)
+            } else {
+                return
+            }
             akPlayer.play()
             akPlayer.seek(time: time)
             installCompletionHandler()
@@ -604,7 +624,6 @@ private extension URLAudioPlayer {
             self.extractedAudioURL = nil
         }
 
-        avPlayer = nil
         currentURL = nil
         loadedFileURL = nil
         pausedAtTime = nil
@@ -617,7 +636,7 @@ private extension URLAudioPlayer {
 // MARK: - Delegate
 
 @MainActor
-public protocol URLAudioPlayerDelegate: AnyObject {
+protocol URLAudioPlayerDelegate: AnyObject {
     func urlAudioPlayer(_ player: URLAudioPlayer, didUpdateProgress progress: PlaybackProgress)
     func urlAudioPlayer(_ player: URLAudioPlayer, didSetupVideoPlayer avPlayer: AVPlayer?)
     func urlAudioPlayer(_ player: URLAudioPlayer, didChangeBuffering isBuffering: Bool)

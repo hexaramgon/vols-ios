@@ -6,26 +6,22 @@
 import Foundation
 import Observation
 
-/// Observable media state that holds tracks and playlists.
+/// Observable media state that holds tracks.
 @Observable @MainActor
 public final class DefaultMediaState: MediaState {
     public var tracks: [MediaID: Media] = [:]
-    public var lists: [MediaListID: MediaList] = [:]
 
     public init() {}
 
     // MARK: - MediaState
 
-    public func mediaLists() -> [MediaList] {
-        Array(lists.values)
-    }
-
     public func allTracks() -> [Media] {
         Array(tracks.values)
     }
 
-    public func load() async {
-        // Override to load from a data source
+    /// O(1) override of the protocol default (which scans `allTracks()`).
+    public func media(withID id: MediaID) -> Media? {
+        tracks[id]
     }
 
     public func addTrack(_ media: Media) async {
@@ -36,20 +32,7 @@ public final class DefaultMediaState: MediaState {
         tracks.removeValue(forKey: mediaID)
     }
 
-    public func addMediaList(_ mediaList: MediaList) async {
-        lists[mediaList.id] = mediaList
-        // Also add individual tracks
-        for item in mediaList.items {
-            tracks[item.id] = item
-        }
-    }
-
-    public func removeMediaList(_ mediaListID: MediaListID) async {
-        lists.removeValue(forKey: mediaListID)
-    }
-
     public func removeAll() async {
         tracks.removeAll()
-        lists.removeAll()
     }
 }

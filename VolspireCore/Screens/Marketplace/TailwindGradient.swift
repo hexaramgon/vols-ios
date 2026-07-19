@@ -25,7 +25,9 @@ enum TailwindGradient {
     }
 
     /// One Tailwind colour token → Color, e.g. "violet-900", "black", "blue-900/80".
-    private static func color(_ token: String) -> Color? {
+    /// Internal so single-swatch callers (gradient pickers, service covers) resolve
+    /// against this canonical palette instead of hand-converting rgb.
+    static func color(_ token: String) -> Color? {
         var name = token
         var opacity = 1.0
         if let slash = name.firstIndex(of: "/") {

@@ -23,7 +23,8 @@ struct LibraryTrackSheet: View {
             title: track.title,
             artist: track.artist?.username,
             meta: track.streams.map { "\($0.formatted()) streams" },
-            actions: actions
+            actions: actions,
+            reportTargetId: track.trackId
         )
     }
 
@@ -48,16 +49,6 @@ struct LibraryTrackSheet: View {
 
     private func shareTrack() {
         let shareText = "Check out \"\(track.title)\" on Volspire!"
-        let activityVC = UIActivityViewController(activityItems: [shareText], applicationActivities: nil)
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootVC = windowScene.windows.first?.rootViewController
-        {
-            var presenter = rootVC
-            while let presented = presenter.presentedViewController {
-                presenter = presented
-            }
-            activityVC.popoverPresentationController?.sourceView = presenter.view
-            presenter.present(activityVC, animated: true)
-        }
+        UIApplication.presentActivitySheet([shareText])
     }
 }

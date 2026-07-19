@@ -3,14 +3,15 @@
 //  Volspire
 //
 //  Drives the collab-board listing detail: fetches the full listing (viewer
-//  flags), save/unsave, respond (message the author), comments, and inline
-//  playback of the attached audio clips.
+//  flags), save/unsave, respond (message the author), and comments. Clip
+//  playback itself lives in the shared AudioAttachmentPlayer — this only
+//  resolves the storage paths it plays.
 //
 
-import AVFoundation
 import Foundation
 import Observation
 import Services
+import SharedUtilities
 
 @MainActor
 @Observable
@@ -20,7 +21,6 @@ final class ListingDetailViewModel {
     private(set) var commentsLoaded = false
 
     var isSaved: Bool
-    var saveCount: Int
     var status: String
     private(set) var isAuthor: Bool
     private(set) var existingConvoId: String?
@@ -33,17 +33,12 @@ final class ListingDetailViewModel {
     var isTogglingStatus = false
     var commentText = ""
 
-    /// `file_url` of the clip currently playing, or nil.
-    private(set) var playingClip: String?
-
     private let service = SupabaseService()
     private let storage = StorageService()
-    private var clipPlayer: AVPlayer?
 
     init(listing: ApiListing) {
         self.listing = listing
         self.isSaved = listing.viewerHasSaved ?? false
-        self.saveCount = listing.saveCount ?? 0
         self.status = listing.status ?? "open"
         // Derive author-ownership up front from the signed-in user so the detail
         // doesn't flash the "Posted by" card before `load()` confirms it's yours
@@ -68,7 +63,6 @@ final class ListingDetailViewModel {
         if let updated = try? await fresh {
             listing = updated
             isSaved = updated.viewerHasSaved ?? isSaved
-            saveCount = updated.saveCount ?? saveCount
             status = updated.status ?? status
             isAuthor = updated.isAuthor ?? isAuthor
             existingConvoId = updated.viewerConvoId
@@ -100,7 +94,7 @@ final class ListingDetailViewModel {
             try await service.updateListingStatus(listingId: listing.listingId, status: next)
         } catch {
             status = previous
-            print("[ListingDetailVM] toggleStatus failed: \(error)")
+            debugLog("[ListingDetailVM] toggleStatus failed: \(error)")
         }
         isTogglingStatus = false
     }
@@ -111,7 +105,7 @@ final class ListingDetailViewModel {
             try await service.deleteListing(listingId: listing.listingId)
             return true
         } catch {
-            print("[ListingDetailVM] deleteListing failed: \(error)")
+            debugLog("[ListingDetailVM] deleteListing failed: \(error)")
             return false
         }
     }
@@ -128,14 +122,12 @@ final class ListingDetailViewModel {
         isSaving = true
         let next = !isSaved
         isSaved = next
-        saveCount = max(0, saveCount + (next ? 1 : -1))
         do {
             if next { try await service.saveListing(listingId: listing.listingId) }
             else { try await service.unsaveListing(listingId: listing.listingId) }
         } catch {
             isSaved = !next
-            saveCount = max(0, saveCount + (next ? -1 : 1))
-            print("[ListingDetailVM] toggleSave failed: \(error)")
+            debugLog("[ListingDetailVM] toggleSave failed: \(error)")
         }
         isSaving = false
     }
@@ -159,7 +151,7 @@ final class ListingDetailViewModel {
     }
 
     private func respondError(_ error: Error) -> String {
-        let msg = (error as NSError).localizedDescription
+        let msg = error.serverRawDetail
         if msg.contains("cannot_respond_to_own_listing") { return "You can't respond to your own listing." }
         if msg.contains("listing_closed") { return "This listing is closed." }
         if msg.contains("message_too_long") { return "Your message is too long." }
@@ -179,7 +171,7 @@ final class ListingDetailViewModel {
             commentText = ""
             AnalyticsService.shared?.log(.commentPosted, metadata: ["kind": "listing", "listing_id": .string(listing.listingId)])
         } catch {
-            print("[ListingDetailVM] postComment failed: \(error)")
+            debugLog("[ListingDetailVM] postComment failed: \(error)")
             await loadComments()
         }
         isPostingComment = false
@@ -192,7 +184,7 @@ final class ListingDetailViewModel {
             try await service.deleteListingComment(commentId: comment.commentId)
         } catch {
             comments = snapshot
-            print("[ListingDetailVM] deleteComment failed: \(error)")
+            debugLog("[ListingDetailVM] deleteComment failed: \(error)")
         }
     }
 
@@ -203,29 +195,10 @@ final class ListingDetailViewModel {
 
     // MARK: - Clip playback
 
-    func toggleClip(_ attachment: ApiListingAttachment) {
-        guard let path = attachment.fileUrl else { return }
-        if playingClip == path {
-            clipPlayer?.pause()
-            playingClip = nil
-            return
-        }
-        guard let urlString = storage.resolveTrackUrl(path), let url = URL(string: urlString) else { return }
-        clipPlayer?.pause()
-        let player = AVPlayer(url: url)
-        clipPlayer = player
-        playingClip = path
-        player.play()
-        NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in if self?.playingClip == path { self?.playingClip = nil } }
-        }
-    }
-
-    func stopClip() {
-        clipPlayer?.pause()
-        clipPlayer = nil
-        playingClip = nil
+    /// Playable URL for a clip attachment (bare storage path → full URL).
+    func clipURL(_ attachment: ApiListingAttachment) -> URL? {
+        guard let path = attachment.fileUrl,
+              let urlString = storage.resolveTrackUrl(path) else { return nil }
+        return URL(string: urlString)
     }
 }

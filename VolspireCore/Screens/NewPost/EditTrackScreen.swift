@@ -55,6 +55,7 @@ struct EditTrackScreen: View {
                 .padding(.bottom, 24)
             }
             .scrollDismissesKeyboard(.interactively)
+            .tapToDismissKeyboard()
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomBar
             }
@@ -102,32 +103,15 @@ struct EditTrackScreen: View {
                 statusRow(hint, color: Color.vText3)
             }
 
-            Button {
+            PrimaryButton("Save Changes", busy: isSaving, enabled: viewModel.canSave) {
                 Task { await viewModel.save() }
-            } label: {
-                HStack(spacing: 10) {
-                    if isSaving {
-                        ProgressView()
-                            .tint(.black)
-                    }
-                    Text(isSaving ? "Saving…" : "Save Changes")
-                        .font(.appHeadline)
-                }
-                .foregroundStyle(.black)
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(.white, in: Capsule())
             }
-            .buttonStyle(.plain)
-            .disabled(!viewModel.canSave || isSaving)
-            .opacity(viewModel.canSave && !isSaving ? 1 : 0.3)
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background {
-            // Same chrome tone as the Library header / tab bar (~#121212).
-            Color(white: 0.07)
+            Color.vBar
                 .overlay(alignment: .top) {
                     Rectangle()
                         .fill(Color.vBorder)

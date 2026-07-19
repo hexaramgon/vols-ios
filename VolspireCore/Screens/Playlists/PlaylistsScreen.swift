@@ -66,13 +66,7 @@ struct PlaylistsScreen: View {
     }
 
     private var backButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
-        }
-        .buttonStyle(.plain)
+        BackButton()
     }
 
     private var titleBarOpacity: Double {
@@ -82,10 +76,10 @@ struct PlaylistsScreen: View {
     }
 
     private var collapsingTitleBar: some View {
-        Color(white: 0.1)
+        Color.vBar
             .frame(height: ViewConst.safeAreaInsets.top + 44)
             .overlay(alignment: .bottom) {
-                Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5)
+                Rectangle().fill(Color.vBorder).frame(height: 0.5)
             }
             .opacity(titleBarOpacity)
             .ignoresSafeArea(edges: .top)
@@ -159,8 +153,8 @@ private extension PlaylistsScreen {
                     .aspectRatio(1, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(playlist.title).font(.appSubheadlineSemibold).foregroundStyle(.white).lineLimit(1)
-                    Text("\(playlist.trackCount ?? 0) tracks").font(.appCaption).foregroundStyle(Color.vText2).lineLimit(1)
+                    Text(playlist.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
+                    Text("\(playlist.trackCount ?? 0) tracks").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
                 }
             }
             .contentShape(.rect)

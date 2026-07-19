@@ -71,8 +71,8 @@ private struct AppNavBar<Trailing: View>: ViewModifier {
             // same colour as the content behind it at the top.
             Color.vBase
             // The solid bar fades in over it as the user scrolls.
-            Color(white: 0.1).opacity(barOpacity)
-            Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5).opacity(barOpacity)
+            Color.vBar.opacity(barOpacity)
+            Rectangle().fill(Color.vBorder).frame(height: 0.5).opacity(barOpacity)
 
             // The 44pt control row where the system bar used to draw its items:
             // leading back chevron, absolutely-centred title, trailing slot.

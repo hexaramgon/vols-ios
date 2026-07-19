@@ -62,7 +62,7 @@ struct EditProfileScreen: View {
         .background(Color.vBase.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
-        .toolbarBackground(Color(white: 0.1), for: .navigationBar)
+        .toolbarBackground(Color.vBar, for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -71,11 +71,7 @@ struct EditProfileScreen: View {
                     .foregroundStyle(.white)
             }
             ToolbarItem(placement: .navigationBarLeading) {
-                Button { dismiss() } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
+                BackButton(shadow: false)
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button(action: save) {

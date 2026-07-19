@@ -129,6 +129,7 @@ final class CreateListingViewModel {
             let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
             let desc = trimmedDescription.isEmpty ? nil : trimmedDescription
             let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+            let newListingId: String?
             if let editingListingId {
                 let edits = attachments.compactMap { draft -> SupabaseService.ListingAttachmentEdit? in
                     let t = draft.title.trimmingCharacters(in: .whitespaces)
@@ -144,8 +145,9 @@ final class CreateListingViewModel {
                     tags: tags,
                     attachments: edits
                 )
+                newListingId = nil
             } else {
-                try await supabaseService.createListing(
+                newListingId = try await supabaseService.createListing(
                     userId: userId,
                     category: category,
                     title: trimmedTitle,
@@ -155,6 +157,15 @@ final class CreateListingViewModel {
                 )
             }
             uploadState = .success
+            var info: [String: Any] = [
+                "confirmationTitle": editingListingId != nil ? "Listing updated" : "Listing posted",
+                "confirmationSubtitle": trimmedTitle,
+            ]
+            // Once the confirmation card dismisses, the app opens the new
+            // listing's detail page (see RootTabView). Edits don't navigate —
+            // the user came from the detail page they're returning to.
+            if let newListingId { info["listingId"] = newListingId }
+            NotificationCenter.default.post(name: .ownContentPosted, object: nil, userInfo: info)
         } catch {
             uploadState = .error(postError(error))
         }
@@ -163,7 +174,7 @@ final class CreateListingViewModel {
     /// Maps the RPC's validation errors to friendly copy (clamping should keep
     /// users under the limits, but surface these if one slips through).
     private func postError(_ error: Error) -> String {
-        let msg = (error as NSError).localizedDescription
+        let msg = error.serverRawDetail
         if msg.contains("title_too_long") { return "Title must be \(Self.titleLimit) characters or less." }
         if msg.contains("description_too_long") { return "Description must be \(Self.descriptionLimit) characters or less." }
         if msg.contains("title_required") { return "Add a title to post." }

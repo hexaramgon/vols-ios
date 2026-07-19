@@ -10,6 +10,20 @@
 
 import Foundation
 import Services
+import UIKit
+import SharedUtilities
+
+/// Strips metadata from image attachments before upload.
+enum ImageSanitizer {
+    /// Re-encodes a still image as baseline JPEG. UIImage bakes orientation into the
+    /// pixels and the JPEG re-encode carries no EXIF/GPS/TIFF metadata, so this drops
+    /// any embedded location. Returns nil if the bytes aren't a decodable image
+    /// (caller keeps the original). Animated GIFs must be excluded by the caller —
+    /// a single-frame re-encode would drop the animation.
+    static func jpegStrippingMetadata(_ data: Data, quality: CGFloat = 0.9) -> Data? {
+        UIImage(data: data)?.jpegData(compressionQuality: quality)
+    }
+}
 
 /// A track shared in a collab-request message — resolved from the message's
 /// structured `request_metadata.track_ids` (not parsed from text/URLs).
@@ -47,6 +61,14 @@ struct ChatMessage: Identifiable, Equatable {
     /// A collab request still awaiting a decision.
     var isPendingRequest: Bool {
         isCollabRequest && requestStatus != "accepted" && requestStatus != "rejected"
+    }
+}
+
+extension ConversationViewModel {
+    /// True when a collab request in this thread was accepted — the other
+    /// participant is a collaborator (drives the "Remove Collaborator" option).
+    var hasAcceptedCollabRequest: Bool {
+        messages.contains { $0.isCollabRequest && $0.requestStatus == "accepted" }
     }
 }
 
@@ -95,8 +117,10 @@ final class ConversationViewModel {
             messages = mapped
             loadingState = .loaded
             try? await service.markConvoRead(convoId: convoId)
+            PushNotificationManager.shared.clearDeliveredNotifications(convoId: convoId)
+            await PushNotificationManager.shared.refreshBadge()
         } catch {
-            print("[ConversationVM] load: \(error)")
+            debugLog("[ConversationVM] load: \(error)")
             await settled
             if messages.isEmpty { loadingState = .error(error.localizedDescription) }
         }
@@ -107,8 +131,12 @@ final class ConversationViewModel {
         try? await Task.sleep(for: duration)
     }
 
+    /// Matches the server-side `convo_messages.content` length cap (defence in depth;
+    /// the server CHECK is authoritative since a raw RPC call bypasses the client).
+    static let maxMessageLength = 4000
+
     func send() async {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = String(draft.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxMessageLength))
         guard !text.isEmpty, !isSending else { return }
         draft = ""
         isSending = true
@@ -127,7 +155,7 @@ final class ConversationViewModel {
                                           attachmentType: nil, attachmentName: nil, pending: false)
             }
         } catch {
-            print("[ConversationVM] send: \(error)")
+            debugLog("[ConversationVM] send: \(error)")
             messages.removeAll { $0.id == tempId }
             draft = text   // restore the unsent text so it isn't lost
         }
@@ -135,44 +163,71 @@ final class ConversationViewModel {
     }
 
     /// Uploads + sends an attachment (with an optional caption from the draft).
+    /// Mirrors the server's `send_message_with_attachment` MIME allowlist so the
+    /// client rejects unsupported files up front instead of uploading then failing.
+    static let allowedAttachmentTypes: Set<String> = [
+        "image/jpeg", "image/png", "image/webp", "image/gif",
+        "audio/mpeg", "audio/wav", "audio/x-wav", "audio/aac", "audio/mp4", "audio/flac", "audio/ogg",
+        "video/mp4", "video/quicktime", "video/webm",
+        "application/pdf", "text/plain", "application/zip",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ]
+
     func sendAttachment(data: Data, fileName: String, fileType: String, caption: String) async {
         guard let userId = currentUserId, !isSending else { return }
-        guard data.count <= 25 * 1024 * 1024 else {
+
+        // Strip EXIF/GPS from still images by re-encoding to JPEG off the main
+        // thread. (Avatars/covers already do this; the DM path previously shipped
+        // the original bytes, leaking any embedded location.) Animated GIFs are left
+        // intact; a decode failure falls through to the original bytes. Normalising
+        // to JPEG also brings iPhone HEIC photos into the server's allowlist.
+        var uploadData = data
+        var uploadName = fileName
+        var uploadType = fileType
+        if fileType.hasPrefix("image"), fileType != "image/gif",
+           let cleaned = await Task.detached(priority: .userInitiated, operation: {
+               ImageSanitizer.jpegStrippingMetadata(data)
+           }).value {
+            uploadData = cleaned
+            uploadName = (fileName as NSString).deletingPathExtension + ".jpg"
+            uploadType = "image/jpeg"
+        }
+
+        guard uploadData.count <= 25 * 1024 * 1024 else {
             attachmentError = "File is too large (max 25 MB)."
             return
         }
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        let blocked: Set<String> = ["svg", "html", "htm", "xml", "php", "exe", "bat", "sh", "cmd"]
-        guard !blocked.contains(ext) else {
-            attachmentError = "That file type isn't allowed."
+        guard Self.allowedAttachmentTypes.contains(uploadType) else {
+            attachmentError = "That file type isn't supported."
             return
         }
 
-        let text = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = String(caption.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxMessageLength))
         isSending = true
         let tempId = "local-\(UUID().uuidString)"
         let sentAt = Date()
         messages.append(ChatMessage(id: tempId, text: text, isFromMe: true, createdAt: sentAt,
                                     type: "message", isAttachment: true, attachmentURL: nil,
-                                    attachmentType: fileType, attachmentName: fileName, pending: true))
+                                    attachmentType: uploadType, attachmentName: uploadName, pending: true))
 
         do {
             let path = try await service.uploadMessageAttachment(
-                convoId: convoId, userId: userId, fileName: fileName, data: data, fileType: fileType
+                convoId: convoId, userId: userId, fileName: uploadName, data: uploadData, fileType: uploadType
             )
             let newId = try await service.sendMessageWithAttachment(
-                convoId: convoId, content: text, fileUrl: path, fileType: fileType,
-                fileName: fileName, fileSize: data.count
+                convoId: convoId, content: text, fileUrl: path, fileType: uploadType,
+                fileName: uploadName, fileSize: uploadData.count
             )
             let signed = (await storage.signAttachmentUrls(paths: [path])).first ?? nil
             if let i = messages.firstIndex(where: { $0.id == tempId }) {
                 messages[i] = ChatMessage(id: newId, text: text, isFromMe: true, createdAt: sentAt,
                                           type: "message", isAttachment: true,
                                           attachmentURL: signed.flatMap { URL(string: $0) },
-                                          attachmentType: fileType, attachmentName: fileName, pending: false)
+                                          attachmentType: uploadType, attachmentName: uploadName, pending: false)
             }
         } catch {
-            print("[ConversationVM] sendAttachment: \(error)")
+            debugLog("[ConversationVM] sendAttachment: \(error)")
             messages.removeAll { $0.id == tempId }
             attachmentError = "Couldn't send the attachment."
         }
@@ -209,14 +264,37 @@ final class ConversationViewModel {
         messages.sort { $0.createdAt < $1.createdAt }
         if fresh.contains(where: { !$0.isFromMe }) {
             try? await service.markConvoRead(convoId: convoId)
+            PushNotificationManager.shared.clearDeliveredNotifications(convoId: convoId)
+            await PushNotificationManager.shared.refreshBadge()
         }
     }
 
-    /// Maps rows to chat messages: batch-signs attachment paths (private bucket)
+    /// Signed attachment URLs cached per storage path, so the 4s poll doesn't re-sign
+    /// every message's attachment on each tick (a full storage round-trip). The signed
+    /// URL is valid ~1h; we cache well under that and re-sign lazily past the TTL.
+    private var signedURLCache: [String: (url: String, at: Date)] = [:]
+    private static let signedURLTTL: TimeInterval = 45 * 60  // < the 1h signed-URL expiry
+
+    /// Maps rows to chat messages: signs any *new* attachment paths (cached per path)
     /// and batch-resolves any collab-request track references into cards.
     private func mapAll(_ rows: [ApiConvoMessage]) async -> [ChatMessage] {
         let paths: [String?] = rows.map { ($0.attachment ?? false) ? $0.attachmentUrl : nil }
-        let signed = await storage.signAttachmentUrls(paths: paths)
+
+        // Only sign paths without a fresh cached URL — the poll otherwise re-signs all
+        // 50 rows' attachments every 4s even when nothing changed.
+        let now = Date()
+        let stale = Array(Set(paths.compactMap { $0 }).filter { path in
+            guard let cached = signedURLCache[path] else { return true }
+            return now.timeIntervalSince(cached.at) >= Self.signedURLTTL
+        })
+        if !stale.isEmpty {
+            let fresh = await storage.signAttachmentUrls(paths: stale.map { Optional($0) })
+            for (i, path) in stale.enumerated() where fresh[i] != nil {
+                signedURLCache[path] = (fresh[i]!, now)
+            }
+        }
+
+        let signed: [String?] = paths.map { path in path.flatMap { signedURLCache[$0]?.url } }
         let tracks = await resolveSharedTracks(rows)
         return rows.enumerated().map { idx, m in map(m, signedURL: signed[idx], tracks: tracks) }
     }
@@ -278,7 +356,7 @@ final class ConversationViewModel {
                 try await service.rejectRequest(requestId: requestId)
             }
         } catch {
-            print("[ConversationVM] respondToRequest: \(error)")
+            debugLog("[ConversationVM] respondToRequest: \(error)")
             setRequestStatus(message.id, previous)
         }
     }

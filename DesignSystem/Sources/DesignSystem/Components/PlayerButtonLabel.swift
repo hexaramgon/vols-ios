@@ -4,12 +4,10 @@
 //
 //
 
-import SharedUtilities
 import SwiftUI
 
 public enum ButtonType {
     case play
-    case stop
     case pause
     case backward
     case forward
@@ -61,37 +59,10 @@ extension ButtonType {
     var lucideIcon: LucideIcon.Name {
         switch self {
         case .play: .play
-        case .stop: .square
         case .pause: .pause
         case .backward: .play // forward/backward are drawn by AnimatedForwardLabel
         case .forward: .play
         }
-    }
-}
-
-private struct Label: View {
-    let size: CGFloat
-    var progress: Double
-    var body: some View {
-        ZStack {
-            HStack(spacing: 0) {
-                gliph
-                    .frame(maxWidth: lerp(0.5, size / 2, progress))
-                    .opacity(lerp(0.1, 0.9, progress))
-                gliph
-                gliph
-                    .frame(maxWidth: lerp(size / 2, 0.5, progress))
-                    .opacity(lerp(1, 0.1, progress))
-            }
-        }
-        .frame(width: size, height: size)
-    }
-
-    var gliph: some View {
-        Image(lucide: .play)
-            .renderingMode(.template)
-            .resizable()
-            .aspectRatio(contentMode: .fit)
     }
 }
 

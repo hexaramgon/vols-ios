@@ -18,6 +18,7 @@ struct MessagesScreen: View {
     @Environment(PlayerController.self) private var playerController
     @Environment(UnreadCounts.self) private var unreadCounts
     @Environment(Dependencies.self) private var dependencies
+    @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = MessagesScreenViewModel()
     @FocusState private var searchFocused: Bool
     /// Home/Marketplace-style search: hidden by default, revealed (and focused)
@@ -33,7 +34,7 @@ struct MessagesScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-                .zIndex(1) // keep the header's bottom shadow above the content below
+                .zIndex(1) // keep the header (and its sliding search reveal) above the content below
             ScrollView {
                 content
                     .animation(.easeOut(duration: 0.25), value: viewModel.loadingState)
@@ -54,12 +55,17 @@ struct MessagesScreen: View {
             // Returning from a thread — refresh so unread + last-message update.
             if convo == nil { Task { await viewModel.load() } }
         }
+        .onChange(of: scenePhase) { _, phase in
+            // Foregrounding (e.g. opening the app from a message push) — refresh the
+            // list so the new conversation / message shows without a manual reload.
+            if phase == .active { Task { await viewModel.load() } }
+        }
     }
 
     // MARK: - Header + search (matches Library/Marketplace)
 
     private var header: some View {
-        ScreenHeader("Messages") {
+        ScreenHeader("Inbox") {
             HeaderIconButton(icon: .bell, showDot: unreadCounts.notifications > 0) {
                 router.navigateToNotifications()
             }
@@ -69,7 +75,7 @@ struct MessagesScreen: View {
             }
         } expansion: {
             // Inside the header chrome so the bar background sits behind the
-            // field and the shadow falls below it — not bleeding onto the page.
+            // field — not floating over the page content.
             if showSearchField {
                 searchRow
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -267,15 +273,7 @@ struct MessagesScreen: View {
     }
 
     private func emptyState(title: String, message: String?) -> some View {
-        VStack(spacing: 10) {
-            LucideIcon(.messageCircle, .hero).foregroundStyle(Color.vText3)
-            Text(title).font(.appTitle3).foregroundStyle(.white)
-            if let message {
-                Text(message).font(.appSubheadline).foregroundStyle(Color.vText2).multilineTextAlignment(.center)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 40)
+        EmptyStateView(icon: .messageCircle, title: title, message: message)
     }
 }
 

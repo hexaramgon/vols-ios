@@ -6,6 +6,7 @@
 import AVFoundation
 import Combine
 import MediaLibrary
+import SharedUtilities
 import UIKit
 
 public enum MediaPlayerState: Equatable, Hashable {
@@ -65,7 +66,7 @@ public final class MediaPlayer {
         systemMediaInterface = SystemMediaInterface()
         urlPlayer = URLAudioPlayer()
         state = .paused(media: .none)
-        commandProfile = CommandProfile(isLiveStream: false, isSwitchTrackEnabled: false)
+        commandProfile = CommandProfile(isSwitchTrackEnabled: false)
         systemMediaInterface.setRemoteCommandProfile(commandProfile!)
         audioSession.delegate = self
         systemMediaInterface.delegate = self
@@ -299,7 +300,6 @@ private extension MediaPlayer {
 
     func updateCommandProfile() {
         let profile = CommandProfile(
-            isLiveStream: false,
             // Enabled for a single-track queue too — forward/backward restart
             // the track (see forward()/backward()) instead of going dead.
             isSwitchTrackEnabled: !items.isEmpty
@@ -443,7 +443,7 @@ extension MediaPlayer: SystemMediaInterfaceDelegate {
 // MARK: - URLAudioPlayerDelegate
 
 extension MediaPlayer: URLAudioPlayerDelegate {
-    public func urlAudioPlayer(_: URLAudioPlayer, didUpdateProgress prog: PlaybackProgress) {
+    func urlAudioPlayer(_: URLAudioPlayer, didUpdateProgress prog: PlaybackProgress) {
         // Only update the app's own progress here. The system now-playing info is
         // NOT re-pushed every tick — the OS interpolates the scrubber from the
         // elapsed time + rate we set on state changes. The one exception: push
@@ -466,11 +466,11 @@ extension MediaPlayer: URLAudioPlayerDelegate {
         }
     }
 
-    public func urlAudioPlayer(_: URLAudioPlayer, didSetupVideoPlayer player: AVPlayer?) {
+    func urlAudioPlayer(_: URLAudioPlayer, didSetupVideoPlayer player: AVPlayer?) {
         avPlayer = player
     }
 
-    public func urlAudioPlayer(_: URLAudioPlayer, didChangeBuffering isBuffering: Bool) {
+    func urlAudioPlayer(_: URLAudioPlayer, didChangeBuffering isBuffering: Bool) {
         self.isBuffering = isBuffering
         // Re-assert the lock-screen snapshot once audio actually flows after a
         // switch: if any earlier push was dropped mid-flight (rapid skipping),
@@ -480,12 +480,14 @@ extension MediaPlayer: URLAudioPlayerDelegate {
         }
     }
 
-    public func urlAudioPlayerDidFinishPlaying(_: URLAudioPlayer) {
-        // Repeat-one → restart the current track from the top. `seek(to: 0)` reloads
-        // the file, replays it and re-arms the finish handler, so it keeps looping.
-        // (playItem no-ops when the target is already the current track, so it can't
-        // be used to replay the same one.)
-        if repeatEnabled, state.currentMediaID != nil {
+    func urlAudioPlayerDidFinishPlaying(_: URLAudioPlayer) {
+        // Repeat-one — or a single-track queue (e.g. a profile whose only post
+        // is one video) — restarts from the top and keeps looping, matching how
+        // longer queues wrap around at the end instead of stopping. `seek(to: 0)`
+        // reloads the file, replays it and re-arms the finish handler. (playItem
+        // no-ops when the target is already the current track, so it can't be
+        // used to replay the same one.)
+        if repeatEnabled || items.count == 1, state.currentMediaID != nil {
             seek(to: 0)
             return
         }

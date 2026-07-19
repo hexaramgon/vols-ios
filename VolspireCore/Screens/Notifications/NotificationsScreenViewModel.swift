@@ -9,6 +9,7 @@
 import Foundation
 import Observation
 import Services
+import SharedUtilities
 
 enum NotificationsLoadingState: Equatable {
     case idle
@@ -75,7 +76,7 @@ final class NotificationsScreenViewModel {
             loadingState = .loaded
             await markAllRead()
         } catch {
-            print("[NotificationsVM] load: \(error)")
+            debugLog("[NotificationsVM] load: \(error)")
             if notifications.isEmpty { loadingState = .error(error.localizedDescription) }
         }
     }

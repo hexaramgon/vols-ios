@@ -161,13 +161,6 @@ private extension RegularNowPlaying {
 
     enum Const {
         static let horizontalPadding: CGFloat = 32
-        /// Active like colour — tailwind pink-400, matching the web player.
-        static let likedPink = Color(red: 0.957, green: 0.447, blue: 0.714)
-        /// Inactive action tint. The web uses a dim neutral-400, but that's only
-        /// legible on its solid dark bar — over the player's album-art gradient it
-        /// disappears, so we keep the inactive state bright (distinction comes from
-        /// the colour + fill when active).
-        static let inactiveTint = Color.white.opacity(0.85)
     }
 
     /// Artwork square dimension (same as before).
@@ -209,12 +202,6 @@ private extension RegularNowPlaying {
         max(mainContentHeight, UIScreen.size.height - 320)
     }
 
-
-    var grip: some View {
-        Capsule()
-            .fill(.white.secondary)
-            .frame(width: 40, height: 5)
-    }
 
     var isVideo: Bool {
         if case .videoPlayer = model.display.artwork { return true }
@@ -334,13 +321,6 @@ private extension RegularNowPlaying {
         // bottom padding + info strip (keeps `mainContentHeight` accurate).
         VStack(spacing: 0) {
             artworkOrVisualizer
-                // Action button row (like/save/comment) removed for now —
-                // re-add this overlay to bring it back.
-                // .overlay(alignment: .bottom) {
-                //     actionIconsRow
-                //         .offset(y: 42)
-                //         .padding(.horizontal, 25)
-                // }
                 .overlay(alignment: .bottomTrailing) {
                     if canShowVisualizer {
                         visualizerToggleButton
@@ -368,98 +348,6 @@ private extension RegularNowPlaying {
         .padding(.top, artworkTopInset)
     }
 
-    var actionIconsRow: some View {
-        HStack {
-            HStack(spacing: 20) {
-                interactionButton(
-                    outline: .bookmark, filled: .bookmarkFill,
-                    isActive: model.isSaved, activeColor: .white, count: model.saveCount
-                ) { Task { await model.toggleSave() } }
-
-                interactionButton(
-                    outline: .heart, filled: .heartFill,
-                    isActive: model.isLiked, activeColor: Const.likedPink, count: model.likeCount
-                ) { Task { await model.toggleLike() } }
-            }
-            Spacer()
-            Button {
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    selectedPanel = selectedPanel == 1 ? 0 : 1
-                }
-            } label: {
-                // Count first, then icon — it sits on the right edge, so the icon
-                // hugs the edge and the number reads inward.
-                HStack(spacing: 5) {
-                    Text(formatCount(model.trackDetail?.comments ?? 0))
-                        .font(.body)
-                    LucideIcon(.messageCircle, .xxl)
-                }
-                .foregroundStyle(Const.inactiveTint)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    /// A like/save button: outline icon when inactive, a coloured *filled* icon
-    /// that pops in when active (mirrors the web's `fill-current` treatment).
-    func interactionButton(
-        outline: LucideIcon.Name,
-        filled: LucideIcon.Name,
-        isActive: Bool,
-        activeColor: Color,
-        count: Int,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                FillIcon(outline: outline, filled: filled, isActive: isActive, activeColor: activeColor, size: 28)
-                Text(formatCount(count))
-                    .font(.body)
-                    .foregroundStyle(isActive ? activeColor : Const.inactiveTint)
-                    .contentTransition(.numericText())
-                    .animation(.snappy, value: count)
-                    .animation(.easeInOut(duration: 0.18), value: isActive)
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func formatCount(_ count: Int) -> String {
-        switch count {
-        case ..<1_000: return "\(count)"
-        case ..<1_000_000: return String(format: "%.1fK", Double(count) / 1_000)
-        default: return String(format: "%.1fM", Double(count) / 1_000_000)
-        }
-    }
-}
-
-/// Crossfades a Lucide outline icon to its filled, coloured variant when `isActive`,
-/// popping the icon as it fills in — the now-playing like/save affordance.
-private struct FillIcon: View {
-    let outline: LucideIcon.Name
-    let filled: LucideIcon.Name
-    let isActive: Bool
-    let activeColor: Color
-    let size: CGFloat
-    @State private var pop: CGFloat = 1
-
-    var body: some View {
-        ZStack {
-            LucideIcon(outline, size: size)
-                .foregroundStyle(Color.white.opacity(0.85))   // bright enough to read on the player bg
-                .opacity(isActive ? 0 : 1)
-            LucideIcon(filled, size: size)
-                .foregroundStyle(activeColor)
-                .opacity(isActive ? 1 : 0)
-        }
-        .scaleEffect(pop)
-        .animation(.easeInOut(duration: 0.18), value: isActive)
-        .onChange(of: isActive) { _, active in
-            guard active else { return } // pop only when filling in, not when clearing
-            withAnimation(.spring(response: 0.16, dampingFraction: 0.5)) { pop = 1.3 }
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.6).delay(0.12)) { pop = 1 }
-        }
-    }
 }
 
 #Preview {

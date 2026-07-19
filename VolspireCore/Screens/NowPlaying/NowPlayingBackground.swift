@@ -45,12 +45,15 @@ struct NowPlayingBackground: View {
 }
 
 private extension NowPlayingBackground {
-    /// Album-tinted gradient stops fading into the app's dark base. Falls back to a
-    /// neutral dark gradient when no album colours are available.
+    /// Album-tinted gradient stops fading into the app's dark base. Falls back to
+    /// the brand wash (same feel as the Playlists / Workspace heroes) when no
+    /// album colours are available — not a flat grey.
     var backgroundGradientColors: [Color] {
         let album = Array(colors.prefix(2))
         let base = Color(red: 1.0 / 255.0, green: 1.0 / 255.0, blue: 2.0 / 255.0)
-        return album.isEmpty ? [Color(white: 0.22), base] : album + [base]
+        return album.isEmpty
+            ? [Color.brand.opacity(0.42), Color.brand.opacity(0.12), base]
+            : album + [base]
     }
 
     var playerCornerRadius: CGFloat {

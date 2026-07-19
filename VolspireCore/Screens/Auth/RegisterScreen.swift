@@ -33,6 +33,9 @@ struct RegisterScreen: View {
     @State private var bannerItem: PhotosPickerItem?
     @State private var showAvatarPicker = false
     @State private var showBannerPicker = false
+    /// Legal docs presented from the signup agreement checkbox.
+    @State private var showTermsDoc = false
+    @State private var showPrivacyDoc = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,6 +71,8 @@ struct RegisterScreen: View {
                     .ignoresSafeArea(.keyboard, edges: .bottom)
             }
         }
+        .sheet(isPresented: $showTermsDoc) { SettingsDocScreen(doc: .terms, inSheet: true) }
+        .sheet(isPresented: $showPrivacyDoc) { SettingsDocScreen(doc: .privacy, inSheet: true) }
     }
 
     // MARK: - Top bar (back chevron)
@@ -214,17 +219,25 @@ struct RegisterScreen: View {
     @ViewBuilder
     private func emailStep(_ viewModel: RegisterViewModel) -> some View {
         VStack(spacing: 0) {
+            // EULA gate (App Store 1.2): must be accepted before any account is
+            // created. Gates the email "Continue" (via canContinue) and the
+            // social buttons below.
+            termsAgreement(viewModel)
+                .padding(.bottom, 20)
+
             VStack(spacing: 10) {
                 AppleAuthButton(label: "Continue with Apple") { credential in
                     Task { await dependencies.authManager.signInWithApple(credential: credential) }
                 } onError: { error in
-                    dependencies.authManager.setError(error.localizedDescription)
+                    dependencies.authManager.setError(from: error)
                 }
 
                 GoogleAuthButton(label: "Continue with Google") {
                     Task { await dependencies.authManager.signInWithGoogle() }
                 }
             }
+            .disabled(!viewModel.agreedToLegal)
+            .opacity(viewModel.agreedToLegal ? 1 : 0.5)
 
             AuthOrDivider()
                 .padding(.vertical, 22)
@@ -239,6 +252,79 @@ struct RegisterScreen: View {
                 )
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: viewModel.agreedToLegal)
+    }
+
+    /// Age/Terms + Privacy acceptance — SEPARATE checkboxes, each with its
+    /// legal link flowing inline with the copy to the row's full width.
+    private func termsAgreement(_ viewModel: RegisterViewModel) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            agreementRow(checked: viewModel.agreedToTerms, text: Self.termsString) {
+                viewModel.agreedToTerms.toggle()
+            }
+            agreementRow(checked: viewModel.agreedToPrivacy, text: Self.privacyString) {
+                viewModel.agreedToPrivacy.toggle()
+            }
+        }
+        .environment(\.openURL, OpenURLAction { url in
+            switch url.absoluteString {
+            case "volspire://terms": showTermsDoc = true
+            case "volspire://privacy": showPrivacyDoc = true
+            default: break
+            }
+            return .handled
+        })
+    }
+
+    private func agreementRow(
+        checked: Bool, text: AttributedString, toggle: @escaping () -> Void
+    ) -> some View {
+        // Centre-aligned: the box sits on the row's vertical middle (between
+        // the lines when the sentence wraps), not hanging off the first line.
+        HStack(alignment: .center, spacing: 11) {
+            Button {
+                withAnimation(.snappy(duration: 0.15)) { toggle() }
+            } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(checked ? Color.white : Color.white.opacity(0.06))
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color.white.opacity(checked ? 0 : 0.25), lineWidth: 1.5)
+                    if checked {
+                        LucideIcon(.check, .sm).foregroundStyle(.black)
+                    }
+                }
+                .frame(width: 22, height: 22)
+                .padding(.vertical, 2) // hit comfort without changing the row height
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+                .tint(.white)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private static var termsString: AttributedString {
+        var lead = AttributedString("I'm 18 or older and agree to Volspire's ")
+        lead.font = .appFootnote
+        lead.foregroundColor = Color.vText2
+        var terms = AttributedString("Terms of Service")
+        terms.font = .appFootnoteMedium
+        terms.link = URL(string: "volspire://terms")
+        return lead + terms
+    }
+
+    private static var privacyString: AttributedString {
+        var lead = AttributedString("I have read and agree to the ")
+        lead.font = .appFootnote
+        lead.foregroundColor = Color.vText2
+        var privacy = AttributedString("Privacy Policy")
+        privacy.font = .appFootnoteMedium
+        privacy.link = URL(string: "volspire://privacy")
+        return lead + privacy
     }
 
     // ── Step 1: password + rules ──

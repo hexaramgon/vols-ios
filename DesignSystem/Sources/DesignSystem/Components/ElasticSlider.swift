@@ -215,46 +215,18 @@ private extension ElasticSlider {
 
 // MARK: Convenience initializers
 
-extension ElasticSlider where LeadingContent == EmptyView {
+public extension ElasticSlider where LeadingContent == EmptyView, TrailingContent == EmptyView {
     init(
         value: Binding<Double>,
         in range: ClosedRange<Double>,
-        trailingLabel: (() -> TrailingContent)? = nil
-    ) {
-        _value = value
-        self.range = range
-        lastStoredValue = value.wrappedValue
-        leadingLabel = nil
-        self.trailingLabel = trailingLabel?()
-    }
-}
-
-extension ElasticSlider where TrailingContent == EmptyView {
-    init(
-        value: Binding<Double>,
-        in range: ClosedRange<Double>,
-        config _: ElasticSliderConfig = .init(),
-        leadingLabel: (() -> LeadingContent)? = nil
-    ) {
-        _value = value
-        self.range = range
-        lastStoredValue = value.wrappedValue
-        self.leadingLabel = leadingLabel?()
-        trailingLabel = nil
-    }
-}
-
-extension ElasticSlider where LeadingContent == EmptyView, TrailingContent == EmptyView {
-    init(
-        value: Binding<Double>,
-        in range: ClosedRange<Double>,
-        config _: ElasticSliderConfig = .init()
+        onActive: ((Bool) -> Void)? = nil
     ) {
         _value = value
         self.range = range
         lastStoredValue = value.wrappedValue
         leadingLabel = nil
         trailingLabel = nil
+        self.onActive = onActive
     }
 }
 
@@ -311,6 +283,24 @@ public struct ElasticSliderConfig {
         self.blendMode = blendMode
         self.syncLabelsStyle = syncLabelsStyle
         self.defaultSensoryFeedback = defaultSensoryFeedback
+    }
+}
+
+public extension ElasticSliderConfig {
+    /// Compact thumbless bar for inline transports (chat audio attachments,
+    /// listing clips, upload previews): calm — no elastic overshoot, no
+    /// end-of-track haptic. Use this (not a stock `Slider`) inside scrollable
+    /// content: SwiftUI's `Slider` loses its thumb drag under an ancestor
+    /// `onTapGesture` (the app-wide tap-to-dismiss-keyboard), while
+    /// ElasticSlider's own high-priority drag claims the touch first.
+    static var inlineScrub: Self {
+        Self(
+            maxStretch: 0,
+            minimumTrackActiveColor: .white,
+            minimumTrackInactiveColor: .white,
+            maximumTrackColor: .white.opacity(0.18),
+            defaultSensoryFeedback: false
+        )
     }
 }
 

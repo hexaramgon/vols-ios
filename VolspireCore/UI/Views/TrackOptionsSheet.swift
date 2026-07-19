@@ -8,6 +8,7 @@
 //
 
 import DesignSystem
+import Services
 import SwiftUI
 
 struct TrackOptionsSheet: View {
@@ -31,8 +32,12 @@ struct TrackOptionsSheet: View {
     var artist: String? = nil
     var meta: String? = nil
     let actions: [Action]
+    /// When set, a "Report" row is appended (App Store 1.2 UGC safety). Omit for
+    /// the viewer's own tracks, which get edit / hide / delete instead.
+    var reportTargetId: String? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @State private var showReport = false
     @State private var loadingID: UUID?
     /// Measured natural height of the header + rows: the sheet detents to
     /// exactly fit its content instead of a fixed `.medium`, which left a
@@ -49,6 +54,7 @@ struct TrackOptionsSheet: View {
 
                 VStack(spacing: 0) {
                     ForEach(actions) { row($0) }
+                    if reportTargetId != nil { reportRow }
                 }
                 .padding(.top, 8)
             }
@@ -58,6 +64,24 @@ struct TrackOptionsSheet: View {
         }
         .presentationDetents([.height(contentHeight + ViewConst.safeAreaInsets.bottom + 8)])
         .environment(\.colorScheme, .dark)
+        .sheet(isPresented: $showReport) {
+            ReportSheet(targetType: .track, targetId: reportTargetId ?? "", subject: title)
+        }
+    }
+
+    /// Appended "Report" row — presents the report sheet over this one.
+    private var reportRow: some View {
+        Button { showReport = true } label: {
+            HStack(spacing: 14) {
+                LucideIcon(.flag, .lg).foregroundStyle(.primary).frame(width: 24)
+                Text("Report").font(.appBody).foregroundStyle(.primary)
+                Spacer()
+            }
+            .padding(.horizontal, 20).padding(.vertical, 14)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(loadingID != nil)
     }
 
     /// Artist and meta collapsed onto the single subtitle line the header allows.

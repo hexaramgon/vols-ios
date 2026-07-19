@@ -11,6 +11,7 @@
 import DesignSystem
 import Services
 import SwiftUI
+import SharedUtilities
 
 struct WorkspaceFolderPicker: View {
     let trackId: String
@@ -138,7 +139,7 @@ struct WorkspaceFolderPicker: View {
             return true
         } catch {
             errorText = "Couldn't create the folder. Please try again."
-            print("[WorkspaceFolderPicker] create failed: \(error)")
+            debugLog("[WorkspaceFolderPicker] create failed: \(error)")
             return false
         }
     }
@@ -192,7 +193,7 @@ struct WorkspaceFolderPicker: View {
                 }
             } catch {
                 errorText = message(for: error)
-                print("[WorkspaceFolderPicker] toggle failed: \(error)")
+                debugLog("[WorkspaceFolderPicker] toggle failed: \(error)")
             }
         }
     }
@@ -349,7 +350,7 @@ struct AttachmentFolderPicker: View {
                 dismiss()
             } catch {
                 errorText = "Couldn't add to workspace. Please try again."
-                print("[AttachmentFolderPicker] add failed: \(error)")
+                debugLog("[AttachmentFolderPicker] add failed: \(error)")
             }
         }
     }
@@ -370,7 +371,7 @@ struct AttachmentFolderPicker: View {
             return true
         } catch {
             errorText = "Couldn't create the folder. Please try again."
-            print("[AttachmentFolderPicker] create failed: \(error)")
+            debugLog("[AttachmentFolderPicker] create failed: \(error)")
             return false
         }
     }

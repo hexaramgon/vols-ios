@@ -24,7 +24,9 @@ struct NotificationSettingsScreen: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                Text("Choose what you get notified about.")
+                // Prefs gate PUSHES only — the in-app notifications feed always
+                // shows everything (see get_user_notifications).
+                Text("Choose which push notifications you receive. Everything still shows in your notifications feed.")
                     .font(.appFootnote)
                     .foregroundStyle(Color.vText3)
                     .frame(maxWidth: .infinity, alignment: .leading)

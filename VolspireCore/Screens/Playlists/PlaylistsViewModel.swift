@@ -9,6 +9,7 @@
 import Foundation
 import Observation
 import Services
+import SharedUtilities
 
 @Observable @MainActor
 final class PlaylistsViewModel {
@@ -36,7 +37,7 @@ final class PlaylistsViewModel {
             playlists = try await service.getUserPlaylists()
             loadFailed = false
         } catch {
-            print("[PlaylistsVM] load: \(error)")
+            debugLog("[PlaylistsVM] load: \(error)")
             loadFailed = true
         }
         isLoading = false
@@ -61,7 +62,7 @@ final class PlaylistsViewModel {
             showCreate = false
             playlists = (try? await service.getUserPlaylists()) ?? playlists
         } catch {
-            print("[PlaylistsVM] create: \(error)")
+            debugLog("[PlaylistsVM] create: \(error)")
         }
         isCreating = false
     }

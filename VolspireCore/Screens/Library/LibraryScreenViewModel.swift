@@ -11,6 +11,7 @@ import MediaLibrary
 import Observation
 import Player
 import Services
+import SharedUtilities
 
 enum LibraryLoadingState: Equatable {
     case idle
@@ -52,33 +53,45 @@ final class LibraryScreenViewModel {
         self.storageService = storageService
     }
 
-    /// Loads the user's saved (liked) tracks and their own uploads.
+    /// Loads the user's saved (liked) tracks and their own uploads concurrently, so
+    /// first paint waits on max(library RTT, uploads RTT) rather than their sum. Both
+    /// helpers are `@MainActor`, so the state writes stay serialized and race-free.
     func load(currentUserId: String?) async {
         guard case .idle = loadingState else { return }
         loadingState = .loading
-        var failed = false
 
-        do {
-            savedTracks = try await supabaseService.getUserLibrary()
-            prefetchCovers()
-            for track in savedTracks { await mediaState?.addTrack(mediaFor(track)) }
-        } catch {
-            print("[LibraryVM] Failed to load saved tracks: \(error)")
-            failed = true
-        }
+        async let savedOk = fetchSavedTracks()
+        async let uploadsOk = fetchUploads(currentUserId: currentUserId)
+        let (saved, uploads) = await (savedOk, uploadsOk)
 
-        if let currentUserId {
-            do {
-                uploadedTracks = try await supabaseService.getUserProfile(userId: currentUserId).tracks
-                for track in uploadedTracks { await mediaState?.addTrack(mediaFor(upload: track)) }
-            } catch {
-                print("[LibraryVM] Failed to load uploads: \(error)")
-                failed = true
-            }
-        }
-
-        loadFailed = failed
+        loadFailed = !saved || !uploads
         loadingState = .loaded
+    }
+
+    private func fetchSavedTracks() async -> Bool {
+        do {
+            let tracks = try await supabaseService.getUserLibrary()
+            savedTracks = tracks
+            prefetchCovers()
+            for track in tracks { await mediaState?.addTrack(mediaFor(track)) }
+            return true
+        } catch {
+            debugLog("[LibraryVM] Failed to load saved tracks: \(error)")
+            return false
+        }
+    }
+
+    private func fetchUploads(currentUserId: String?) async -> Bool {
+        guard let currentUserId else { return true }
+        do {
+            let tracks = try await supabaseService.getUserProfile(userId: currentUserId).tracks
+            uploadedTracks = tracks
+            for track in tracks { await mediaState?.addTrack(mediaFor(upload: track)) }
+            return true
+        } catch {
+            debugLog("[LibraryVM] Failed to load uploads: \(error)")
+            return false
+        }
     }
 
     func refresh(currentUserId: String?) async {
@@ -89,6 +102,24 @@ final class LibraryScreenViewModel {
     /// All saved tracks as `Media` (for the "See all" collection screen).
     func savedMediaList() -> [Media] {
         savedTracks.map(mediaFor)
+    }
+
+    private func coverURL(forUpload track: ApiProfileTrack) -> URL? {
+        storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) }
+    }
+
+    /// Uploads as `Media` — registered in MediaState so an upload's ID resolves
+    /// if another surface plays it.
+    private func mediaFor(upload track: ApiProfileTrack) -> Media {
+        Media(
+            id: MediaID(track.id),
+            meta: MediaMeta(
+                artwork: coverURL(forUpload: track),
+                title: track.title,
+                artist: nil,
+                audioURL: storageService.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) }
+            )
+        )
     }
 
     func play(_ track: ApiUserLike) {
@@ -104,7 +135,7 @@ final class LibraryScreenViewModel {
             try await supabaseService.unsaveTrack(trackId: track.trackId)
             savedTracks.removeAll { $0.trackId == track.trackId }
         } catch {
-            print("[LibraryVM] Failed to unsave track: \(error)")
+            debugLog("[LibraryVM] Failed to unsave track: \(error)")
         }
     }
 
@@ -135,30 +166,6 @@ final class LibraryScreenViewModel {
         )
     }
 
-    // MARK: - Uploads
-
-    func coverURL(forUpload track: ApiProfileTrack) -> URL? {
-        storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) }
-    }
-
-    func play(upload track: ApiProfileTrack) {
-        guard let player else { return }
-        let media = mediaFor(upload: track)
-        Task { await mediaState?.addTrack(media) }
-        player.play(media.id, of: uploadedTracks.map { MediaID($0.id) })
-    }
-
-    private func mediaFor(upload track: ApiProfileTrack) -> Media {
-        Media(
-            id: MediaID(track.id),
-            meta: MediaMeta(
-                artwork: coverURL(forUpload: track),
-                title: track.title,
-                artist: nil,
-                audioURL: storageService.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) }
-            )
-        )
-    }
 }
 
 extension LibraryScreenViewModel: PlayerStateObserving {}

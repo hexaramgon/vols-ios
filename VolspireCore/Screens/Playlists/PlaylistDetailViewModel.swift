@@ -6,12 +6,11 @@
 //  media player, and manages tracks/deletion for the owner.
 //
 
-import Combine
 import Foundation
 import MediaLibrary
 import Observation
-import Player
 import Services
+import SharedUtilities
 
 @Observable @MainActor
 final class PlaylistDetailViewModel {
@@ -19,7 +18,6 @@ final class PlaylistDetailViewModel {
 
     var detail: ApiPlaylistDetail?
     var state: LoadState = .loading
-    var playerState: MediaPlayerState = .paused(media: .none)
 
     /// Edit sheet state (name, description, and an optionally picked new cover).
     var showEdit = false
@@ -31,11 +29,7 @@ final class PlaylistDetailViewModel {
     let playlistId: String
     var currentUserId: String?
     weak var mediaState: MediaState?
-    weak var player: MediaPlayer? {
-        didSet { observeMediaPlayerState() }
-    }
 
-    var cancellables = Set<AnyCancellable>()
     private let service: SupabaseService
     private let storage: StorageService
 
@@ -63,31 +57,9 @@ final class PlaylistDetailViewModel {
             for track in detail.tracks ?? [] { await mediaState?.addTrack(media(for: track)) }
             state = .loaded
         } catch {
-            print("[PlaylistDetailVM] load: \(error)")
+            debugLog("[PlaylistDetailVM] load: \(error)")
             if detail == nil { state = .error(error.localizedDescription) }
         }
-    }
-
-    func play(_ track: ApiPlaylistTrack) {
-        guard let player else { return }
-        let media = media(for: track)
-        Task { await mediaState?.addTrack(media) }
-        player.play(media.id, of: tracks.map { MediaID($0.trackId) })
-    }
-
-    func playAll() {
-        guard let first = tracks.first else { return }
-        play(first)
-    }
-
-    func shuffle() {
-        guard let player, !tracks.isEmpty else { return }
-        // Random starting track + player-level shuffle: the queue keeps its real
-        // order underneath, so toggling shuffle off in the player restores it.
-        let ids = tracks.map { MediaID($0.trackId) }
-        guard let start = ids.randomElement() else { return }
-        player.setShuffle(true)
-        player.play(start, of: ids)
     }
 
     /// Removes a track from this playlist, then reloads so the list reflects it.
@@ -96,7 +68,7 @@ final class PlaylistDetailViewModel {
             try await service.removeTrackFromPlaylist(playlistId: playlistId, trackId: trackId)
             await load()
         } catch {
-            print("[PlaylistDetailVM] removeTrack: \(error)")
+            debugLog("[PlaylistDetailVM] removeTrack: \(error)")
         }
     }
 
@@ -129,7 +101,7 @@ final class PlaylistDetailViewModel {
             showEdit = false
             await load()
         } catch {
-            print("[PlaylistDetailVM] saveEdit: \(error)")
+            debugLog("[PlaylistDetailVM] saveEdit: \(error)")
         }
         isSaving = false
     }
@@ -139,7 +111,7 @@ final class PlaylistDetailViewModel {
             try await service.deletePlaylist(playlistId: playlistId)
             return true
         } catch {
-            print("[PlaylistDetailVM] delete: \(error)")
+            debugLog("[PlaylistDetailVM] delete: \(error)")
             return false
         }
     }
@@ -160,5 +132,3 @@ final class PlaylistDetailViewModel {
         )
     }
 }
-
-extension PlaylistDetailViewModel: PlayerStateObserving {}

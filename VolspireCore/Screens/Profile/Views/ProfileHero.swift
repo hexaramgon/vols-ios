@@ -18,24 +18,37 @@ struct ProfileHeroView: View {
     let userId: String
     let onEditProfile: () -> Void
     let onShareProfile: () -> Void
-    /// Rendered height — grows past `heroHeight` while the scroll view overscrolls
-    /// at the top so the banner stretches to fill instead of revealing black.
-    var height: CGFloat = ProfileLayout.heroHeight
 
-    /// Avatar zoom is driven by `ProfileScreen`: the hero reports the avatar's
-    /// on-screen frame, hides it while expanded, and asks the screen to open the
-    /// zoomed viewer — so a single circular element animates in place.
-    @Binding var avatarFrame: CGRect
+    /// Avatar zoom is driven by `ProfileScreen`: the hero hides the avatar
+    /// while the zoom is up, and hands its on-screen frame over at TAP time so
+    /// the zoomed copy grows from the right spot.
     var avatarHidden: Bool
-    var onAvatarTap: () -> Void
+    var onAvatarTap: (CGRect) -> Void
 
     /// Banner fades in via a plain opacity (not Kingfisher's transition, which
     /// scales a non-square `.fill` image in — that was the "stretch" on load).
     @State private var bannerLoaded = false
+    /// The avatar's live frame, kept OUT of observed state: it changes on every
+    /// scroll frame, and writing it into `@State`/a binding re-rendered the
+    /// whole profile per frame (the old stutter). It's only read at tap time.
+    @State private var avatarFrameBox = FrameBox()
+
+    final class FrameBox {
+        var rect: CGRect = .zero
+    }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            background
+            // Decorative backdrop only — the pull-down stretch lives HERE, so
+            // per-frame geometry reads re-render gradients + one image, never
+            // the interactive content below (whose tap targets never move).
+            GeometryReader { geo in
+                let stretch = max(0, geo.frame(in: .scrollView).minY)
+                background(height: geo.size.height + stretch)
+                    .offset(y: -stretch)
+            }
+            .allowsHitTesting(false)
+
             content
                 .padding(.horizontal, ViewConst.screenPaddings)
                 .padding(.bottom, 16)
@@ -43,8 +56,7 @@ struct ProfileHeroView: View {
         // Pin to the screen width (the hero is always full-bleed) so the width
         // can't resolve/animate while clipped — that reveals the banner sideways.
         .frame(width: UIScreen.size.width)
-        .frame(height: height)
-        .clipped()
+        .frame(height: ProfileLayout.heroHeight)
     }
 }
 
@@ -58,7 +70,7 @@ private extension ProfileHeroView {
         return album.isEmpty ? [Color(white: 0.18), .vBase] : album + [.vBase]
     }
 
-    var background: some View {
+    func background(height: CGFloat) -> some View {
         ZStack {
             Color.vBase
             LinearGradient(colors: washColors, startPoint: .top, endPoint: .bottom)
@@ -114,6 +126,8 @@ private extension ProfileHeroView {
 
             GrainOverlay()
         }
+        .frame(width: UIScreen.size.width, height: height)
+        .clipped()
     }
 }
 
@@ -137,6 +151,11 @@ private extension ProfileHeroView {
                             Text(viewModel.location).font(.appFootnote).foregroundStyle(.white)
                         }
                         .heroTextShadow()
+                    }
+                    // Accepted collaborators get an explicit marker — the same
+                    // pill language as the workspace role pills.
+                    if !isOwnProfile, viewModel.collaboratorStatus == "accepted" {
+                        collaboratorBadge
                     }
                 }
                 Spacer(minLength: 0)
@@ -163,18 +182,21 @@ private extension ProfileHeroView {
         Group {
             if let url = viewModel.profileImageURL {
                 KFImage(url)
-                    // Initial-letter placeholder while the image loads (or if it
-                    // fails) — no empty circle during the fetch. `fade: 0`
-                    // matters: downsampled() bakes in a 0.25s fade by default.
-                    .placeholder { avatarPlaceholder }
+                    // A photo EXISTS here, it just hasn't arrived — shimmer a
+                    // neutral circle while it loads. The initial letter is
+                    // reserved for accounts we KNOW have no photo (else
+                    // branch); flashing it mid-fetch read as wrong data.
+                    .placeholder { loadingPlaceholder }
                     // Disk-cached avatars render on the FIRST frame instead of
-                    // flashing the placeholder for an async cache lookup — only
-                    // true network loads show the letter at all.
+                    // flashing the placeholder for an async cache lookup —
+                    // only true network loads shimmer at all.
                     .loadDiskFileSynchronously()
                     .downsampled(to: 84, fade: 0)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {
+                // No photo on the account (confirmed by the loaded profile) —
+                // the initial letter is the real state, not a guess.
                 avatarPlaceholder
             }
         }
@@ -186,9 +208,11 @@ private extension ProfileHeroView {
         .contentShape(Circle())
         .onTapGesture {
             guard viewModel.profileImageURL != nil else { return }
-            onAvatarTap()
+            onAvatarTap(avatarFrameBox.rect)
         }
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
+        // Writes land in a plain class — deliberately NOT observed state; the
+        // frame changes every scroll frame and must not invalidate any view.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrameBox.rect = $0 }
         // No animation may reach the avatar from ANY source — Kingfisher's
         // internal swap, the entrance cascade, or the hero-colour wash. The
         // placeholder→image change is always a hard cut.
@@ -197,6 +221,13 @@ private extension ProfileHeroView {
 
     /// Gradient + initial letter — shown while the avatar loads and for
     /// profiles without a photo.
+    /// Neutral shimmering circle for a photo that exists but is still
+    /// downloading — never the initial letter (that's a claim, not a wait).
+    private var loadingPlaceholder: some View {
+        LinearGradient(colors: [Color(white: 0.2), .vBase], startPoint: .top, endPoint: .bottom)
+            .shimmering()
+    }
+
     private var avatarPlaceholder: some View {
         ZStack {
             LinearGradient(colors: [Color(white: 0.2), .vBase], startPoint: .top, endPoint: .bottom)
@@ -221,7 +252,7 @@ private extension ProfileHeroView {
         HStack(spacing: 7) {
             LucideIcon(icon, .sm).foregroundStyle(Color.vText3)
             VStack(alignment: .leading, spacing: 1) {
-                Text(value.profileCompact)
+                Text(value.compactCount)
                     .font(.appHeadlineBold)
                     .foregroundStyle(.white)
                     .contentTransition(.numericText())
@@ -236,6 +267,22 @@ private extension ProfileHeroView {
 
     var statDivider: some View {
         Rectangle().fill(.white.opacity(0.1)).frame(width: 1, height: 24)
+    }
+
+    /// "Collaborator" chip — shown once a collab request has been accepted
+    /// between you and this artist. The send-accent gradient (the app's accent
+    /// for connected/active states, e.g. the Following button beside it) with
+    /// white content, softly lifted off the banner.
+    var collaboratorBadge: some View {
+        HStack(spacing: 5) {
+            LucideIcon(.handshake, .xs)
+            Text("Collaborator").font(.appCaption2Semibold)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(LinearGradient.sendAccent, in: Capsule())
+        .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
     }
 }
 
@@ -288,7 +335,7 @@ private extension ProfileHeroView {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: 34)
-                .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                .background(Color.vCard, in: RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(StaticButtonStyle())
     }
@@ -298,7 +345,7 @@ private extension ProfileHeroView {
             LucideIcon(icon, .sm)
                 .foregroundStyle(.white)
                 .frame(width: 34, height: 34)
-                .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+                .background(Color.vCard, in: RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(StaticButtonStyle())
     }
@@ -373,7 +420,7 @@ private extension ProfileHeroView {
             .foregroundStyle(muted ? Color.vText2 : Color.white)
             .frame(maxWidth: .infinity)
             .frame(height: 34)
-            .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+            .background(Color.vCard, in: RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(StaticButtonStyle())
         .disabled(muted)

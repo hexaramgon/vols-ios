@@ -44,7 +44,7 @@ struct ProfileDashboardCard: View {
                     .foregroundStyle(Color.vText2)
             }
             .padding(11)
-            .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 13))
+            .background(Color.vCard, in: RoundedRectangle(cornerRadius: 13))
         }
         .buttonStyle(.plain)
         .task { await viewModel.load() }

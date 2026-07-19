@@ -55,21 +55,8 @@ struct CollabRequestSheet: View {
 // MARK: - Header
 
 private extension CollabRequestSheet {
-    @ViewBuilder
     var targetAvatar: some View {
-        Group {
-            if let url = viewModel.profileImageURL {
-                KFImage(url).downsampled(to: 36).resizable().aspectRatio(contentMode: .fill)
-            } else {
-                ZStack {
-                    Color.white.opacity(0.08)
-                    Text(username.first.map { String($0).uppercased() } ?? "?")
-                        .font(.appSubheadlineBold).foregroundStyle(Color.vText3)
-                }
-            }
-        }
-        .frame(width: 36, height: 36)
-        .clipShape(Circle())
+        AvatarView(url: viewModel.profileImageURL, name: username, size: 36)
     }
 }
 
@@ -153,7 +140,7 @@ private extension CollabRequestSheet {
             HStack(spacing: 11) {
                 ArtworkView(track.coverURL.map { .webImage($0) } ?? .album, cornerRadius: 8)
                     .frame(width: 38, height: 38)
-                Text(track.title).font(.appSubheadlineMedium).foregroundStyle(.white).lineLimit(1)
+                Text(track.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
                 Spacer(minLength: 8)
                 ZStack {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -186,6 +173,8 @@ private extension CollabRequestSheet {
             }
             .buttonStyle(.plain)
 
+            // PrimaryButton metrics (.full: 52pt, appHeadline, dim-disabled) with
+            // a custom icon label — keep in step with the component.
             Button {
                 Task { await viewModel.sendCollab(userId: userId) }
             } label: {
@@ -195,16 +184,18 @@ private extension CollabRequestSheet {
                     } else {
                         HStack(spacing: 7) {
                             LucideIcon(.handshake, .sm)
-                            Text("Send Request").font(.appCalloutSemibold)
+                            Text("Send Request").font(.appHeadline)
                         }
                         .foregroundStyle(.black)
                     }
                 }
-                .frame(maxWidth: .infinity).padding(.vertical, 13)
-                .background(viewModel.canSendCollab ? Color.white : Color.white.opacity(0.3), in: Capsule())
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .background(.white, in: Capsule())
             }
             .buttonStyle(.plain)
-            .disabled(!viewModel.canSendCollab)
+            .disabled(!viewModel.canSendCollab || viewModel.isSendingCollab)
+            .opacity(viewModel.canSendCollab || viewModel.isSendingCollab ? 1 : 0.3)
         }
         .padding(.horizontal, 18)
         .padding(.top, 12)
@@ -224,16 +215,19 @@ private extension CollabRequestSheet {
                 Text("Your collab request is in \(displayName)'s inbox.")
                     .font(.appSubheadline).foregroundStyle(Color.vText2).multilineTextAlignment(.center)
             }
+            // PrimaryButton .inline metrics (42pt, appSubheadlineSemibold) with a
+            // trailing chevron the component doesn't model.
             Button {
                 dismiss()
                 router.navigateToMessages()
             } label: {
                 HStack(spacing: 6) {
-                    Text("Open Messages").font(.appCalloutSemibold)
+                    Text("Open Messages").font(.appSubheadlineSemibold)
                     LucideIcon(.chevronRight, .sm)
                 }
                 .foregroundStyle(.black)
-                .padding(.horizontal, 20).padding(.vertical, 12)
+                .frame(height: 42)
+                .padding(.horizontal, 24)
                 .background(Color.white, in: Capsule())
             }
             .buttonStyle(.plain)

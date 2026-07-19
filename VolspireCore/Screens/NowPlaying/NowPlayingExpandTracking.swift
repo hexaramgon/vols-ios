@@ -12,7 +12,3 @@ struct NowPlayingExpandProgressPreferenceKey: PreferenceKey {
         value = nextValue()
     }
 }
-
-extension EnvironmentValues {
-    @Entry var nowPlayingExpandProgress = 0.0
-}

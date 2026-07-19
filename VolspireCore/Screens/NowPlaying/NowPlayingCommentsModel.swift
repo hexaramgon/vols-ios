@@ -9,6 +9,7 @@
 
 import Foundation
 import Services
+import SharedUtilities
 
 @MainActor
 @Observable
@@ -64,7 +65,7 @@ final class NowPlayingCommentsModel {
             loadedKey = key
             loadFailed = false
         } catch {
-            print("[NowPlayingComments] load failed: \(error)")
+            debugLog("[NowPlayingComments] load failed: \(error)")
             comments = []
             loadFailed = true
         }
@@ -82,7 +83,9 @@ final class NowPlayingCommentsModel {
     }
 
     func send(trackId: String?, fileId: String? = nil) {
-        let content = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Cap to the server-side `comments` / `file_comments` CHECK length (defence in
+        // depth; the DB constraint is authoritative since a raw RPC bypasses the client).
+        let content = String(commentText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
         guard !content.isEmpty, !isSending, (trackId != nil || fileId != nil) else { return }
         let replyTo = replyingTo
         let parentId = replyTo?.commentId
@@ -130,7 +133,7 @@ final class NowPlayingCommentsModel {
                 loadedKey = nil
                 await loadComments(trackId: trackId, fileId: fileId)
             } catch {
-                print("[NowPlayingComments] post failed: \(error)")
+                debugLog("[NowPlayingComments] post failed: \(error)")
                 sendError = "Couldn't post your comment. Please try again."
                 removeComment(tempId)
                 commentText = content
@@ -154,7 +157,7 @@ final class NowPlayingCommentsModel {
                     try await supabaseService.deleteComment(commentId: commentId, trackId: trackId)
                 }
             } catch {
-                print("[NowPlayingComments] delete failed: \(error)")
+                debugLog("[NowPlayingComments] delete failed: \(error)")
                 comments = snapshot
             }
         }

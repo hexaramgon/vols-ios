@@ -12,12 +12,6 @@ struct ColorPoint: Hashable {
     var color: Color
 }
 
-extension ColorPoint: CustomStringConvertible {
-    var description: String {
-        String(format: "Point(x=%.3f,y=%.3f,c=\(UIColor(color).hex))", position.x, position.y)
-    }
-}
-
 extension ColorPoint: Animatable {
     typealias AnimatableData = AnimatablePair<UnitPoint.AnimatableData, Color.Resolved.AnimatableData>
 

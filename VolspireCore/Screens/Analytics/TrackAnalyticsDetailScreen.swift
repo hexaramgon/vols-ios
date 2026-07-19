@@ -51,12 +51,7 @@ struct TrackAnalyticsDetailScreen: View {
 private extension TrackAnalyticsDetailScreen {
     var header: some View {
         HStack(spacing: 12) {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: ViewConst.backIconSize, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-            .buttonStyle(.plain)
+            BackButton(shadow: false)
 
             ArtworkView(track.coverURL.map { .webImage($0) } ?? .placeholder(name: track.title), cornerRadius: 8)
                 .frame(width: 40, height: 40)
@@ -80,8 +75,8 @@ private extension TrackAnalyticsDetailScreen {
 private extension TrackAnalyticsDetailScreen {
     var statsGrid: some View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-            tile("Streams", track.streams.profileCompact, "play.fill")
-            tile("Unique listeners", track.uniqueListeners.profileCompact, "person.2.fill")
+            tile("Streams", track.streams.compactCount, "play.fill")
+            tile("Unique listeners", track.uniqueListeners.compactCount, "person.2.fill")
             tile("Avg. listen", time(Int(track.avgListenTime)), "clock.fill")
             tile("Avg. seeks", String(format: "%.1f", track.avgSeekCount), "arrow.left.arrow.right")
         }
@@ -95,7 +90,7 @@ private extension TrackAnalyticsDetailScreen {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 16))
+        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 16))
     }
 }
 
@@ -118,7 +113,7 @@ private extension TrackAnalyticsDetailScreen {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
     }
 
     var trendPill: some View {
@@ -168,7 +163,7 @@ private extension TrackAnalyticsDetailScreen {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 18))
+        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
     }
 }
 
@@ -182,7 +177,5 @@ private extension TrackAnalyticsDetailScreen {
             .foregroundStyle(Color.vText3)
     }
 
-    func time(_ seconds: Int) -> String {
-        "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
-    }
+    func time(_ seconds: Int) -> String { seconds.durationLabel }
 }

@@ -17,6 +17,7 @@ struct ListingDetailScreen: View {
     @Environment(Router.self) private var router
     @Environment(Dependencies.self) private var dependencies
     @Environment(ConversationState.self) private var conversationState
+    @Environment(PlayerController.self) private var playerController
     @Environment(\.dismiss) private var dismiss
 
     @State private var viewModel: ListingDetailViewModel
@@ -28,7 +29,34 @@ struct ListingDetailScreen: View {
     @State private var showEdit = false
     /// The comment whose options sheet is open (matches the track comments UX).
     @State private var commentOptions: ApiListingComment?
+    /// Staged report → presented after the options sheet dismisses.
+    @State private var pendingReportComment: ApiListingComment?
+    @State private var reportingComment: ApiListingComment?
     @FocusState private var commentFocused: Bool
+    // Non-author viewer "…": report the listing / author, or block the author.
+    @State private var showViewerOptions = false
+    @State private var pendingViewer: ViewerAction?
+    @State private var reportTarget: ReportTarget?
+    @State private var showBlockAuthor = false
+    /// Scroll-driven chrome state — read only by `ListingCollapsedBar`.
+    @State private var barState = ListingBarState()
+    /// Which discussion list the author is viewing (visitors only see comments).
+    @State private var discussionTab: DiscussionTab = .comments
+    /// Signed-in user's avatar for the composer pill (matches the player's).
+    @State private var myAvatarUrl: String?
+    @State private var myInitial: String = "?"
+    /// Keyboard tracking for the composer lift — the player composer's
+    /// technique: we ignore the system keyboard avoidance and drive the lift
+    /// ourselves on ONE curve (two competing animations looked janky).
+    @State private var keyboardTopY: CGFloat = .greatestFiniteMagnitude
+    @State private var composerMaxY: CGFloat = 0
+
+    private var keyboardOverlap: CGFloat {
+        guard keyboardTopY < composerMaxY else { return 0 }
+        return composerMaxY - keyboardTopY + 8
+    }
+
+    enum DiscussionTab { case comments, responses }
 
     init(listing: ApiListing) {
         _viewModel = State(wrappedValue: ListingDetailViewModel(listing: listing))
@@ -38,43 +66,122 @@ struct ListingDetailScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                headerBlock
-                // Respond + Save are for visitors only — authors manage via the "…" menu.
-                if !viewModel.isAuthor { actionRow }
-                if !listing.attachments.isEmpty {
-                    section("Audio · \(listing.attachments.count)") { attachmentsList }
+            VStack(alignment: .leading, spacing: 0) {
+                hero
+                VStack(alignment: .leading, spacing: 26) {
+                    // The pitch first — description, tags, reference clips —
+                    // THEN the decision point (Respond/Save), then discussion.
+                    if let desc = listing.description, !desc.isEmpty { bodyText(desc) }
+                    if let tags = listing.tags, !tags.isEmpty { chipRow(tags.map { "#\($0)" }) }
+                    if !listing.attachments.isEmpty { audioCard }
+                    // Respond + Save are for visitors only — authors manage via the "…" menu.
+                    if !viewModel.isAuthor { actionRow }
+                    discussion
                 }
-                if viewModel.isAuthor { responsesSection }
-                commentsSection
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .padding(.top, 10)
+                .padding(.bottom, 36)
             }
-            .padding(.horizontal, ViewConst.screenPaddings)
-            .padding(.top, 6)
-            .padding(.bottom, 36)
         }
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.interactively)
-        .appNavBar(
-            title: "\(categoryLabel) Listing",
-            subtitle: "@\(listing.author.username)",
-            collapsing: true,
-            onBack: { dismiss() }
-        ) {
-            if viewModel.isAuthor { adminButton }
+        // Tapping anywhere on the content drops the keyboard (buttons still
+        // win the tap — this only catches otherwise-inert space).
+        .tapToDismissKeyboard()
+        // Composer pinned at the screen bottom, like the expanded player's —
+        // hidden while the author is browsing responses (it posts comments).
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !(viewModel.isAuthor && discussionTab == .responses) {
+                composerBar
+                    // Slides down + fades when the author flips to Responses
+                    // (the pill tap drives this inside withAnimation).
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
+        // The composer lifts itself over the keyboard (see keyboardOverlap) —
+        // the system must not ALSO move things, or the two curves fight.
+        .ignoresSafeArea(.keyboard)
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
+            barState.update(offsetY: y)
+        }
+        .background(Color.vBase.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .ignoresSafeArea(edges: .top)
+        .navigationBarBackButtonHidden(true)
+        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) { backButton }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if viewModel.isAuthor { adminButton } else { viewerButton }
+            }
+        }
+        // Solid bar + centred title fade in once the hero scrolls away — its
+        // own component observing `barState`, so per-frame scroll writes never
+        // re-render this page (same isolation as the profile/Home headers).
+        .overlay(alignment: .top) {
+            ListingCollapsedBar(
+                state: barState,
+                title: "\(categoryLabel) Listing",
+                subtitle: "@\(listing.author.username)"
+            )
+        }
+        .enableSwipeBack()
         .task { await viewModel.load() }
-        .onDisappear { viewModel.stopClip() }
+        // Own avatar for the composer pill — cached profile fetch, cheap.
+        .task {
+            guard let uid = dependencies.authManager.currentUserId,
+                  let profile = try? await dependencies.supabaseService.getUserProfile(userId: uid)
+            else { return }
+            myAvatarUrl = profile.profileImageUrl
+            myInitial = (profile.username?.first).map { String($0).uppercased() } ?? "?"
+        }
         .sheet(isPresented: $showRespond) { respondSheet }
         .sheet(isPresented: $showAdminOptions, onDismiss: {
             if pendingAdminDelete { pendingAdminDelete = false; showDeleteConfirm = true }
             if pendingEdit { pendingEdit = false; showEdit = true }
         }) { adminOptionsSheet }
-        .sheet(item: $commentOptions) { comment in
+        .sheet(item: $commentOptions, onDismiss: {
+            if let comment = pendingReportComment {
+                pendingReportComment = nil
+                reportingComment = comment
+            }
+        }) { comment in
             ListingCommentOptionsSheet(
                 comment: comment,
                 isOwn: viewModel.isOwnComment(comment),
+                onReport: { pendingReportComment = comment },
                 onDelete: { Task { await viewModel.deleteComment(comment) } }
             )
+        }
+        .sheet(item: $reportingComment) { comment in
+            ReportSheet(
+                targetType: .listingComment,
+                targetId: comment.commentId,
+                subject: "@\(comment.user.username)"
+            )
+        }
+        .sheet(isPresented: $showViewerOptions, onDismiss: {
+            switch pendingViewer {
+            case .reportListing: reportTarget = .listing
+            case .reportAuthor: reportTarget = .author
+            case .block: showBlockAuthor = true
+            case nil: break
+            }
+            pendingViewer = nil
+        }) { viewerOptionsSheet }
+        .sheet(item: $reportTarget) { target in
+            switch target {
+            case .listing:
+                ReportSheet(targetType: .listing, targetId: listing.listingId, subject: listing.title)
+            case .author:
+                ReportSheet(targetType: .user, targetId: listing.author.userId, subject: "@\(listing.author.username)")
+            }
+        }
+        .confirmationDialog("Block @\(listing.author.username)?", isPresented: $showBlockAuthor, titleVisibility: .visible) {
+            Button("Block", role: .destructive) { blockAuthor() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("You won't see their listings or content, and they can't message you. You can unblock from Settings.")
         }
         .fullScreenCover(isPresented: $showEdit, onDismiss: { Task { await viewModel.load() } }) {
             CreateListingScreen(viewModel: CreateListingViewModel(
@@ -105,6 +212,61 @@ struct ListingDetailScreen: View {
         .buttonStyle(.plain)
     }
 
+    private enum ViewerAction { case reportListing, reportAuthor, block }
+    private enum ReportTarget: Int, Identifiable { case listing, author; var id: Int { rawValue } }
+
+    /// Non-author "…" — report the listing or its author, or block the author.
+    private var viewerButton: some View {
+        Button { showViewerOptions = true } label: {
+            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
+                .frame(width: 40, height: 40)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Viewer options as a slide-up sheet — mirrors `adminOptionsSheet`.
+    private var viewerOptionsSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(icon: categoryIcon, title: listing.title, subtitle: "@\(listing.author.username)") {
+                showViewerOptions = false
+            }
+
+            VStack(spacing: 0) {
+                adminRow(icon: .flag, title: "Report listing") {
+                    pendingViewer = .reportListing
+                    showViewerOptions = false
+                }
+                adminRow(icon: .flag, title: "Report @\(listing.author.username)") {
+                    pendingViewer = .reportAuthor
+                    showViewerOptions = false
+                }
+                adminRow(icon: .ban, title: "Block @\(listing.author.username)", tint: Color.vDestructive) {
+                    pendingViewer = .block
+                    showViewerOptions = false
+                }
+            }
+            .padding(.top, 6)
+
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .environment(\.colorScheme, .dark)
+        .presentationDetents([.height(272)])
+        .presentationDragIndicator(.visible)
+        .sheetBackground()
+    }
+
+    /// Blocks the listing's author, then pops back off the detail screen.
+    private func blockAuthor() {
+        Task {
+            try? await dependencies.supabaseService.blockUser(listing.author.userId)
+            dismiss()
+        }
+    }
+
     /// Author options as a slide-up sheet — the shared `SheetHeader` + Lucide rows,
     /// matching the folder / playlist / track option sheets.
     private var adminOptionsSheet: some View {
@@ -124,7 +286,7 @@ struct ListingDetailScreen: View {
                     Task { await viewModel.toggleStatus() }
                 }
                 adminRow(icon: .trash2, title: "Delete listing",
-                         tint: Color(red: 1, green: 0.37, blue: 0.37)) {
+                         tint: Color.vDestructive) {
                     pendingAdminDelete = true
                     showAdminOptions = false
                 }
@@ -156,72 +318,138 @@ struct ListingDetailScreen: View {
     }
 }
 
-// MARK: - Header + actions
+// MARK: - Hero + actions
 
 private extension ListingDetailScreen {
-    var headerBlock: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Author avatar next to the title + @username · time.
-            HStack(alignment: .top, spacing: 12) {
-                Button { router.navigateToProfile(userId: listing.author.userId) } label: {
-                    avatar(listing.author, size: 44)
-                }
-                .buttonStyle(.plain)
+    /// Immersive header — the Playlists/Workspace brand-wash recipe behind the
+    /// category chip, title, author and stats. Content-sized; the wash alone
+    /// stretches on overscroll (backdrop-scoped, so nothing interactive sits
+    /// under per-frame geometry).
+    var hero: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(listing.title)
+                .font(.appTitle)
+                .foregroundStyle(.white)
+                .fixedSize(horizontal: false, vertical: true)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(listing.title)
-                        .font(.appTitle3Bold).foregroundStyle(.white)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 6) {
-                        Text("@\(listing.author.username)").font(.appFootnoteMedium).foregroundStyle(Color.vText2)
-                        Text("·").foregroundStyle(Color.vText3)
-                        Text(timeAgo(listing.createdAt)).font(.appFootnote).foregroundStyle(Color.vText3)
-                    }
-                }
+            // Author + date on the left, category (and Closed) on the right —
+            // one compact identity row, no stats belt.
+            HStack(spacing: 8) {
+                authorRow
+                if viewModel.isClosed { closedChip }
+                categoryChip
             }
+        }
+        .padding(.horizontal, ViewConst.screenPaddings)
+        .padding(.top, ViewConst.safeAreaInsets.top + 56)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            GeometryReader { geo in
+                let stretch = max(0, geo.frame(in: .scrollView).minY)
+                heroWash
+                    .frame(height: geo.size.height + stretch)
+                    .offset(y: -stretch)
+            }
+        }
+    }
 
-            // Description + tags sit directly under the title (no section labels).
-            if let desc = listing.description, !desc.isEmpty {
-                bodyText(desc)
-            }
-            if let tags = listing.tags, !tags.isEmpty {
-                chipRow(tags.map { "#\($0)" })
-            }
+    /// The app's hero wash: brand fading into the base + a corner glow + grain.
+    var heroWash: some View {
+        ZStack {
+            Color.vBase
+            LinearGradient(
+                stops: [
+                    .init(color: Color.brand.opacity(0.42), location: 0),
+                    .init(color: Color.brand.opacity(0.12), location: 0.45),
+                    .init(color: Color.brand.opacity(0), location: 0.95),
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            RadialGradient(
+                colors: [Color.brand.opacity(0.18), Color.brand.opacity(0)],
+                center: .topTrailing, startRadius: 0, endRadius: 220
+            )
+            GrainOverlay()
+        }
+    }
 
-            HStack(spacing: 14) {
-                metric(.users, "\(listing.responseCount ?? 0) responses")
-                metric(.messageCircle, "\(viewModel.comments.count)")
-                metric(.bookmark, "\(viewModel.saveCount)")
+    /// Category on the brand accent — same chip family as the Collaborator
+    /// badge and the "New" pills, sized down to sit in the author row.
+    var categoryChip: some View {
+        HStack(spacing: 5) {
+            LucideIcon(categoryIcon, .xs)
+            Text(categoryLabel).font(.appCaptionMedium)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(LinearGradient.sendAccent, in: Capsule())
+    }
+
+    var closedChip: some View {
+        Text("Closed")
+            .font(.appCaptionMedium)
+            .foregroundStyle(Color.vDestructive)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.vDestructive.opacity(0.16), in: Capsule())
+    }
+
+    var authorRow: some View {
+        Button { router.navigateToProfile(userId: listing.author.userId) } label: {
+            HStack(spacing: 9) {
+                avatar(listing.author, size: 30)
+                Text("@\(listing.author.username)")
+                    .font(.appFootnoteMedium).foregroundStyle(.white)
+                Text("·").foregroundStyle(Color.vText3)
+                Text(timeAgo(listing.createdAt))
+                    .font(.appFootnote).foregroundStyle(.white.opacity(0.65))
                 Spacer(minLength: 0)
             }
-            .padding(.top, 2)
+            .contentShape(.rect)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
+    }
+
+    var backButton: some View {
+        BackButton()
+    }
+
+    /// Audio clips — each rendered with the same inline player as chat audio
+    /// attachments (scrubber + time, one-at-a-time playback). No section
+    /// header: the players are self-describing.
+    var audioCard: some View {
+        VStack(spacing: 10) {
+            ForEach(Array(listing.attachments.enumerated()), id: \.offset) { idx, clip in
+                if let url = viewModel.clipURL(clip) {
+                    AudioAttachmentPlayer(
+                        url: url,
+                        name: clip.title ?? "Clip \(idx + 1)",
+                        fixedWidth: nil,
+                        onStartPlaying: {
+                            // Don't play over the app's music.
+                            if playerController.state.isPlaying { playerController.onPlayPause() }
+                        }
+                    )
+                }
+            }
+        }
     }
 
     var actionRow: some View {
         HStack(spacing: 10) {
-            // Standard app primary button (white, rounded-14, h44).
-            Button {
+            PrimaryButton(respondLabel, size: .inline, enabled: canRespond) {
                 if let convoId = viewModel.existingConvoId { openConversation(convoId: convoId, with: listing.author) }
                 else { showRespond = true }
-            } label: {
-                Text(respondLabel)
-                    .font(.appCalloutSemibold)
-                    .foregroundStyle(.black)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 14))
             }
-            .buttonStyle(.plain)
-            .disabled(!canRespond)
-            .opacity(canRespond ? 1 : 0.3)
 
-            // Save is a pure icon — no background, just the bookmark glyph.
+            // Save matches the expanded player's save: a bare .xl bookmark,
+            // no background — the 48pt frame is just the tap target.
             Button { Task { await viewModel.toggleSave() } } label: {
-                LucideIcon(viewModel.isSaved ? .bookmarkFill : .bookmark, .lg)
+                LucideIcon(viewModel.isSaved ? .bookmarkFill : .bookmark, .xl)
                     .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 42, height: 42)
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
@@ -237,64 +465,90 @@ private extension ListingDetailScreen {
         return viewModel.isClosed ? "Closed" : "Respond"
     }
 
-    func metric(_ icon: LucideIcon.Name, _ text: String) -> some View {
-        HStack(spacing: 5) {
-            LucideIcon(icon, .xs)
-            Text(text).font(.appFootnote)
-        }
-        .foregroundStyle(Color.vText3)
-    }
-}
-
-// MARK: - Audio
-
-private extension ListingDetailScreen {
-    var attachmentsList: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(listing.attachments.enumerated()), id: \.offset) { idx, clip in
-                let playing = viewModel.playingClip == clip.fileUrl && clip.fileUrl != nil
-                Button { viewModel.toggleClip(clip) } label: {
-                    HStack(spacing: 12) {
-                        ZStack {
-                            Circle().fill(playing ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(Color.white.opacity(0.08)))
-                            LucideIcon(playing ? .pause : .playFill, .sm).foregroundStyle(.white)
-                        }
-                        .frame(width: 36, height: 36)
-                        Text(clip.title ?? "Clip \(idx + 1)")
-                            .font(.appSubheadlineMedium).foregroundStyle(.white).lineLimit(1)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.vertical, 9)
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .disabled(clip.fileUrl == nil)
-                if idx < listing.attachments.count - 1 {
-                    Rectangle().fill(Color.white.opacity(0.05)).frame(height: 1)
-                }
-            }
-        }
-    }
 }
 
 // MARK: - Author + Comments
 
 private extension ListingDetailScreen {
-    /// Author-only: who's responded, tap to open that chat.
-    var responsesSection: some View {
-        section("Responses · \(viewModel.responses.count)") {
-            if !viewModel.responsesLoaded {
-                responsesSkeleton
-            } else if viewModel.responses.isEmpty {
-                Text("No one has responded yet.")
-                    .font(.appFootnote).foregroundStyle(Color.vText3)
+    /// Comments + (author-only) responses — no text headers: the author flips
+    /// between the two with segmented pills (the app's 7D/30D toggle style);
+    /// visitors get the comments flowing straight in after a hairline.
+    var discussion: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 0.5)
+
+            if viewModel.isAuthor {
+                HStack(spacing: 6) {
+                    discussionPill("Comments", count: viewModel.comments.count, tab: .comments)
+                    discussionPill("Responses", count: viewModel.responses.count, tab: .responses)
+                    Spacer(minLength: 0)
+                }
+            }
+
+            // The same subtle centred marker on your own post as on others' —
+            // reflecting whichever list is showing.
+            if viewModel.isAuthor, discussionTab == .responses {
+                discussionMarker("Responses", count: viewModel.responses.count, loaded: viewModel.responsesLoaded)
+                responsesContent
             } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(viewModel.responses.enumerated()), id: \.element.id) { idx, response in
-                        responseRow(response)
-                        if idx < viewModel.responses.count - 1 {
-                            Rectangle().fill(Color.white.opacity(0.05)).frame(height: 1)
-                        }
+                discussionMarker("Comments", count: viewModel.comments.count, loaded: viewModel.commentsLoaded)
+                commentsContent
+            }
+        }
+    }
+
+    /// Small muted "label · count" centred under the divider (spinner while
+    /// the list loads) — shared by the author and visitor views.
+    func discussionMarker(_ label: String, count: Int, loaded: Bool) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.appFootnoteMedium)
+                .foregroundStyle(Color.vText2)
+            if !loaded {
+                ProgressView().tint(.white.opacity(0.35)).scaleEffect(0.6)
+            } else {
+                Text("\(count)")
+                    .font(.appFootnote)
+                    .foregroundStyle(Color.vText3)
+                    .monospacedDigit()
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+
+    func discussionPill(_ label: String, count: Int, tab: DiscussionTab) -> some View {
+        let selected = discussionTab == tab
+        return Button {
+            withAnimation(.easeInOut(duration: 0.22)) { discussionTab = tab }
+        } label: {
+            Text(count > 0 ? "\(label) · \(count)" : label)
+                .font(.appFootnoteMedium)
+                .foregroundStyle(selected ? .black : Color.vText2)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 7)
+                .background(selected ? Color.white : Color.white.opacity(0.06), in: Capsule())
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Author-only: who's responded, tap to open that chat.
+    @ViewBuilder
+    var responsesContent: some View {
+        if !viewModel.responsesLoaded {
+            responsesSkeleton
+        } else if viewModel.responses.isEmpty {
+            Text("No one has responded yet.")
+                .font(.appFootnote).foregroundStyle(Color.vText3)
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
+        } else {
+            VStack(spacing: 0) {
+                ForEach(Array(viewModel.responses.enumerated()), id: \.element.id) { idx, response in
+                    responseRow(response)
+                    if idx < viewModel.responses.count - 1 {
+                        Rectangle().fill(Color.white.opacity(0.05)).frame(height: 1)
                     }
                 }
             }
@@ -363,30 +617,45 @@ private extension ListingDetailScreen {
         .shimmering()
     }
 
-    var commentsSection: some View {
-        section("Comments · \(viewModel.comments.count)") {
+    /// The comments list — the composer is pinned at the screen bottom
+    /// (`composerBar`), like the expanded player's.
+    @ViewBuilder
+    var commentsContent: some View {
+        if !viewModel.commentsLoaded {
+            commentsSkeleton
+        } else if viewModel.comments.isEmpty {
+            Text("No comments yet — start the conversation.")
+                .font(.appFootnote).foregroundStyle(Color.vText3)
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
+        } else {
             VStack(alignment: .leading, spacing: 16) {
-                commentComposer
-                if !viewModel.commentsLoaded {
-                    commentsSkeleton
-                } else {
-                    ForEach(viewModel.comments) { commentRow($0) }
-                }
+                ForEach(viewModel.comments) { commentRow($0) }
             }
         }
     }
 
-    var commentComposer: some View {
+    /// Bottom-pinned comment bar — the expanded player's composer treatment:
+    /// an `.appBody` field in a rounded pill with the gradient send circle.
+    /// Cleared above the tab bar + mini player at rest; hugging the keyboard
+    /// while typing (the keyboard covers that chrome anyway).
+    var composerBar: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("", text: $viewModel.commentText, prompt: Text("Add a comment…").foregroundColor(Color.vText3), axis: .vertical)
-                .font(.appCalloutRegular)
-                .foregroundStyle(.white)
-                .tint(.white)
-                .lineLimit(1 ... 4)
-                .focused($commentFocused)
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.vBorder, lineWidth: 1))
+            // Your avatar + the field share one pill — the expanded player's
+            // composer look.
+            HStack(alignment: .center, spacing: 10) {
+                myAvatar
+
+                TextField("", text: $viewModel.commentText, prompt: Text("Add a comment…").foregroundColor(Color.vText3), axis: .vertical)
+                    .font(.appBody)
+                    .foregroundStyle(.white)
+                    .tint(.white)
+                    .lineLimit(1 ... 4)
+                    .focused($commentFocused)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
             // Same send button as chat / track comments: accent-gradient circle with
             // an up-arrow that scale-fades in once there's something to post.
@@ -404,14 +673,58 @@ private extension ListingDetailScreen {
                                 .foregroundStyle(.white)
                         }
                     }
-                    .frame(width: 38, height: 38)
+                    // Exactly the chat / track-comment send button (32pt circle).
+                    .frame(width: 32, height: 32)
                     .background(LinearGradient.sendAccent, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .transition(.scale.combined(with: .opacity))
+                .padding(.bottom, 5) // optically centred against the pill's first line
             }
         }
+        .padding(.horizontal, ViewConst.screenPaddings)
+        // Measure the pill row's rest position (layout frame — .offset below is
+        // render-only and doesn't feed back into this).
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { composerMaxY = geo.frame(in: .global).maxY }
+                    .onChange(of: geo.frame(in: .global).maxY) { _, v in composerMaxY = v }
+            }
+        )
+        .padding(.top, 10)
+        .padding(.bottom, bottomChromeInset)
+        .background {
+            Color.vBar
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Color.vBorder).frame(height: 0.5)
+                }
+                .ignoresSafeArea()
+        }
+        // One curve, driven by the keyboard's own frame — the player's recipe.
+        .offset(y: -keyboardOverlap)
+        .animation(.easeOut(duration: 0.25), value: keyboardTopY)
         .animation(.spring(response: 0.32, dampingFraction: 0.72), value: canPostComment)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notif in
+            if let frame = notif.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
+                keyboardTopY = frame.minY
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardTopY = .greatestFiniteMagnitude
+        }
+    }
+
+    /// Clearance for the floating tab bar (+ mini player when a track plays).
+    var bottomChromeInset: CGFloat {
+        let mini = playerController.display.title.isEmpty ? 0 : ViewConst.compactNowPlayingHeight + 16
+        return 60 + mini
+    }
+
+    /// Signed-in user's 28pt avatar in the composer pill — identical styling
+    /// to the player composer's (initial-letter fallback included).
+    var myAvatar: some View {
+        AvatarView(urlString: myAvatarUrl, name: myInitial, size: 28)
     }
 
     var canPostComment: Bool {
@@ -435,9 +748,7 @@ private extension ListingDetailScreen {
                     Text(timeAgo(comment.createdAt))
                         .font(.appCaption2).foregroundStyle(.white.opacity(0.3))
                 }
-                Text(comment.content)
-                    .font(.appCalloutRegular).foregroundStyle(.white.opacity(0.9))
-                    .fixedSize(horizontal: false, vertical: true)
+                ExpandableText(comment.content)
             }
 
             Spacer(minLength: 0)
@@ -459,17 +770,7 @@ private extension ListingDetailScreen {
     }
 
     func avatar(_ author: ApiListingAuthor, size: CGFloat) -> some View {
-        Group {
-            if let s = author.profileImageUrl, let url = URL(string: s) {
-                KFImage(url).downsampled(to: size).resizable().scaledToFill()
-            } else {
-                Text(String(author.username.first ?? "?").uppercased())
-                    .font(.geist(size * 0.36, weight: .bold)).foregroundStyle(Color.vText2)
-            }
-        }
-        .frame(width: size, height: size)
-        .background(Color.white.opacity(0.08))
-        .clipShape(Circle())
+        AvatarView(urlString: author.profileImageUrl, name: author.username, size: size)
     }
 }
 
@@ -514,109 +815,84 @@ private struct RespondSheet: View {
     @State private var message = ""
     @State private var error: String?
     @FocusState private var focused: Bool
+    /// Measured so the sheet detents to exactly fit its content (no empty tail).
+    @State private var contentHeight: CGFloat = 360
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            // Header: avatar + "Respond to @user" over the listing, with a close chip.
-            HStack(spacing: 12) {
-                avatar
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Respond to @\(author.username)")
-                        .font(.appTitle3Bold).foregroundStyle(.white).lineLimit(1)
-                    Text(listingTitle)
-                        .font(.appFootnote).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+        VStack(alignment: .leading, spacing: 0) {
+            // The app's standard sheet anatomy — same header/field/CTA as the
+            // report and playlist/folder form sheets, sized to its rows.
+            VStack(alignment: .leading, spacing: 0) {
+                // The author's avatar as the leading tile (SheetHeader's
+                // custom-leading form) instead of a glyph.
+                SheetHeader(title: "Respond to @\(author.username)", subtitle: listingTitle, onClose: { dismiss() }) {
+                    authorAvatar
                 }
-                Spacer(minLength: 0)
-                Button { dismiss() } label: {
-                    LucideIcon(.x, .md)
-                        .foregroundStyle(Color.vText2)
-                        .frame(width: 32, height: 32)
-                        .background(Color.white.opacity(0.06), in: Circle())
+
+                VStack(alignment: .leading, spacing: 14) {
+                    TextField(
+                        "",
+                        text: $message,
+                        prompt: Text("Hey @\(author.username), I'd love to work on this…").foregroundColor(Color.vText3),
+                        axis: .vertical
+                    )
+                    .font(.appBody)
+                    .foregroundStyle(.white)
+                    .tint(.white)
+                    .lineLimit(4 ... 8)
+                    .focused($focused)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 13)
+                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.vBorder))
+
+                    if let error {
+                        ErrorBanner(error)
+                    }
+
+                    PrimaryButton("Send Message", busy: isSending, enabled: canSend) {
+                        Task { error = await onSend(message) }
+                    }
+                    .disabled(!canSend)
+                    .animation(.easeOut(duration: 0.15), value: canSend)
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+                .padding(.top, 14)
             }
-
-            TextField("", text: $message, prompt: Text("Hey @\(author.username), I'd love to work on this…").foregroundColor(Color.vText3), axis: .vertical)
-                .font(.appCalloutRegular)
-                .foregroundStyle(.white)
-                .tint(.white)
-                .lineLimit(4 ... 8)
-                .focused($focused)
-                .padding(14)
-                .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(focused ? 0.18 : 0.08), lineWidth: 1)
-                )
-
-            if let error {
-                ErrorBanner(error)
-            }
-
-            Button {
-                Task { error = await onSend(message) }
-            } label: {
-                Group {
-                    if isSending { ProgressView().tint(.black) }
-                    else { Text("Send message").font(.appHeadline).foregroundStyle(.black) }
-                }
-                .frame(maxWidth: .infinity).padding(.vertical, 15)
-                .background(canSend ? Color.white : Color.white.opacity(0.25), in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-            .animation(.easeOut(duration: 0.15), value: canSend)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 22)
-        .padding(.bottom, 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(380)])
+        .presentationDetents([.height(contentHeight + ViewConst.safeAreaInsets.bottom + 8)])
         .presentationDragIndicator(.visible)
         .sheetBackground()
         .onAppear { focused = true }
     }
 
-    private var avatar: some View {
-        Group {
-            if let s = author.profileImageUrl, let url = URL(string: s) {
-                KFImage(url).downsampled(to: 48).resizable().scaledToFill()
-            } else {
-                Text(String(author.username.first ?? "?").uppercased())
-                    .font(.appTitle3Bold).foregroundStyle(Color.vText2)
-            }
-        }
-        .frame(width: 48, height: 48)
-        .background(Color.white.opacity(0.08))
-        .clipShape(Circle())
-    }
-
     var canSend: Bool {
         !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
+    }
+
+    /// 36pt author avatar — the same tile size as the glyph headers use.
+    private var authorAvatar: some View {
+        AvatarView(urlString: author.profileImageUrl, name: author.username, size: 36)
     }
 }
 
 // MARK: - Reusable pieces
 
 private extension ListingDetailScreen {
-    func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title.uppercased())
-                .font(.appCaptionBold).tracking(0.8)
-                .foregroundStyle(Color.vText3)
-            content()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
 
+    /// Paragraph text in the app's standard body style (profile bio, legal docs).
+    /// Description in the same size as the comment text here and in the
+    /// expanded player (`appCalloutRegular`), so the page reads as one voice.
     func bodyText(_ text: String) -> some View {
         Text(text)
             .font(.appCalloutRegular).foregroundStyle(Color.white.opacity(0.92))
-            .lineSpacing(2)
+            .lineSpacing(3)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -652,13 +928,7 @@ private extension ListingDetailScreen {
         }
     }
 
-    func isoDate(_ s: String) -> Date? {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: s) { return d }
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: s)
-    }
+    func isoDate(_ s: String) -> Date? { MessageTime.parse(s) }
 }
 
 // MARK: - Comment options sheet
@@ -669,6 +939,7 @@ private extension ListingDetailScreen {
 private struct ListingCommentOptionsSheet: View {
     let comment: ApiListingComment
     let isOwn: Bool
+    let onReport: () -> Void
     let onDelete: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -695,9 +966,9 @@ private struct ListingCommentOptionsSheet: View {
                         onDelete()
                     }
                 } else {
-                    // Placeholder — no report backend yet (same as track comments).
                     optionRow(icon: .triangleAlert, title: "Report", destructive: false) {
                         dismiss()
+                        onReport()
                     }
                 }
             }
@@ -728,5 +999,53 @@ private struct ListingCommentOptionsSheet: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Collapsing chrome
+
+/// Scroll-driven chrome state — only `ListingCollapsedBar` observes it, so the
+/// per-frame scroll writes never re-render the listing page (the same
+/// isolation the profile and Home headers use).
+@Observable @MainActor
+final class ListingBarState {
+    private(set) var opacity: Double = 0
+
+    func update(offsetY: CGFloat) {
+        let next = Double(min(1, max(0, (offsetY - 40) / 70)))
+        if next != opacity { opacity = next }
+    }
+}
+
+/// Solid bar + centred title/author that fade in as the hero scrolls past.
+/// Never hit-testable — the toolbar back/"…" buttons sit above it.
+private struct ListingCollapsedBar: View {
+    let state: ListingBarState
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        Color.vBar
+            .frame(height: ViewConst.safeAreaInsets.top + 44)
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.vBorder).frame(height: 0.5)
+            }
+            .overlay(alignment: .bottom) {
+                VStack(spacing: 1) {
+                    Text(title)
+                        .font(.appCalloutSemibold)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(.appCaption2Medium)
+                        .foregroundStyle(Color.vText3)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 64)
+                .frame(height: 44)
+            }
+            .opacity(state.opacity)
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
     }
 }

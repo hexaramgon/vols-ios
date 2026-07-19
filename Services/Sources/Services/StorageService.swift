@@ -20,14 +20,21 @@ public enum StorageBucket: String, Sendable {
     case userBanners = "user-banners"
     case packs = "packs"
     case applicationUploads = "application-uploads"
+    case trackAssets = "track-assets"
 
     /// Private buckets require signed URLs; public buckets use getPublicURL.
     public var isPrivate: Bool {
         switch self {
-        case .files, .messageAttachments: return true
+        case .files, .messageAttachments, .trackAssets: return true
         default: return false
         }
     }
+}
+
+extension SupabaseStorageClient {
+    /// Type-safe bucket selection so call sites reference the `StorageBucket`
+    /// enum (single source of truth) rather than raw bucket-name strings.
+    func from(_ bucket: StorageBucket) -> StorageFileApi { from(bucket.rawValue) }
 }
 
 // MARK: - Storage Service
@@ -95,7 +102,7 @@ public final class StorageService: Sendable {
                 .createSignedURL(path: path, expiresIn: Self.signedUrlExpiry)
             return url.absoluteString
         } catch {
-            print("[StorageService] Failed to sign \(bucket.rawValue)/\(path): \(error)")
+            debugLog("[StorageService] Failed to sign \(bucket.rawValue)/\(path): \(error)")
             return nil
         }
     }
@@ -123,7 +130,7 @@ public final class StorageService: Sendable {
             }
             return results
         } catch {
-            print("[StorageService] Batch sign failed for \(bucket.rawValue): \(error)")
+            debugLog("[StorageService] Batch sign failed for \(bucket.rawValue): \(error)")
             return paths.map { _ in nil }
         }
     }

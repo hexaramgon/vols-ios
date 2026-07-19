@@ -9,7 +9,6 @@ public final class VisualizerAudioTap {
     private let lock = NSLock()
     private var samples = [Float](repeating: 0, count: VisualizerAudioTap.frameSize)
     private var rightSamples = [Float](repeating: 0, count: VisualizerAudioTap.frameSize)
-    private var receivedAudio = false
 
     private weak var tappedNode: AVAudioNode?
     private var tappedBus: AVAudioNodeBus = 0
@@ -67,12 +66,6 @@ public final class VisualizerAudioTap {
 
     private var peak: Float = 0
 
-    public var hasAudio: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return receivedAudio
-    }
-
     private func ingest(_ buffer: AVAudioPCMBuffer) {
         guard let channels = buffer.floatChannelData else { return }
         let frames = Int(buffer.frameLength)
@@ -108,7 +101,6 @@ public final class VisualizerAudioTap {
         samples = mono
         rightSamples = right
         peak = chunkPeak
-        receivedAudio = true
         lock.unlock()
     }
 }

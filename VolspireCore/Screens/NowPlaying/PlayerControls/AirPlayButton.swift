@@ -8,6 +8,7 @@ import AVKit
 import DesignSystem
 import SwiftUI
 import UIKit
+import SharedUtilities
 
 struct AirPlayButton: View {
     var size: CGFloat = 24
@@ -77,7 +78,7 @@ private final class AirPlayPresenter {
             if let button = findButton(in: routePickerView) {
                 button.sendActions(for: .touchUpInside)
             } else {
-                print("Could not find internal button in AVRoutePickerView. Display may not work.")
+                debugLog("Could not find internal button in AVRoutePickerView. Display may not work.")
             }
         }
     }

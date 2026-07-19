@@ -5,11 +5,9 @@
 //
 
 public struct CommandProfile: Equatable {
-    public let isLiveStream: Bool
     public let isSwitchTrackEnabled: Bool
 
-    public init(isLiveStream: Bool, isSwitchTrackEnabled: Bool) {
-        self.isLiveStream = isLiveStream
+    public init(isSwitchTrackEnabled: Bool) {
         self.isSwitchTrackEnabled = isSwitchTrackEnabled
     }
 }

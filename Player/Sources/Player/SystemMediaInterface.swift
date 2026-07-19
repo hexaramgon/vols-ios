@@ -15,24 +15,32 @@ protocol SystemMediaInterfaceDelegate: AnyObject {
 @MainActor
 class SystemMediaInterface {
     weak var delegate: SystemMediaInterfaceDelegate?
+    /// MPRemoteCommandCenter targets are added exactly once (see `registerHandlers`).
+    private var handlersRegistered = false
 
     func setRemoteCommandProfile(_ profile: CommandProfile) {
-        let commands: [RemoteCommand] = [
-            .play, .pause, .stop, .togglePausePlay, .nextTrack, .previousTrack, .changePlaybackPosition
-        ]
-        configureRemoteCommands(
-            commands,
-            disabledCommands: profile.isSwitchTrackEnabled ? [] : [.nextTrack, .previousTrack]
-        )
+        // Register the command HANDLERS exactly once. Re-adding targets on a later
+        // profile change (notably the FIRST play, when switch-track flips false→true)
+        // WEDGES the system now-playing session — the lock screen then keeps showing
+        // metadata but IGNORES play-state/rate and REJECTS setPlaybackState. That wedge
+        // is why pausing never updated the lock-screen button and iOS bounced back a
+        // spurious `.play`. On profile changes we ONLY flip next/previous enabled —
+        // never remove/re-add targets.
+        if !handlersRegistered {
+            registerHandlers()
+            handlersRegistered = true
+        }
+        let switchEnabled = profile.isSwitchTrackEnabled
+        RemoteCommand.nextTrack.setDisabled(!switchEnabled)
+        RemoteCommand.previousTrack.setDisabled(!switchEnabled)
     }
 
     func setNowPlayingInfo(_ info: NowPlayingInfo) {
         let center = MPNowPlayingInfoCenter.default()
         center.nowPlayingInfo = info.mpNowPlayingInfo
-        // Drive the lock-screen play/pause icon from our intent, not the actual
-        // audio output. While a freshly-skipped track is still loading there's no
-        // audio yet, and iOS would otherwise flicker the icon to "paused" until
-        // playback starts — set the state explicitly so it stays "playing".
+        // With handlers registered only once (session no longer wedged), the explicit
+        // playback state is honored again — it drives the lock-screen play/pause BUTTON
+        // (the scrubber follows the dict's PlaybackRate). Set both so they agree.
         center.playbackState = info.isPlaying ? .playing : .paused
     }
 
@@ -45,23 +53,31 @@ class SystemMediaInterface {
 }
 
 private extension SystemMediaInterface {
-    func configureRemoteCommands(_ commands: [RemoteCommand], disabledCommands: [RemoteCommand]) {
+    /// Adds all command targets ONCE. Enabled/disabled state (next/previous) is toggled
+    /// separately in `setRemoteCommandProfile`, so targets are never removed/re-added
+    /// mid-session — the thing that wedges the system now-playing session.
+    func registerHandlers() {
+        let enabled: [RemoteCommand] = [
+            .play, .pause, .stop, .togglePausePlay, .nextTrack, .previousTrack, .changePlaybackPosition
+        ]
         for command in RemoteCommand.allCases {
             command.removeHandler()
-            if commands.contains(command) {
-                command.addHandler { [weak self] remoteCommand, event in
-                    guard let self else { return .commandFailed }
-                    if remoteCommand == .changePlaybackPosition,
-                       let positionEvent = event as? MPChangePlaybackPositionCommandEvent
-                    {
-                        delegate?.systemMediaInterface(self, didReceiveSeekTo: positionEvent.positionTime)
-                    } else {
-                        delegate?.systemMediaInterface(self, didReceiveRemoteCommand: remoteCommand)
-                    }
-                    return .success
-                }
+            guard enabled.contains(command) else {
+                command.setDisabled(true)
+                continue
             }
-            command.setDisabled(disabledCommands.contains(command))
+            command.addHandler { [weak self] remoteCommand, event in
+                guard let self else { return .commandFailed }
+                if remoteCommand == .changePlaybackPosition,
+                   let positionEvent = event as? MPChangePlaybackPositionCommandEvent
+                {
+                    delegate?.systemMediaInterface(self, didReceiveSeekTo: positionEvent.positionTime)
+                } else {
+                    delegate?.systemMediaInterface(self, didReceiveRemoteCommand: remoteCommand)
+                }
+                return .success
+            }
+            command.setDisabled(false)
         }
     }
 }

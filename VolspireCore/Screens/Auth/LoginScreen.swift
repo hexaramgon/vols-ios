@@ -138,7 +138,7 @@ struct LoginScreen: View {
                             isLoading = false
                         }
                     } onError: { error in
-                        authManager.setError(error.localizedDescription)
+                        authManager.setError(from: error)
                     }
 
                     GoogleAuthButton(label: "Continue with Google", isLoading: isLoading) {

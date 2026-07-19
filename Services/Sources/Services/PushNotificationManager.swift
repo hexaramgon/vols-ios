@@ -52,12 +52,24 @@ public final class PushNotificationManager {
                 .rpc("register_push_token", params: [
                     "p_token": token,
                     "p_platform": "ios",
-                    "p_device_name": UIDevice.current.name,
+                    "p_device_name": Self.deviceModel,
                 ])
                 .execute()
         } catch {
-            print("[Push] register_push_token failed: \(error)")
+            debugLog("[Push] register_push_token failed: \(error)")
         }
+    }
+
+    /// Hardware model identifier (e.g. "iPhone16,1") — a non-identifying device label.
+    /// Replaces `UIDevice.current.name`, which is the user-set device name (often their
+    /// real name, e.g. "Hector's iPhone") and is PII we shouldn't persist server-side.
+    private static var deviceModel: String {
+        var info = utsname()
+        uname(&info)
+        let model = withUnsafePointer(to: &info.machine) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
+        }
+        return model.isEmpty ? UIDevice.current.model : model
     }
 
     /// Clears the app-icon badge — called when the app comes to the
@@ -65,6 +77,35 @@ public final class PushNotificationManager {
     /// the true unread count computed server-side).
     public func clearBadge() {
         UNUserNotificationCenter.current().setBadgeCount(0)
+    }
+
+    /// Removes already-delivered notifications for a conversation from Notification
+    /// Center — call when the user opens that conversation so its alerts don't
+    /// linger. The message push payload carries `convo_id` in its userInfo.
+    public func clearDeliveredNotifications(convoId: String) {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { delivered in
+            let ids = delivered
+                .filter { ($0.request.content.userInfo["convo_id"] as? String) == convoId }
+                .map(\.request.identifier)
+            guard !ids.isEmpty else { return }
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+        }
+    }
+
+    /// Sets the app-icon badge to the current unread total (activity notifications
+    /// + unread messages) — mirrors the server-side count the push stamps. Call on
+    /// foreground and after reading a conversation so the badge tracks unread
+    /// precisely instead of just zeroing.
+    public func refreshBadge() async {
+        guard client.auth.currentSession != nil else { return }
+        struct Counts: Decodable { let notifications: Int; let messages: Int }
+        do {
+            let counts: Counts = try await client.rpc("get_unread_counts").execute().value
+            try await UNUserNotificationCenter.current().setBadgeCount(max(0, counts.notifications + counts.messages))
+        } catch {
+            debugLog("[Push] refreshBadge failed: \(error)")
+        }
     }
 
     /// Best-effort: stop pushes to this device for the signing-out account.
@@ -76,7 +117,7 @@ public final class PushNotificationManager {
                 .rpc("deactivate_push_token", params: ["p_token": token])
                 .execute()
         } catch {
-            print("[Push] deactivate_push_token failed: \(error)")
+            debugLog("[Push] deactivate_push_token failed: \(error)")
         }
     }
 }

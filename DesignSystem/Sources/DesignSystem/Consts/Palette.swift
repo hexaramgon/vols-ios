@@ -13,6 +13,17 @@ public extension Color {
     /// point at this one value so they can never drift apart again.
     static let appBase = Color(white: 0.05)
 
+    /// The app's single chrome tone (~#121212) — headers, nav bars, the tab
+    /// bar, and collapsing title bars. A hair lighter than `appBase` so chrome
+    /// reads as distinct from the page. Every bar background should point at
+    /// this one value (`Color.vBar` in the app target).
+    static let appBar = Color(white: 0.07)
+
+    /// Subtle translucent fill for cards and glassy controls over dark pages —
+    /// the empty-state CTA-card tone. Profile hero cards/buttons and the
+    /// "No … yet" cards share it (`Color.vCard` in the app target).
+    static let appCard = Color.white.opacity(0.04)
+
     static let spectrum: [Color] = [
         Color("AppCoral", bundle: .module),
         Color("AppOrange", bundle: .module),
@@ -25,10 +36,8 @@ public extension Color {
         Color("AppPink", bundle: .module)
     ]
 
-    static let iconPrimary: Color = .primary
     static let iconSecondary: Color = .graySecondary
 
-    static let textPrimary: Color = .primary
     static let textAccent: Color = .brand
     static let brand: Color = .init("Brand", bundle: .module)
     static let graySecondary: Color = .init("GraySecondary", bundle: .module)
@@ -41,27 +50,6 @@ public extension LinearGradient {
         colors: [Color.brand, Color(red: 0.16, green: 0.40, blue: 0.86)],
         startPoint: .topLeading, endPoint: .bottomTrailing
     )
-}
-
-extension Color {
-    func adjust(
-        hue: CGFloat = 0,
-        saturation: CGFloat = 0,
-        brightness: CGFloat = 0,
-        opacity: CGFloat = 0
-    ) -> Color {
-        let uiColor = UIColor(self)
-        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        guard uiColor.getHue(&h, saturation: &s, brightness: &b, alpha: &a) else {
-            return self
-        }
-        return Color(
-            hue: (h + hue).clamped(to: 0 ... 1),
-            saturation: (s + saturation).clamped(to: 0 ... 1),
-            brightness: (b + brightness).clamped(to: 0 ... 1),
-            opacity: (a + opacity).clamped(to: 0 ... 1)
-        )
-    }
 }
 
 public enum Palette {
@@ -97,11 +85,6 @@ public extension Palette {
         light: UIColor(r: 127, g: 127, b: 127, a: 255),
         dark: UIColor(r: 128, g: 128, b: 128, a: 255)
     )
-
-    static let stroke: UIColor = .dynamic(
-        light: UIColor(r: 197, g: 197, b: 199, a: 255),
-        dark: UIColor(r: 70, g: 69, b: 73, a: 255)
-    )
 }
 
 public extension Palette.PlayerCard {
@@ -116,7 +99,6 @@ public extension Palette.PlayerCard {
 private extension Palette {
     static let taupeGray = UIColor(red: 0.525, green: 0.525, blue: 0.545, alpha: 1)
     static let platinum = UIColor(red: 0.898, green: 0.898, blue: 0.913, alpha: 1)
-    static let stackedDarkBackground = UIColor(red: 0.0784, green: 0.0784, blue: 0.086, alpha: 1)
 }
 
 public extension UIColor {

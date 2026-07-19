@@ -30,17 +30,6 @@ public extension DefaultMediaState {
             ),
         ]
 
-        let sampleList = MediaList(
-            id: MediaListID("sample-playlist"),
-            meta: .init(
-                artwork: nil,
-                title: "Sample Playlist",
-                subtitle: "Preview Data"
-            ),
-            items: sampleTracks
-        )
-
-        state.lists[sampleList.id] = sampleList
         for track in sampleTracks {
             state.tracks[track.id] = track
         }

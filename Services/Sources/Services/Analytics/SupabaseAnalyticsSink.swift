@@ -29,11 +29,11 @@ public final class SupabaseAnalyticsSink: AnalyticsSink {
                 ))
                 .execute()
             #if DEBUG
-            print("[analytics] ✓ \(event.type.rawValue) track=\(event.trackId ?? "-")")
+            debugLog("[analytics] ✓ \(event.type.rawValue) track=\(event.trackId ?? "-")")
             #endif
         } catch {
             #if DEBUG
-            print("[analytics] ✗ \(event.type.rawValue) failed: \(error)")
+            debugLog("[analytics] ✗ \(event.type.rawValue) failed: \(error)")
             #endif
         }
     }
@@ -48,11 +48,11 @@ public final class SupabaseAnalyticsSink: AnalyticsSink {
                 ))
                 .execute()
             #if DEBUG
-            print("[analytics] ✓ stream_counted track=\(trackId)")
+            debugLog("[analytics] ✓ stream_counted track=\(trackId)")
             #endif
         } catch {
             #if DEBUG
-            print("[analytics] ✗ increment_track_stream failed: \(error)")
+            debugLog("[analytics] ✗ increment_track_stream failed: \(error)")
             #endif
         }
     }
@@ -65,6 +65,22 @@ private struct LogParams: Encodable, Sendable {
     let p_track_id: String?
     let p_session_id: String
     let p_metadata: AnalyticsValue
+
+    // Encode p_track_id even when nil (as JSON null). Swift's synthesized Encodable
+    // uses encodeIfPresent for optionals, which OMITS a nil — so page_view events (no
+    // track) called log_analytics_event with only 3 args and PostgREST couldn't match
+    // the 4-arg function (PGRST202). Explicit null keeps all four args present.
+    enum CodingKeys: String, CodingKey {
+        case p_event_type, p_track_id, p_session_id, p_metadata
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(p_event_type, forKey: .p_event_type)
+        try c.encode(p_track_id, forKey: .p_track_id)
+        try c.encode(p_session_id, forKey: .p_session_id)
+        try c.encode(p_metadata, forKey: .p_metadata)
+    }
 }
 
 private struct StreamParams: Encodable, Sendable {

@@ -10,6 +10,7 @@ import Observation
 import Services
 import SwiftUI
 import UniformTypeIdentifiers
+import SharedUtilities
 
 enum FolderContentsLoadingState {
     case idle
@@ -97,7 +98,7 @@ final class FolderContentsViewModel {
             files = await storageService.signFolderFileUrls(files: rawFiles)
             loadingState = .loaded
         } catch {
-            print("[FolderContentsVM] Failed to load files: \(error)")
+            debugLog("[FolderContentsVM] Failed to load files: \(error)")
             loadingState = .error(error.localizedDescription)
         }
     }
@@ -230,7 +231,7 @@ final class FolderContentsViewModel {
             try await supabaseService.deleteFile(fileId: file.fileId, folderId: folderId)
             files.removeAll { $0.id == file.id }
         } catch {
-            print("[FolderContentsVM] Failed to delete file: \(error)")
+            debugLog("[FolderContentsVM] Failed to delete file: \(error)")
             showActionError(friendlyDeleteError(error))
         }
     }
@@ -238,7 +239,7 @@ final class FolderContentsViewModel {
     /// The server's raw reasons ("File not found or unauthorized",
     /// "forbidden_on_service_order_folder") translated for humans.
     private func friendlyDeleteError(_ error: Error) -> String {
-        let raw = error.localizedDescription
+        let raw = error.serverRawDetail
         if raw.contains("unauthorized") || raw.contains("not found") {
             return "Only the file's uploader or the folder owner can delete this file."
         }
@@ -306,7 +307,7 @@ final class FolderContentsViewModel {
             pendingUploads.removeAll { $0.id == item.id }
             Haptics.impact(.soft)
         } catch {
-            print("[FolderContentsVM] Upload failed: \(error)")
+            debugLog("[FolderContentsVM] Upload failed: \(error)")
             guard let index = pendingUploads.firstIndex(where: { $0.id == item.id }) else { return }
             pendingUploads[index].phase = .failed("Couldn't upload — check your connection.")
         }
@@ -347,20 +348,11 @@ final class FolderContentsViewModel {
     }
 
     func relativeTime(from dateString: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = formatter.date(from: dateString) else {
-            formatter.formatOptions = [.withInternetDateTime]
-            guard let date = formatter.date(from: dateString) else { return dateString }
-            return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: .now)
-        }
-        return RelativeDateTimeFormatter().localizedString(for: date, relativeTo: .now)
+        // The app-wide compact vocabulary ("5m" / "2h"), not RelativeDateTimeFormatter.
+        MessageTime.ago(MessageTime.parse(dateString))
     }
 
     func formattedDuration(for file: ApiFolderFile) -> String? {
-        guard let seconds = file.timespan else { return nil }
-        let mins = Int(seconds) / 60
-        let secs = Int(seconds) % 60
-        return String(format: "%d:%02d", mins, secs)
+        file.timespan.map { $0.durationLabel }
     }
 }

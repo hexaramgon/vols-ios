@@ -10,6 +10,7 @@
 
 import Foundation
 import Services
+import SharedUtilities
 
 struct ConversationItem: Identifiable, Hashable {
     let id: String          // convo_id
@@ -106,7 +107,7 @@ final class MessagesScreenViewModel {
                 .sorted { ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast) }
             loadingState = .loaded
         } catch {
-            print("[MessagesVM] load: \(error)")
+            debugLog("[MessagesVM] load: \(error)")
             if conversations.isEmpty { loadingState = .error(error.localizedDescription) }
         }
     }
@@ -145,7 +146,13 @@ final class MessagesScreenViewModel {
         }
         switch c.lastMessageType {
         case "collab_request": return fromMe ? "Collab request sent" : "Collab request"
-        case "message": return "Attachment"
+        case "message":
+            switch c.lastMessageAttachmentType?.lowercased() {
+            case let t? where t.hasPrefix("image"): return "Image"
+            case let t? where t.hasPrefix("audio"): return "Voice message"
+            case let t? where t.hasPrefix("video"): return "Video"
+            default: return "Attachment"
+            }
         default: return "No messages yet"
         }
     }

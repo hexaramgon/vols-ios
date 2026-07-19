@@ -42,6 +42,12 @@ final class RegisterViewModel {
     var slideForward = true
 
     var email = ""
+    /// EULA gate (App Store 1.2): both consents must be checked before an
+    /// account can be created via email, Apple, or Google.
+    var agreedToTerms = false
+    var agreedToPrivacy = false
+    /// Both signup consents (Terms + Privacy) — gates the step-0 Continue.
+    var agreedToLegal: Bool { agreedToTerms && agreedToPrivacy }
     var password = ""
     var confirmPassword = ""
     var username = ""
@@ -92,7 +98,7 @@ final class RegisterViewModel {
 
     var canContinue: Bool {
         switch step {
-        case 0: emailValid
+        case 0: emailValid && agreedToLegal
         case 1: passwordChecks.allSatisfy(\.ok) && passwordsMatch && !confirmPassword.isEmpty
         case 2: usernameValid && usernameStatus != .taken && usernameStatus != .checking
         default: true

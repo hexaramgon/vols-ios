@@ -89,7 +89,7 @@ struct NotificationsScreen: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.appLabel)
+            .font(.appFont.sectionLabel)
             .tracking(0.6)
             .foregroundStyle(Color.vText3)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -147,30 +147,29 @@ struct NotificationsScreen: View {
         .onTapGesture { navigate(item) }
     }
 
+    @ViewBuilder
     private func avatar(_ item: ApiNotification, meta: ActionMeta) -> some View {
-        ZStack(alignment: .bottomTrailing) {
-            Group {
-                if let urlString = item.actor?.profileImageUrl, let url = URL(string: urlString) {
-                    KFImage(url).downsampled(to: 44).resizable().scaledToFill()
-                } else {
-                    Text((item.actor?.username?.first).map { String($0).uppercased() } ?? "?")
-                        .font(.appHeadlineBold)
-                        .foregroundStyle(Color.vText2)
-                }
+        if item.actor?.username == nil, item.actor?.profileImageUrl == nil {
+            // System notice (moderation): no actor — the action icon is the avatar.
+            ZStack {
+                Circle().fill(Color.vSurface)
+                Circle().fill(meta.tint.opacity(0.16))
+                LucideIcon(meta.icon, .lg).foregroundStyle(meta.tint)
             }
             .frame(width: 44, height: 44)
-            .background(Color.vSurface)
-            .clipShape(Circle())
-            .overlay(Circle().strokeBorder(Color.vBorder))
+        } else {
+            ZStack(alignment: .bottomTrailing) {
+                AvatarView(urlString: item.actor?.profileImageUrl, name: item.actor?.username, size: 44)
 
-            ZStack {
-                Circle().fill(Color.vBase)
-                Circle().fill(meta.tint.opacity(0.30))
-                LucideIcon(meta.icon, .xs).foregroundStyle(meta.tint)
+                ZStack {
+                    Circle().fill(Color.vBase)
+                    Circle().fill(meta.tint.opacity(0.30))
+                    LucideIcon(meta.icon, .xs).foregroundStyle(meta.tint)
+                }
+                .frame(width: 20, height: 20)
+                .overlay(Circle().strokeBorder(Color.vBase, lineWidth: 2))
+                .offset(x: 4, y: 4)
             }
-            .frame(width: 20, height: 20)
-            .overlay(Circle().strokeBorder(Color.vBase, lineWidth: 2))
-            .offset(x: 4, y: 4)
         }
     }
 
@@ -223,8 +222,24 @@ struct NotificationsScreen: View {
         case "added to folder":          return .init(label: "added a track to", icon: .music, tint: .cyan)
         case "uploaded file":            return .init(label: "uploaded a file to", icon: .music, tint: .cyan)
         case "commented on file":        return .init(label: "commented on a file in", icon: .messageCircle, tint: .purple)
+        // Moderation notices ("track under review" / "listing hidden" / …) —
+        // actor-less system rows; the label reads as a full sentence since
+        // there's no "@name" prefix, and the object title follows in white.
+        case let a where a.hasSuffix(" under review"):
+            return .init(label: "Your \(Self.noun(a)) is under review:", icon: .flag, tint: .orange)
+        case let a where a.hasSuffix(" hidden"):
+            return .init(label: "Your \(Self.noun(a)) was hidden for violating our guidelines:", icon: .ban, tint: .orange)
+        case let a where a.hasSuffix(" removed"):
+            return .init(label: "Your \(Self.noun(a)) was removed for violating our guidelines:", icon: .ban, tint: .red)
+        case let a where a.hasSuffix(" restored"):
+            return .init(label: "Your \(Self.noun(a)) is back up:", icon: .circleCheck, tint: .green)
         default:                         return .init(label: action.replacingOccurrences(of: "_", with: " "), icon: .bell, tint: Color(white: 0.6))
         }
+    }
+
+    /// "track under review" → "track" (the content noun of a moderation action).
+    private static func noun(_ action: String) -> String {
+        action.split(separator: " ").first.map(String.init) ?? "content"
     }
 
     /// Purchases carry the real product type in `object_type`; relabel so packs
@@ -245,17 +260,17 @@ struct NotificationsScreen: View {
             router.navigateToFolder(folderId: folderId, folderName: item.objectTitle ?? "Folder")
         } else if let userId = item.actor?.userId {
             router.navigateToProfile(userId: userId)
+        } else if item.objectType == "track", let id = item.objectId {
+            // System notice (moderation) — open your own track in the player
+            // (same machinery as the post-publish reveal).
+            NotificationCenter.default.post(name: .openOwnPost, object: nil, userInfo: ["trackId": id])
+        } else if item.objectType == "listing", let id = item.objectId {
+            NotificationCenter.default.post(name: .openOwnPost, object: nil, userInfo: ["listingId": id])
         }
     }
 
     private func emptyState(icon: LucideIcon.Name, title: String, message: String) -> some View {
-        VStack(spacing: 10) {
-            LucideIcon(icon, .hero).foregroundStyle(Color.vText3)
-            Text(title).font(.appTitle3).foregroundStyle(.white)
-            Text(message).font(.appSubheadline).foregroundStyle(Color.vText2)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 40)
+        EmptyStateView(icon: icon, title: title, message: message)
     }
 }
 
