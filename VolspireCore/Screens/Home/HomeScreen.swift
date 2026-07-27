@@ -55,6 +55,7 @@ struct HomeScreen: View {
     @Environment(WorkspaceStore.self) var workspaceStore
     @Environment(SocialStore.self) var socialStore
     @Environment(ListingsStore.self) var listingsStore
+    @Environment(FeedStore.self) var feedStore
     @State var viewModel = HomeScreenViewModel()
     @State var selectedTab: ExploreTab = .all
     /// True only while Home is the visible root tab. RootTabView keeps hidden tabs
@@ -144,22 +145,14 @@ struct HomeScreen: View {
         .gradientBackground()
         .task {
             viewModel.player = dependencies.mediaPlayer
+            viewModel.feed = feedStore
             viewModel.workspace = workspaceStore
             viewModel.social = socialStore
             viewModel.listingsStore = listingsStore
             await viewModel.loadInitial()
         }
-        // Home is a keep-alive tab, so its in-memory feed survives a block made
-        // from a profile/player/conversation — refetch now that the server
-        // filters the blocked party out of every read.
-        .onReceive(NotificationCenter.default.publisher(for: .userBlockStateChanged)) { _ in
-            Task { await viewModel.refreshAfterBlockChange() }
-        }
-        // Posting a track/listing lands on these home surfaces — refetch in
-        // place so the new post shows without waiting for a pull-to-refresh.
-        .onReceive(NotificationCenter.default.publisher(for: .ownContentPosted)) { _ in
-            Task { await viewModel.refreshAfterOwnPost() }
-        }
+        // Block/unblock + own-post healing runs inside FeedStore/ListingsStore
+        // (they subscribe to the notifications themselves) — no view wiring.
         .onChange(of: router.rootResetTick) { _, _ in
             // Tapping the Home tab lands fully reset: back on the default All
             // page with filters cleared and search closed — not just scrolled
@@ -188,8 +181,8 @@ struct HomeScreen: View {
                 switch tab {
                 case .collab: await listingsStore.loadListingsIfNeeded()
                 case .workspace: await workspaceStore.loadFoldersIfNeeded()
-                case .following: await viewModel.loadFollowing()
-                case .artists: await viewModel.loadArtists()
+                case .following: await feedStore.loadFollowingIfNeeded()
+                case .artists: await feedStore.loadArtistsIfNeeded()
                 default: break
                 }
             }
@@ -245,7 +238,7 @@ struct HomeScreen: View {
         case .workspace:
             workspaceTab
         case .following:
-            tracksTab(tracks: viewModel.followingTracks, loaded: viewModel.followingLoaded,
+            tracksTab(tracks: feedStore.followingTracks, loaded: feedStore.followingLoaded,
                       emptyTitle: "Nothing here yet", emptyMessage: "Follow artists to see their tracks",
                       refresh: { await viewModel.refreshFollowing() })
         case .artists:

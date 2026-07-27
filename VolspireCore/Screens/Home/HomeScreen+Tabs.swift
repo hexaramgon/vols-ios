@@ -866,15 +866,15 @@ extension HomeScreen {
             artistsTabContent
         }
         // Crossfade the skeleton into the grid instead of an instant swap.
-        .animation(.easeInOut(duration: 0.35), value: viewModel.artistsLoaded)
+        .animation(.easeInOut(duration: 0.35), value: feedStore.artistsLoaded)
     }
 
     @ViewBuilder
     private var artistsTabContent: some View {
-        if !viewModel.artistsLoaded {
+        if !feedStore.artistsLoaded {
             artistsGridSkeleton
                 .transition(.opacity)
-        } else if viewModel.artists.isEmpty {
+        } else if feedStore.artists.isEmpty {
             emptyState(icon: .users, title: "No artists", message: "Check back soon")
                 .transition(.opacity)
         } else {
@@ -883,7 +883,7 @@ extension HomeScreen {
                     // Same divided-list treatment as the Collab feed rows —
                     // full-width hairline boundary, then one after every row.
                     Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5)
-                    ForEach(viewModel.artists) { artist in
+                    ForEach(feedStore.artists) { artist in
                         artistRow(artist)
                         Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5)
                     }

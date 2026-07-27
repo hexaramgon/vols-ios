@@ -20,8 +20,8 @@ extension HomeScreen {
     /// hero/rails are empty) so there's no flash of an empty page before the
     /// fetch kicks in.
     var showExploreSkeleton: Bool {
-        guard viewModel.popularTracks.isEmpty else { return false }
-        switch viewModel.loadingState {
+        guard feedStore.popularTracks.isEmpty else { return false }
+        switch feedStore.loadState {
         case .idle, .loading: return true
         case .loaded, .error: return false
         }
@@ -30,19 +30,19 @@ extension HomeScreen {
     var allContent: some View {
         ScrollView {
             VStack(spacing: 0) {
-                if !viewModel.featuredTracks.isEmpty {
+                if !feedStore.featuredTracks.isEmpty {
                     heroSection
                         .padding(.top, headerHeight + 8) // sit just below the header, not under the status bar
                         .entranceReveal(contentAppeared, index: 0, distance: 0)
                 }
 
                 LazyVStack(spacing: 36) {
-                    if !viewModel.popularTracks.isEmpty {
+                    if !feedStore.popularTracks.isEmpty {
                         trackRail("Popular", subtitle: "Top tracks right now",
-                                  tracks: viewModel.popularTracks, ranked: true)
+                                  tracks: feedStore.popularTracks, ranked: true)
                             .entranceReveal(contentAppeared, index: 1, distance: 0)
                     }
-                    if !viewModel.artists.isEmpty {
+                    if !feedStore.artists.isEmpty {
                         artistsRail
                             .entranceReveal(contentAppeared, index: 2, distance: 0)
                     }
@@ -50,20 +50,20 @@ extension HomeScreen {
                         collabListingsRail
                             .entranceReveal(contentAppeared, index: 3, distance: 0)
                     }
-                    if !viewModel.demos.isEmpty {
-                        trackRail("Short Tracks", subtitle: "Under three minutes", tracks: viewModel.demos)
+                    if !feedStore.demos.isEmpty {
+                        trackRail("Short Tracks", subtitle: "Under three minutes", tracks: feedStore.demos)
                             .entranceReveal(contentAppeared, index: 4, distance: 0)
                     }
-                    if !viewModel.samples.isEmpty {
-                        trackRail("Snippets", subtitle: "Loops & one-shots", tracks: viewModel.samples)
+                    if !feedStore.samples.isEmpty {
+                        trackRail("Snippets", subtitle: "Loops & one-shots", tracks: feedStore.samples)
                             .entranceReveal(contentAppeared, index: 5, distance: 0)
                     }
-                    if !viewModel.feedTracks.isEmpty {
+                    if !feedStore.feedTracks.isEmpty {
                         allTracksGrid
                             .entranceReveal(contentAppeared, index: 6, distance: 0)
                     }
                 }
-                .padding(.top, viewModel.featuredTracks.isEmpty ? headerHeight + 12 : 32)
+                .padding(.top, feedStore.featuredTracks.isEmpty ? headerHeight + 12 : 32)
                 .padding(.bottom, bottomInset)
             }
         }
@@ -84,7 +84,7 @@ extension HomeScreen {
     var heroSection: some View {
         ZStack(alignment: .bottomTrailing) {
             TabView(selection: $featuredIndex) {
-                ForEach(Array(viewModel.featuredTracks.enumerated()), id: \.element.id) { index, track in
+                ForEach(Array(feedStore.featuredTracks.enumerated()), id: \.element.id) { index, track in
                     heroPage(track).tag(index)
                 }
             }
@@ -94,9 +94,9 @@ extension HomeScreen {
                 // Only advance while the hero is plausibly on screen (the
                 // header collapses as soon as the user scrolls down past it).
                 guard isActiveRootTab, selectedTab == .all, !headerState.collapsed,
-                      !showSearchOverlay, viewModel.featuredTracks.count > 1 else { return }
+                      !showSearchOverlay, feedStore.featuredTracks.count > 1 else { return }
                 withAnimation(.easeInOut(duration: 0.7)) {
-                    featuredIndex = (featuredIndex + 1) % viewModel.featuredTracks.count
+                    featuredIndex = (featuredIndex + 1) % feedStore.featuredTracks.count
                 }
             }
 
@@ -127,7 +127,7 @@ extension HomeScreen {
         .frame(height: heroHeight)
         .clipped()
         .contentShape(.rect)
-        .onTapGesture { handleTap(track, in: viewModel.featuredTracks) }
+        .onTapGesture { handleTap(track, in: feedStore.featuredTracks) }
     }
 
     @ViewBuilder
@@ -189,7 +189,7 @@ extension HomeScreen {
 
     func heroPlayButton(_ track: HomeTrack) -> some View {
         let playing = isActive(track) && isPlaying
-        return Button { handleTap(track, in: viewModel.featuredTracks) } label: {
+        return Button { handleTap(track, in: feedStore.featuredTracks) } label: {
             HStack(spacing: 8) {
                 LucideIcon(playing ? .pauseFill : .playFill, .sm).foregroundStyle(.black)
                 Text(playing ? "Pause" : "Play")
@@ -207,9 +207,9 @@ extension HomeScreen {
     /// Small page dots, bottom-trailing — quieter than a numeric counter.
     @ViewBuilder
     var heroDots: some View {
-        if viewModel.featuredTracks.count > 1 {
+        if feedStore.featuredTracks.count > 1 {
             HStack(spacing: 6) {
-                ForEach(0..<viewModel.featuredTracks.count, id: \.self) { index in
+                ForEach(0..<feedStore.featuredTracks.count, id: \.self) { index in
                     Circle()
                         .fill(.white.opacity(index == featuredIndex ? 0.95 : 0.35))
                         .frame(width: 6, height: 6)
@@ -269,10 +269,10 @@ extension HomeScreen {
     func tracks(for section: AllSection) -> [HomeTrack] {
         switch section {
         case .everything: []
-        case .popular: viewModel.popularTracks
-        case .demos: viewModel.demos
-        case .samples: viewModel.samples
-        case .tracks: viewModel.feedTracks
+        case .popular: feedStore.popularTracks
+        case .demos: feedStore.demos
+        case .samples: feedStore.samples
+        case .tracks: feedStore.feedTracks
         }
     }
 }
@@ -338,7 +338,7 @@ extension HomeScreen {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 14) {
-                    ForEach(viewModel.artists.prefix(12)) { artistChip($0) }
+                    ForEach(feedStore.artists.prefix(12)) { artistChip($0) }
                 }
                 .padding(.horizontal, pad)
             }
@@ -478,10 +478,10 @@ extension HomeScreen {
     var allTracksGrid: some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionHeader("All Tracks", subtitle: "Fresh from the community") {
-                seeAllTracks("All Tracks", viewModel.feedTracks)
+                seeAllTracks("All Tracks", feedStore.feedTracks)
             }
             LazyVGrid(columns: gridColumns, spacing: 18) {
-                ForEach(viewModel.feedTracks) { gridTrackCard($0, in: viewModel.feedTracks) }
+                ForEach(feedStore.feedTracks) { gridTrackCard($0, in: feedStore.feedTracks) }
             }
             .padding(.horizontal, pad)
         }

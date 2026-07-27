@@ -17,6 +17,7 @@
 //
 
 import DesignSystem
+import MediaLibrary
 import Services
 import SwiftUI
 
@@ -42,6 +43,8 @@ struct ProfileScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(AvatarPreviewState.self) private var avatarPreview
     @Environment(SocialStore.self) private var socialStore
+    @Environment(LibraryStore.self) private var libraryStore
+    @Environment(FeedStore.self) private var feedStore
 
     @State private var viewModel = ProfileScreenViewModel()
     @State private var scrollState = ProfileScrollState()
@@ -192,7 +195,13 @@ struct ProfileScreen: View {
                     storageService: StorageService(),
                     userId: resolvedUserId
                 ),
-                onSaved: { Task { await viewModel.refreshTrack(trackId: detail.trackId) } }
+                onSaved: { Task {
+                    await viewModel.refreshTrack(trackId: detail.trackId)
+                    // Every other copy of this track heals from the stores.
+                    async let feedDone: Void = feedStore.trackEdited(detail.trackId)
+                    async let libraryDone: Void = libraryStore.trackEdited(detail.trackId)
+                    _ = await (feedDone, libraryDone)
+                } }
             )
         }
         .destructiveConfirm(
@@ -202,7 +211,18 @@ struct ProfileScreen: View {
         ) {
             Task {
                 if let id = viewModel.pendingDeleteTrackId {
-                    _ = await viewModel.deleteTrack(trackId: id)
+                    if await viewModel.deleteTrack(trackId: id) {
+                        // Strip the dead track everywhere it could still render
+                        // or play: home rails/feeds, saved library + uploads,
+                        // the media registry, and the player if it's current.
+                        feedStore.removeTrack(id)
+                        libraryStore.trackDeleted(id)
+                        await dependencies.mediaState.removeTrack(MediaID(id))
+                        if dependencies.playerController.state.currentMediaID?.value
+                            .caseInsensitiveCompare(id) == .orderedSame {
+                            dependencies.mediaPlayer.reset()
+                        }
+                    }
                 }
                 viewModel.pendingDeleteTrackId = nil
             }
@@ -294,7 +314,11 @@ private extension ProfileScreen {
                 title: track.isPrivate ? "Unhide Track" : "Hide Track",
                 awaitsCompletion: true
             ) {
-                _ = await viewModel.hideTrack(trackId: track.id, hide: !track.isPrivate)
+                if await viewModel.hideTrack(trackId: track.id, hide: !track.isPrivate) {
+                    // Visibility feeds the home rails — refetch them in place
+                    // (a hidden track must stop being offered).
+                    await feedStore.trackEdited(track.id)
+                }
             },
             .init(icon: .trash2, title: "Delete Track", isDestructive: true) {
                 viewModel.pendingDeleteTrackId = track.id

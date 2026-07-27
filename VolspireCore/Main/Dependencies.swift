@@ -56,6 +56,7 @@ class Dependencies: Observable {
         feedStore = FeedStore(service: supabaseService, storage: storageService)
         libraryStore.mediaState = mediaState
         playerController.library = libraryStore
+        feedStore.social = socialStore
     }
 }
 

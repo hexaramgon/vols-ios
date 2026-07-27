@@ -861,6 +861,8 @@ public final class SupabaseService: Sendable {
         try await executeRpc("update_track", params: params)
         await invalidateProfile(userId: userId)
         await cache.remove(APICache.key("get_track_metadata", params: ["p_track_id": trackId]))
+        // Title/cover/visibility feed the home rails — refetches must be fresh.
+        await invalidateHomeCaches()
     }
 
     /// Author-only: soft-deletes a track (`delete_track` flips `deprecated`;
@@ -868,6 +870,9 @@ public final class SupabaseService: Sendable {
     public func deleteTrack(trackId: String, userId: String) async throws {
         try await executeRpc("delete_track", params: ["p_track_id": trackId])
         await invalidateProfile(userId: userId)
+        // The rails/feeds caches may still contain the dead row — drop them so
+        // a refresh inside the TTL can't resurrect it after stores patched it out.
+        await invalidateHomeCaches()
     }
 
     /// Author-only: edits a track's metadata via `update_track` — mirrors the web's
@@ -910,6 +915,8 @@ public final class SupabaseService: Sendable {
         try await executeRpc("update_track", params: params)
         await invalidateProfile(userId: userId)
         await cache.remove(APICache.key("get_track_metadata", params: ["p_track_id": trackId]))
+        // Title/cover/visibility feed the home rails — refetches must be fresh.
+        await invalidateHomeCaches()
     }
 
     // MARK: - Pack create (web pack-create parity)

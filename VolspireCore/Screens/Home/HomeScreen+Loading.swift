@@ -120,15 +120,15 @@ extension HomeScreen {
 
     /// True when the home fetch failed (e.g. no network).
     var isExploreError: Bool {
-        if case .error = viewModel.loadingState { return true }
+        if case .error = feedStore.loadState { return true }
         return false
     }
 
     /// True when no section has anything to show.
     var exploreHasNoContent: Bool {
-        viewModel.featuredTracks.isEmpty && viewModel.popularTracks.isEmpty
-            && viewModel.artists.isEmpty && viewModel.demos.isEmpty
-            && viewModel.samples.isEmpty && viewModel.feedTracks.isEmpty
+        feedStore.featuredTracks.isEmpty && feedStore.popularTracks.isEmpty
+            && feedStore.artists.isEmpty && feedStore.demos.isEmpty
+            && feedStore.samples.isEmpty && feedStore.feedTracks.isEmpty
     }
 
     /// Offline / load-failure state with a retry (the error view isn't a scroll
