@@ -53,17 +53,26 @@ private struct FolderPickerSheet: View {
     let mode: Mode
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(WorkspaceStore.self) private var workspaceStore
 
-    @State private var folders: [ApiUserFolder] = []
     @State private var isLoading = true
     @State private var busyFolderId: String?
     @State private var addedFolderIds: Set<String> = []
     @State private var errorText: String?
 
+    /// Membership pre-check + attachment upload only — folders live in the store.
     private let service = SupabaseService()
 
     private var isToggle: Bool {
         if case .trackMembership = mode { return true } else { return false }
+    }
+
+    /// The rows: every folder in track mode; writable folders only when copying
+    /// a file in (viewers can't add files — same filter as the web modal).
+    private var folders: [ApiUserFolder] {
+        isToggle
+            ? workspaceStore.folders
+            : workspaceStore.folders.filter { ["owner", "editor"].contains($0.role.lowercased()) }
     }
 
     var body: some View {
@@ -179,20 +188,13 @@ private struct FolderPickerSheet: View {
         case let .trackMembership(trackId):
             // Load the folders and which ones already contain this track in
             // parallel, so each row's check is accurate on open.
-            async let foldersResult = service.getUserFolders()
+            async let foldersLoad: () = workspaceStore.loadFoldersIfNeeded()
             async let memberResult = service.getFoldersForTrack(trackId: trackId)
-            folders = (try? await foldersResult) ?? []
+            _ = await foldersLoad
             addedFolderIds = Set((try? await memberResult) ?? [])
         case .attachmentCopy:
-            // File uploads need write access — viewers can't add files (same
-            // filter as the web modal).
-            folders = await writableFolders()
+            await workspaceStore.loadFoldersIfNeeded()
         }
-    }
-
-    private func writableFolders() async -> [ApiUserFolder] {
-        ((try? await service.getUserFolders()) ?? [])
-            .filter { ["owner", "editor"].contains($0.role.lowercased()) }
     }
 
     // MARK: Actions
@@ -235,9 +237,10 @@ private struct FolderPickerSheet: View {
     private func createAndAdd(name: String) async -> Bool {
         errorText = nil
         do {
-            let folderId = try await service.createFolder(name: name, description: nil)
+            // The store refetches its folder list, so the new folder appears
+            // here AND on the Home Workspace grid without a revisit.
+            let folderId = try await workspaceStore.createFolder(name: name, description: nil)
             try await add(into: folderId)
-            folders = isToggle ? ((try? await service.getUserFolders()) ?? folders) : await writableFolders()
             withAnimation(.smooth(duration: 0.2)) { _ = addedFolderIds.insert(folderId) }
             Haptics.impact(.soft)
             if !isToggle {
@@ -256,7 +259,7 @@ private struct FolderPickerSheet: View {
     private func add(into folderId: String) async throws {
         switch mode {
         case let .trackMembership(trackId):
-            try await service.addTrackToFolder(trackId: trackId, folderId: folderId)
+            try await workspaceStore.addTrack(trackId: trackId, folderId: folderId)
         case let .attachmentCopy(url, fileName, fileType):
             let (data, _) = try await URLSession.shared.data(from: url)
             try await service.uploadFile(
@@ -265,12 +268,14 @@ private struct FolderPickerSheet: View {
                 fileData: data,
                 fileType: fileType ?? "application/octet-stream"
             )
+            // An open folder screen shows the copied file without a revisit.
+            await workspaceStore.fileUploaded(folderId: folderId)
         }
     }
 
     private func remove(from folderId: String) async throws {
         guard case let .trackMembership(trackId) = mode else { return }
-        try await service.removeTrackFromFolder(trackId: trackId, folderId: folderId)
+        try await workspaceStore.removeTrack(trackId: trackId, folderId: folderId)
     }
 
     /// A human-readable reason for a failed add/remove.

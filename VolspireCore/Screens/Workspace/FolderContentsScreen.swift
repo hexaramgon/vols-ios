@@ -18,6 +18,7 @@ struct FolderContentsScreen: View {
     @Environment(Router.self) var router
     @Environment(\.dismiss) private var dismiss
     @Environment(PlayerController.self) private var playerController
+    @Environment(WorkspaceStore.self) private var workspaceStore
     @State private var viewModel: FolderContentsViewModel
     @State private var pendingAction: FolderAction?
     @State private var fileForOptions: ApiFolderFile?
@@ -91,6 +92,7 @@ struct FolderContentsScreen: View {
             Task { if await viewModel.deleteFolder() { dismiss() } }
         }
         .task {
+            viewModel.workspace = workspaceStore
             await viewModel.loadFiles()
             await viewModel.loadFolderMeta()
         }

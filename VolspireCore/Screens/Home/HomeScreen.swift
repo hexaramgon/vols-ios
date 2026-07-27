@@ -52,6 +52,7 @@ struct HomeScreen: View {
     @Environment(Router.self) var router
     @Environment(Dependencies.self) var dependencies
     @Environment(PlayerController.self) var playerController
+    @Environment(WorkspaceStore.self) var workspaceStore
     @State var viewModel = HomeScreenViewModel()
     @State var selectedTab: ExploreTab = .all
     /// True only while Home is the visible root tab. RootTabView keeps hidden tabs
@@ -141,6 +142,7 @@ struct HomeScreen: View {
         .gradientBackground()
         .task {
             viewModel.player = dependencies.mediaPlayer
+            viewModel.workspace = workspaceStore
             await viewModel.loadInitial()
         }
         // Home is a keep-alive tab, so its in-memory feed survives a block made
@@ -181,7 +183,7 @@ struct HomeScreen: View {
             Task {
                 switch tab {
                 case .collab: await viewModel.loadListings()
-                case .workspace: await viewModel.loadFolders()
+                case .workspace: await workspaceStore.loadFoldersIfNeeded()
                 case .following: await viewModel.loadFollowing()
                 case .artists: await viewModel.loadArtists()
                 default: break

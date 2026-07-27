@@ -572,23 +572,23 @@ extension HomeScreen {
             workspaceTabContent
         }
         // Crossfade the skeleton into the folders instead of an instant swap.
-        .animation(.easeInOut(duration: 0.35), value: viewModel.foldersLoaded)
+        .animation(.easeInOut(duration: 0.35), value: workspaceStore.foldersLoaded)
     }
 
     @ViewBuilder
     private var workspaceTabContent: some View {
-        if !viewModel.foldersLoaded {
+        if !workspaceStore.foldersLoaded {
             foldersSkeleton
                 .transition(.opacity)
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    if !viewModel.activityGroups.isEmpty {
+                    if !workspaceStore.activityGroups.isEmpty {
                         workspaceActivityRail
                     }
                     VStack(alignment: .leading, spacing: 12) {
                         foldersHeader
-                        if viewModel.folders.isEmpty {
+                        if workspaceStore.folders.isEmpty {
                             emptyFoldersRow
                         } else {
                             workspaceFoldersGrid
@@ -616,7 +616,7 @@ extension HomeScreen {
         HStack(alignment: .center) {
             Text("Folders").font(.appFont.sectionTitle).foregroundStyle(.white)
             Spacer()
-            if !viewModel.folders.isEmpty {
+            if !workspaceStore.folders.isEmpty {
                 AccentPillButton(title: "New") { viewModel.showCreateFolder = true }
             }
         }
@@ -652,14 +652,14 @@ extension HomeScreen {
             sectionHeader("Recent Activity")
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 14) {
-                    ForEach(viewModel.activityGroups) { group in
+                    ForEach(workspaceStore.activityGroups) { group in
                         activityProfileCircle(group)
                     }
                 }
                 .padding(.horizontal, pad)
             }
             if let actorId = expandedActivityActor,
-               let group = viewModel.activityGroups.first(where: { $0.actorId == actorId }) {
+               let group = workspaceStore.activityGroups.first(where: { $0.actorId == actorId }) {
                 activityDetail(group)
                     .padding(.horizontal, pad)
                     .transition(.opacity)
@@ -751,7 +751,7 @@ extension HomeScreen {
     }
 
     func activityAvatar(path: String?, size: CGFloat) -> some View {
-        AvatarView(url: viewModel.activityAvatarURL(path), name: nil, size: size)
+        AvatarView(url: workspaceStore.activityAvatarURL(path), name: nil, size: size)
     }
 
     func activityLine(_ item: ApiWorkspaceActivity) -> String {
@@ -767,7 +767,7 @@ extension HomeScreen {
     /// 2-column grid of folder tiles (icon + name), replacing the old list rows.
     var workspaceFoldersGrid: some View {
         LazyVGrid(columns: gridColumns, spacing: 14) {
-            ForEach(viewModel.folders) { folderTile($0) }
+            ForEach(workspaceStore.folders) { folderTile($0) }
         }
         .padding(.horizontal, ViewConst.gridPaddings)
     }

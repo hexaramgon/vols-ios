@@ -18,15 +18,6 @@ import SwiftUI
 
 /// One collaborator's recent workspace actions, for the stories-style
 /// Recent Activity rail (avatar circle → tap → their past-month history).
-struct WorkspaceActivityGroup: Identifiable {
-    let actorId: String
-    let username: String?
-    let avatar: String?
-    /// Newest first.
-    let events: [ApiWorkspaceActivity]
-    var id: String { actorId }
-}
-
 struct HomeTrack: Identifiable, Hashable {
     let id: String
     let title: String
@@ -61,44 +52,22 @@ class HomeScreenViewModel {
     var feedTracks: [HomeTrack] = []
     var followingTracks: [HomeTrack] = []
     var artists: [ExploreArtistItem] = []
-    var folders: [ApiUserFolder] = []
-    /// Collaborators' actions across shared folders in the past month
-    /// (Workspace tab rail), newest first.
-    var workspaceActivity: [ApiWorkspaceActivity] = []
-
-    /// Activity grouped per collaborator (stories-style rail): one entry per
-    /// person, ordered by their most recent action, events newest-first.
-    var activityGroups: [WorkspaceActivityGroup] {
-        var order: [String] = []
-        var byActor: [String: [ApiWorkspaceActivity]] = [:]
-        for event in workspaceActivity {
-            if byActor[event.actorId] == nil { order.append(event.actorId) }
-            byActor[event.actorId, default: []].append(event)
-        }
-        return order.map { actorId in
-            let events = byActor[actorId] ?? []
-            return WorkspaceActivityGroup(
-                actorId: actorId,
-                username: events.first?.actorUsername,
-                avatar: events.first?.actorAvatar,
-                events: events
-            )
-        }
-    }
     var feedLoaded = false
     var followingLoaded = false
     var artistsLoaded = false
-    var foldersLoaded = false
 
     // Collab listings (lazy-loaded the first time the Collab tab opens).
     var collabListings: [ApiListing] = []
     var listingsLoaded = false
 
-    // Create-folder sheet on the Workspace tab.
+    // Create-folder sheet on the Workspace tab. The folders themselves live in
+    // the shared WorkspaceStore; only the form state is screen-local.
     var showCreateFolder = false
     var newFolderName = ""
     var newFolderDescription = ""
     var isCreatingFolder = false
+    /// The shared workspace store — assigned by HomeScreen's `.task`.
+    weak var workspace: WorkspaceStore?
 
     /// Random shuffle seed for the explore feed (`get_home_feed`). Fresh per VM
     /// (i.e. per app session) and re-rolled on pull-to-refresh, so the recs vary
@@ -234,18 +203,6 @@ class HomeScreenViewModel {
         }
     }
 
-    func refreshFolders() async {
-        pullRefreshCount += 1
-        defer { pullRefreshCount -= 1 }
-        await supabaseService.invalidateHomeCaches()
-        async let activity = supabaseService.getWorkspaceActivity(limit: 60)
-        if let fresh = try? await supabaseService.getUserFolders() {
-            folders = fresh
-            foldersLoaded = true
-        }
-        workspaceActivity = (try? await activity) ?? workspaceActivity
-    }
-
     /// After the user posts content (track or listing, `ownContentPosted`):
     /// refetch the home surfaces that could include it — the rails and the
     /// collab listings — in place, without any loading-state churn.
@@ -308,55 +265,33 @@ class HomeScreenViewModel {
         followingLoadInFlight = false
     }
 
-    /// Re-entry guard for `loadFolders` — separate from `foldersLoaded`, which
-    /// must stay false (skeleton showing) until a response actually arrives.
-    private var foldersLoadInFlight = false
-
-    func loadFolders() async {
-        // Defensive: only a confirmed response flips `foldersLoaded`, so the
-        // tab shows its skeleton — never "No folders yet" — while the fetch is
-        // in flight. A failed load leaves it false and the next visit retries.
-        guard !foldersLoaded, !foldersLoadInFlight else { return }
-        foldersLoadInFlight = true
-        // Generous limit: the RPC is already scoped to the past month and the
-        // rail groups client-side, so fetch the whole window.
-        async let activity = supabaseService.getWorkspaceActivity(limit: 60)
-        do {
-            folders = try await supabaseService.getUserFolders()
-            foldersLoaded = true
-        } catch {
-            debugLog("[HomeVM] loadFolders: \(error)")
-        }
-        workspaceActivity = (try? await activity) ?? []
-        foldersLoadInFlight = false
+    /// Workspace-tab pull-to-refresh: delegates to the shared store, wrapped in
+    /// the pull-refresh counter so the floating chip shows like the other tabs.
+    func refreshFolders() async {
+        pullRefreshCount += 1
+        defer { pullRefreshCount -= 1 }
+        await workspace?.refreshFolders()
     }
 
-    /// Creates a folder from the Workspace tab's CTA / grid tile, then reloads
-    /// the folders — same trim + guard behaviour as the Workspace screen.
+    /// Creates a folder from the Workspace tab's CTA / grid tile via the shared
+    /// store (which refetches the grid in place) — same trim + guard behaviour
+    /// as the Workspace screen.
     func createFolder() async {
-        guard !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        guard let workspace, !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         isCreatingFolder = true
         do {
             let desc = newFolderDescription.trimmingCharacters(in: .whitespaces)
-            try await supabaseService.createFolder(
+            try await workspace.createFolder(
                 name: newFolderName.trimmingCharacters(in: .whitespaces),
                 description: desc.isEmpty ? nil : desc
             )
             newFolderName = ""
             newFolderDescription = ""
             showCreateFolder = false
-            // Refetch in place — the grid updates without dropping back to the
-            // skeleton; keep the current list if the refetch fails.
-            folders = (try? await supabaseService.getUserFolders()) ?? folders
         } catch {
             debugLog("[HomeVM] createFolder: \(error)")
         }
         isCreatingFolder = false
-    }
-
-    /// Resolves an activity actor's avatar (bare storage path or full URL).
-    func activityAvatarURL(_ pathOrUrl: String?) -> URL? {
-        storageService.avatarUrl(pathOrUrl: pathOrUrl).flatMap { URL(string: $0) }
     }
 
     /// Same defensive shape as `loadFollowing` — flag flips on response only.

@@ -98,6 +98,12 @@ public final class SupabaseService: Sendable {
         await cache.removeAll(matching: "rpc:get_user_library")
     }
 
+    /// Drops one folder's cached file rows (mutating RPCs do this themselves;
+    /// this is for user-initiated refreshes).
+    public func invalidateFolderFilesCache(folderId: String) async {
+        await cache.remove(APICache.key("get_folder_files", params: ["p_folder_id": folderId]))
+    }
+
     // MARK: - Messages
 
     /// The signed-in user's conversation list, most-recent first. Uncached — the

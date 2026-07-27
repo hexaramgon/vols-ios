@@ -49,7 +49,7 @@ class Dependencies: Observable {
         self.listenAnalytics = listenAnalytics
         let storageService = StorageService()
         libraryStore = LibraryStore(service: supabaseService, storage: storageService, auth: authManager)
-        workspaceStore = WorkspaceStore(service: supabaseService)
+        workspaceStore = WorkspaceStore(service: supabaseService, storage: storageService)
         socialStore = SocialStore(service: supabaseService, auth: authManager)
         inboxStore = InboxStore(service: supabaseService)
         listingsStore = ListingsStore(service: supabaseService)

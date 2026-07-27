@@ -32,8 +32,12 @@ struct PendingUpload: Identifiable, Equatable {
 
 @Observable @MainActor
 final class FolderContentsViewModel {
-    var files: [ApiFolderFile] = []
-    var loadingState: LoadState = .idle
+    /// The shared workspace store (assigned by the screen's `.task`) — file
+    /// rows and folder CRUD live there so the Home grid and pickers stay in sync.
+    weak var workspace: WorkspaceStore?
+
+    var files: [ApiFolderFile] { workspace?.files(in: folderId) ?? [] }
+    var loadingState: LoadState { workspace?.fileLoadState(folderId) ?? .idle }
     var showFilePicker = false
     /// In-flight / failed uploads, shown above the real file rows.
     var pendingUploads: [PendingUpload] = []
@@ -82,31 +86,18 @@ final class FolderContentsViewModel {
     }
 
     func loadFiles() async {
-        guard case .idle = loadingState else { return }
-        loadingState = .loading
-
-        do {
-            let rawFiles = try await supabaseService.getFolderFiles(folderId: folderId)
-            // Resolve raw storage paths into usable URLs: private `files` get signed
-            // URLs, track references get public `post-uploads` URLs.
-            files = await storageService.signFolderFileUrls(files: rawFiles)
-            loadingState = .loaded
-        } catch {
-            debugLog("[FolderContentsVM] Failed to load files: \(error)")
-            loadingState = .error(error.localizedDescription)
-        }
+        await workspace?.loadFilesIfNeeded(folderId: folderId)
     }
 
     func refresh() async {
-        loadingState = .idle
-        await loadFiles()
+        await workspace?.refreshFiles(folderId: folderId)
     }
 
-    /// Loads this folder's name/description/role from the user's folders, so the
-    /// rename sheet pre-fills and the menu can gate on ownership.
+    /// Loads this folder's name/description/role from the shared folders list,
+    /// so the rename sheet pre-fills and the menu can gate on ownership.
     func loadFolderMeta() async {
-        let folders = (try? await supabaseService.getUserFolders()) ?? []
-        guard let folder = folders.first(where: { $0.folderId == folderId }) else { return }
+        await workspace?.loadFoldersIfNeeded()
+        guard let folder = workspace?.folder(folderId) else { return }
         folderName = folder.name
         folderDescription = folder.description ?? ""
         folderRole = folder.role
@@ -118,14 +109,15 @@ final class FolderContentsViewModel {
         showEdit = true
     }
 
-    /// Saves a rename/description change via `update_folder`.
+    /// Saves a rename/description change via the shared store (the Home grid
+    /// shows the new name without a revisit).
     func saveEdit() async {
         let name = editName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, !isSaving else { return }
+        guard !name.isEmpty, !isSaving, let workspace else { return }
         isSaving = true
         do {
             let desc = editDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-            try await supabaseService.updateFolder(folderId: folderId, name: name, description: desc.isEmpty ? nil : desc)
+            try await workspace.updateFolder(folderId: folderId, name: name, description: desc.isEmpty ? nil : desc)
             folderName = name
             folderDescription = desc
             showEdit = false
@@ -135,10 +127,11 @@ final class FolderContentsViewModel {
         isSaving = false
     }
 
-    /// Deletes the folder via `delete_folder`. Returns true on success.
+    /// Deletes the folder via the shared store. Returns true on success.
     func deleteFolder() async -> Bool {
+        guard let workspace else { return false }
         do {
-            try await supabaseService.deleteFolder(folderId: folderId)
+            try await workspace.deleteFolder(folderId: folderId)
             return true
         } catch {
             uploadError = error.localizedDescription
@@ -232,9 +225,9 @@ final class FolderContentsViewModel {
     var actionError: String?
 
     func deleteFile(_ file: ApiFolderFile) async {
+        guard let workspace else { return }
         do {
-            try await supabaseService.deleteFile(fileId: file.fileId, folderId: folderId)
-            files.removeAll { $0.id == file.id }
+            try await workspace.deleteFile(fileId: file.fileId, folderId: folderId)
         } catch {
             debugLog("[FolderContentsVM] Failed to delete file: \(error)")
             showActionError(friendlyDeleteError(error))
@@ -307,7 +300,7 @@ final class FolderContentsViewModel {
                 fileType: item.fileType
             )
             // The real row replaces the optimistic one in a single update.
-            await refresh()
+            await workspace?.fileUploaded(folderId: folderId)
             pendingUploads.removeAll { $0.id == item.id }
             Haptics.impact(.soft)
         } catch {
