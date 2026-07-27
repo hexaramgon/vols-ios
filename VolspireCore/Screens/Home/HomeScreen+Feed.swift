@@ -366,25 +366,28 @@ extension HomeScreen {
     }
 
     func followChip(_ item: ExploreArtistItem, compact: Bool) -> some View {
-        Button {
+        // Shared overlay first (a follow made on the profile shows here live),
+        // the row's own flag as fallback.
+        let following = socialStore.isFollowing(item.id, fallback: item.isFollowing)
+        return Button {
             Haptics.impact(.soft) // subtle tap on follow/unfollow (matches the profile button)
-            Task { await viewModel.toggleFollow(item) }
+            Task { await socialStore.toggleFollow(userId: item.id, currentlyFollowing: following) }
         } label: {
-            Text(item.isFollowing ? "Following" : "Follow")
+            Text(following ? "Following" : "Follow")
                 .font(compact ? .appCaption2Semibold : .appFootnoteSemibold)
-                .foregroundStyle(item.isFollowing ? .white : .black)
+                .foregroundStyle(following ? .white : .black)
                 .padding(.horizontal, compact ? 14 : 18)
                 .padding(.vertical, compact ? 6 : 7)
                 // Cross-fade the accent over a white base (matching the profile) so the
                 // fill fades instead of hard-cutting between the gradient and white.
                 .background {
                     Color.white
-                        .overlay(LinearGradient.sendAccent.opacity(item.isFollowing ? 1 : 0))
+                        .overlay(LinearGradient.sendAccent.opacity(following ? 1 : 0))
                         .clipShape(Capsule())
                 }
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.22), value: item.isFollowing)
+        .animation(.easeInOut(duration: 0.22), value: following)
     }
 }
 

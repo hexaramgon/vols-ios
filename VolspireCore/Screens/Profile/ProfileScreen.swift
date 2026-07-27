@@ -41,6 +41,7 @@ struct ProfileScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
     @Environment(AvatarPreviewState.self) private var avatarPreview
+    @Environment(SocialStore.self) private var socialStore
 
     @State private var viewModel = ProfileScreenViewModel()
     @State private var scrollState = ProfileScrollState()
@@ -208,6 +209,7 @@ struct ProfileScreen: View {
         }
         .task {
             viewModel.player = dependencies.mediaPlayer
+            viewModel.social = socialStore
             guard !didLoad else { return }
             didLoad = true
             await loadEverything()

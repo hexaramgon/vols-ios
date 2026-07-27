@@ -98,15 +98,33 @@ final class ProfileScreenViewModel {
     /// the same treatment the expanded player applies to album art.
     var heroColors: [Color] = []
     var loadingState: LoadState = .idle
-    var isFollowing: Bool = false
+    /// The shared social store (assigned by the screen's `.task`) — follow and
+    /// collab state route through it so Home's artist rows and this profile
+    /// can't disagree.
+    weak var social: SocialStore?
+    /// Renders from the shared overlay (a follow made on the Home Artists tab
+    /// shows here live); the profile fetch seeds the fallback.
+    var isFollowing: Bool {
+        guard let id = profileUserId else { return seededIsFollowing }
+        return social?.isFollowing(id, fallback: seededIsFollowing) ?? seededIsFollowing
+    }
+
+    private var seededIsFollowing = false
     var isTogglingFollow: Bool = false
     /// Blocked (either direction) or suspended — the screen shows a
     /// "User unavailable" state instead of the profile.
     var isUnavailable: Bool = false
     /// The viewer blocked this user — the unavailable state offers Unblock.
     var viewerHasBlocked: Bool = false
-    /// `none` | `pending` | `accepted` — collaborator relationship with the viewer.
-    var collaboratorStatus: String = "none"
+    /// `none` | `pending` | `accepted` — collaborator relationship with the
+    /// viewer. Renders from the shared overlay (an accept made in the thread
+    /// shows here live); the profile fetch seeds the fallback.
+    var collaboratorStatus: String {
+        guard let id = profileUserId else { return seededCollabStatus }
+        return social?.collabStatus(id, fallback: seededCollabStatus) ?? seededCollabStatus
+    }
+
+    private var seededCollabStatus = "none"
     var collabConvoId: String?
     /// Collab-request composer state (shown when status is `none`).
     var showCollabSheet = false
@@ -196,11 +214,17 @@ final class ProfileScreenViewModel {
         followersCount = profile.followersCount ?? 0
         monthlyListenersCount = profile.monthlyListenersCount
         trackCount = profile.trackCount
-        isFollowing = profile.isFollowing ?? false
+        seededIsFollowing = profile.isFollowing ?? false
         isUnavailable = profile.isUnavailable ?? false
         viewerHasBlocked = profile.viewerHasBlocked ?? false
-        collaboratorStatus = profile.collaboratorStatus ?? "none"
+        seededCollabStatus = profile.collaboratorStatus ?? "none"
         collabConvoId = profile.collabConvoId
+        // Push the fresh per-user truth into the shared overlays (skipped for
+        // ids with a toggle in flight).
+        if let id = profileUserId {
+            social?.reconcileFollow(userId: id, isFollowing: seededIsFollowing)
+            social?.setCollabStatus(seededCollabStatus, userId: id)
+        }
         tracks = profile.tracks.map(profileTrack)
         apiServices = profile.services
         services = profile.services.map { mapService($0) }
@@ -462,7 +486,8 @@ final class ProfileScreenViewModel {
                 message: trimmed,
                 trackIds: trackIds.isEmpty ? nil : trackIds
             )
-            collaboratorStatus = "pending"
+            seededCollabStatus = "pending"
+            social?.setCollabStatus("pending", userId: userId)
             collabRequestSent = true
             return true
         } catch {
@@ -486,7 +511,8 @@ final class ProfileScreenViewModel {
         guard collaboratorStatus == "accepted" else { return }
         do {
             try await supabaseService.removeCollaborator(userId: userId)
-            collaboratorStatus = "none"
+            seededCollabStatus = "none"
+            social?.setCollabStatus("none", userId: userId)
             collabConvoId = nil
         } catch {
             debugLog("[ProfileVM] removeCollaborator failed: \(error)")
@@ -494,20 +520,14 @@ final class ProfileScreenViewModel {
     }
 
     func toggleFollow(userId: String) async {
-        guard !isTogglingFollow else { return }
+        guard !isTogglingFollow, let social else { return }
         isTogglingFollow = true
-        // Optimistically flip the state + count, rolling back on failure
-        // (mirrors the web app's handleToggleFollow).
+        // The store flips the shared overlay optimistically (and rolls back on
+        // failure); the follower-count nudge is display math and stays local.
         let next = !isFollowing
-        isFollowing = next
         followersCount = max(0, followersCount + (next ? 1 : -1))
-        AnalyticsService.shared?.log(next ? .userFollowed : .userUnfollowed, metadata: ["target_user_id": .string(userId)])
-        do {
-            try await supabaseService.toggleFollow(targetUser: userId)
-        } catch {
-            isFollowing = !next
+        if await social.toggleFollow(userId: userId, currentlyFollowing: isFollowing) == nil {
             followersCount = max(0, followersCount + (next ? -1 : 1))
-            debugLog("[ProfileVM] Failed to toggle follow: \(error)")
         }
         isTogglingFollow = false
     }
@@ -590,6 +610,9 @@ final class ProfileScreenViewModel {
             self.tags = result.tags ?? tags
             self.accountType = result.accountType ?? accountType
             profileUpdateError = nil
+            // Own identity changed — refresh the shared profile so the tab-bar
+            // avatar and every own-identity surface pick it up.
+            await social?.refreshMyProfile()
             return true
         } catch {
             profileUpdateError = error.localizedDescription

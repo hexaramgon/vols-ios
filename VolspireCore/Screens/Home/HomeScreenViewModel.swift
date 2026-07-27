@@ -68,6 +68,8 @@ class HomeScreenViewModel {
     var isCreatingFolder = false
     /// The shared workspace store — assigned by HomeScreen's `.task`.
     weak var workspace: WorkspaceStore?
+    /// The shared social store — artist rows seed its follow overlay.
+    weak var social: SocialStore?
 
     /// Random shuffle seed for the explore feed (`get_home_feed`). Fresh per VM
     /// (i.e. per app session) and re-rolled on pull-to-refresh, so the recs vary
@@ -310,7 +312,11 @@ class HomeScreenViewModel {
 
     private func mapArtists(_ items: [ApiExploreArtist]) -> [ExploreArtistItem] {
         items.map {
-            ExploreArtistItem(
+            // Seed the shared follow overlay (gap-fill only — this RPC is
+            // cached and must not clobber fresher local knowledge). Rows
+            // render from the overlay with the row flag as fallback.
+            social?.seedFollow(userId: $0.userId, isFollowing: $0.isFollowing ?? false)
+            return ExploreArtistItem(
                 id: $0.userId,
                 username: $0.username ?? "unknown",
                 avatarURL: $0.profileImageUrl.flatMap { URL(string: $0) },
@@ -375,17 +381,6 @@ class HomeScreenViewModel {
         let unique = Array(Set(urls))
         guard !unique.isEmpty else { return }
         ImagePrefetcher(urls: unique).start()
-    }
-
-    func toggleFollow(_ item: ExploreArtistItem) async {
-        guard let idx = artists.firstIndex(where: { $0.id == item.id }) else { return }
-        artists[idx].isFollowing.toggle()
-        let next = artists[idx].isFollowing
-        // Same event + metadata shape as the profile's toggleFollow, so follows
-        // made from Home's Artists tab/rail reach analytics too.
-        AnalyticsService.shared?.log(next ? .userFollowed : .userUnfollowed, metadata: ["target_user_id": .string(item.id)])
-        do { try await supabaseService.toggleFollow(targetUser: item.id) }
-        catch { artists[idx].isFollowing.toggle() }
     }
 
     // MARK: - Search typeahead (Home search overlay)

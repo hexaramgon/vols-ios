@@ -278,7 +278,14 @@ struct RootTabView: View {
             // Closing a conversation → its messages were just read.
             if convo == nil { Task { await unreadCounts.refresh() } }
         }
-        .task { await loadProfileAvatar() }
+        .task {
+            await dependencies.socialStore.loadMyProfileIfNeeded()
+            await rebuildProfileAvatar()
+        }
+        // Avatar edited (SocialStore refreshed) → re-crop the tab thumbnail.
+        .onChange(of: dependencies.socialStore.myProfile?.profileImageUrl) { _, _ in
+            Task { await rebuildProfileAvatar() }
+        }
         .task { AnalyticsService.shared?.log(.pageView, metadata: ["to": .string(analyticsName(selectedTab))]) }
     }
 
@@ -367,13 +374,16 @@ struct RootTabView: View {
         }
     }
 
-    /// Loads the signed-in user's avatar so the Profile tab shows their photo (like the web).
-    /// The tab bar renders an icon at its *natural* size, so we pre-crop to a small circle
+    /// Builds the Profile tab's avatar from the shared SocialStore profile
+    /// (so an avatar edit updates the tab without a relaunch). The tab bar
+    /// renders an icon at its *natural* size, so we pre-crop to a small circle
     /// rather than relying on SwiftUI `.frame`/`.clipShape` (which the tab bar ignores).
-    private func loadProfileAvatar() async {
-        guard let uid = dependencies.authManager.currentUserId else { return }
-        let profile = try? await dependencies.supabaseService.getUserProfile(userId: uid)
-        guard let urlString = profile?.profileImageUrl, let url = URL(string: urlString) else { return }
+    private func rebuildProfileAvatar() async {
+        guard let urlString = dependencies.socialStore.myProfile?.profileImageUrl,
+              let url = URL(string: urlString) else {
+            profileAvatarImage = nil
+            return
+        }
         guard let (data, _) = try? await URLSession.shared.data(from: url),
               let uiImage = UIImage(data: data) else { return }
         profileAvatarImage = Image(uiImage: circularThumbnail(uiImage, pointSize: 26))
