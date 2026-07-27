@@ -15,7 +15,7 @@ struct NotificationsScreen: View {
     @Environment(Router.self) var router
     @Environment(\.dismiss) private var dismiss
     @Environment(PlayerController.self) private var playerController
-    @Environment(UnreadCounts.self) private var unreadCounts
+    @Environment(InboxStore.self) private var inboxStore
     @State private var viewModel = NotificationsScreenViewModel()
 
     /// Clears the tab bar + (when present) the floating mini-player.
@@ -30,8 +30,8 @@ struct NotificationsScreen: View {
         .refreshable { await viewModel.refresh() }
         .task {
             // Opening this screen reads everything (`load` marks all read
-            // server-side) — clear the bell dot optimistically.
-            unreadCounts.clearNotifications()
+            // server-side) — clear the bell dot (and badge share) optimistically.
+            inboxStore.clearNotificationsDot()
             await viewModel.load()
         }
     }

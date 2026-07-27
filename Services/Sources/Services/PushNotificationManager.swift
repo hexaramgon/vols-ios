@@ -94,21 +94,11 @@ public final class PushNotificationManager {
         }
     }
 
-    /// Sets the app-icon badge to the current unread total (activity notifications
-    /// + unread messages) — mirrors the server-side count the push stamps. Call on
-    /// foreground and after reading a conversation so the badge tracks unread
-    /// precisely instead of just zeroing.
-    public func refreshBadge() async {
-        guard client.auth.currentSession != nil else { return }
-        do {
-            // Decode with `.api` (snake_case strategy) — the SDK's own decoder
-            // wouldn't map `service_actions` now that DTOs carry no CodingKeys.
-            let response = try await client.rpc("get_unread_counts").execute()
-            let counts = try JSONDecoder.api.decode(ApiUnreadCounts.self, from: response.data)
-            try await UNUserNotificationCenter.current().setBadgeCount(max(0, counts.notifications + counts.messages))
-        } catch {
-            debugLog("[Push] refreshBadge failed: \(error)")
-        }
+    /// Stamps the app-icon badge. The count comes from InboxStore's single
+    /// `get_unread_counts` pipeline — this manager no longer fetches it itself
+    /// (it used to make a duplicate RPC through its own client).
+    public func setBadge(_ count: Int) {
+        UNUserNotificationCenter.current().setBadgeCount(max(0, count))
     }
 
     /// Best-effort: stop pushes to this device for the signing-out account.

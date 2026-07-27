@@ -34,6 +34,8 @@ struct ConversationScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(Router.self) private var router
     @Environment(ConversationState.self) private var conversationState
+    @Environment(InboxStore.self) private var inboxStore
+    @Environment(SocialStore.self) private var socialStore
 
     let conversation: ActiveConversation
 
@@ -73,7 +75,12 @@ struct ConversationScreen: View {
                 convoId: conversation.convoId,
                 currentUserId: dependencies.authManager.currentUserId
             )
+            vm.inbox = inboxStore
+            vm.social = socialStore
+            vm.otherUserId = conversation.otherUserId
             viewModel = vm
+            // Opening reads the thread — zero the list row immediately.
+            inboxStore.conversationOpened(conversation.convoId)
             // Fetch runs concurrently with the push; the thread renders only
             // once the transition has settled (see load(settleDelay:)).
             await vm.load(settleDelay: .seconds(0.45))
@@ -283,13 +290,16 @@ struct ConversationScreen: View {
     }
 
     /// Ends the collaboration — the backend archives this DM for us, so pop
-    /// back to the inbox (which reloads on return and regroups the thread
-    /// under Archived).
+    /// back to the inbox. The archived flag is server-computed, so refetch the
+    /// list (one call) to regroup the thread under Archived, and reset the
+    /// shared collab overlay for any mounted profile.
     private func removeCollaborator() {
         guard let otherId = conversation.otherUserId else { return }
         Task {
             try? await dependencies.supabaseService.removeCollaborator(userId: otherId)
             isActiveCollaborator = false
+            socialStore.setCollabStatus("none", userId: otherId)
+            await inboxStore.refreshConversations()
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             dismiss()
         }

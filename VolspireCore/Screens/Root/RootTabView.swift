@@ -32,32 +32,6 @@ class ConversationState {
     var composerActive = false
 }
 
-/// App-wide unread indicators: the Inbox tab dot (DMs) and the notifications
-/// bell dot (activity). Backed by the same `get_unread_counts` RPC the web
-/// uses; refreshed at the moments the counts can change (launch, foreground,
-/// tab switches, closing a conversation).
-@Observable @MainActor
-final class UnreadCounts {
-    private(set) var notifications = 0
-    private(set) var messages = 0
-    private let service = SupabaseService()
-
-    /// The Inbox tab hosts BOTH the DM list and the notifications bell (its
-    /// header), so its tab-bar dot lights for either kind of unread — otherwise
-    /// an unread notification shows on the bell but not the tab.
-    var inboxHasUnread: Bool { messages > 0 || notifications > 0 }
-
-    func refresh() async {
-        guard let counts = try? await service.getUnreadCounts() else { return }
-        notifications = counts.notifications
-        messages = counts.messages
-    }
-
-    /// Optimistic zero when the notifications screen opens (the server marks
-    /// them read at the same moment).
-    func clearNotifications() { notifications = 0 }
-}
-
 private struct IsActiveRootTabKey: EnvironmentKey {
     static let defaultValue = true
 }
@@ -79,7 +53,6 @@ struct RootTabView: View {
     @State private var selectedTab: TabBarItem = .home
     @State private var profileAvatarImage: Image?
     @State private var visitedTabs: Set<TabBarItem> = [.home]
-    @State private var unreadCounts = UnreadCounts()
     /// Measured height of the custom tab bar (varies with Dynamic Type).
     @State private var tabBarHeight: CGFloat = 52
     @Environment(\.scenePhase) private var scenePhase
@@ -260,23 +233,19 @@ struct RootTabView: View {
             }
 
         }
-        .environment(unreadCounts)
-        // Unread dots refresh at every moment the counts can change.
-        .task { await unreadCounts.refresh() }
+        // Unread dots + app badge refresh at every moment the counts can
+        // change — one pipeline in InboxStore.
+        .task { await dependencies.inboxStore.refreshUnread() }
         // Warm the library store once per session so bookmark glyphs are
         // correct on every surface — not just after the Library tab loads.
         .task { await dependencies.libraryStore.loadIfNeeded() }
         // Cold launch: route a push tapped before the UI was ready to receive it.
         .task { routePendingPush() }
         .onChange(of: selectedTab) { _, _ in
-            Task { await unreadCounts.refresh() }
+            Task { await dependencies.inboxStore.refreshUnread() }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await unreadCounts.refresh() } }
-        }
-        .onChange(of: conversationState.activeConversation) { _, convo in
-            // Closing a conversation → its messages were just read.
-            if convo == nil { Task { await unreadCounts.refresh() } }
+            if phase == .active { Task { await dependencies.inboxStore.refreshUnread() } }
         }
         .task {
             await dependencies.socialStore.loadMyProfileIfNeeded()
@@ -454,7 +423,7 @@ struct RootTabView: View {
                             // Unread dot on the Inbox tab — DMs OR notifications
                             // (both live under this tab).
                             .overlay(alignment: .topTrailing) {
-                                if item == .inbox, unreadCounts.inboxHasUnread {
+                                if item == .inbox, dependencies.inboxStore.inboxHasUnread {
                                     Circle()
                                         .fill(Color.vUnread)
                                         .frame(width: 8, height: 8)

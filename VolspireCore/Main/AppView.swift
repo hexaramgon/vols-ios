@@ -74,13 +74,12 @@ struct AppView: View {
                 Task { await PushNotificationManager.shared.enable() }
             }
         }
-        // Opening the app clears the icon badge — the next push re-stamps it
-        // with the true unread count (computed server-side).
+        // Foregrounding refreshes the unread dots AND the icon badge from the
+        // single InboxStore pipeline, so the badge stays accurate as
+        // conversations are read.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
-                // Reflect the true unread count (not 0) on foreground, so the badge
-                // stays accurate as conversations are read.
-                Task { await PushNotificationManager.shared.refreshBadge() }
+                Task { await dependencies.inboxStore.refreshUnread() }
             }
         }
         .task {

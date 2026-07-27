@@ -121,6 +121,15 @@ final class ConversationViewModel {
     var linkedListing: ApiListing?
 
     let convoId: String
+    /// The shared inbox store — the thread reports list-affecting events
+    /// (latest message, read state, request status) so the conversation list
+    /// updates in memory with no refetch on close.
+    weak var inbox: InboxStore?
+    /// The shared social store — collab accept/decline updates the overlay a
+    /// mounted profile renders from.
+    weak var social: SocialStore?
+    /// The other participant (for the collab-status overlay writes).
+    var otherUserId: String?
     private let currentUserId: String?
     private let service: SupabaseService
     private let storage: StorageService
@@ -155,7 +164,9 @@ final class ConversationViewModel {
             loadingState = .loaded
             try? await service.markConvoRead(convoId: convoId)
             PushNotificationManager.shared.clearDeliveredNotifications(convoId: convoId)
-            await PushNotificationManager.shared.refreshBadge()
+            // markConvoRead has completed — the store zeroes the row and
+            // trues up dots + app badge from the single unread pipeline.
+            inbox?.threadMarkedRead(convoId: convoId)
             // Best-effort: resolve the listing this thread was opened from
             // (one cheap id lookup; full fetch only for listing conversations).
             if linkedListing == nil,
@@ -198,6 +209,7 @@ final class ConversationViewModel {
                                           type: "message", isAttachment: false, attachmentURL: nil,
                                           attachmentType: nil, attachmentName: nil, pending: false)
             }
+            inbox?.threadLatestChanged(convoId: convoId, preview: text, at: sentAt, fromMe: true)
         } catch {
             debugLog("[ConversationVM] send: \(error)")
             messages.removeAll { $0.id == tempId }
@@ -284,6 +296,8 @@ final class ConversationViewModel {
                                           attachmentURL: signed.flatMap { URL(string: $0) },
                                           attachmentType: uploadType, attachmentName: uploadName, pending: false)
             }
+            let label = text.isEmpty ? Self.attachmentLabel(uploadType) : text
+            inbox?.threadLatestChanged(convoId: convoId, preview: label, at: sentAt, fromMe: true)
         } catch {
             debugLog("[ConversationVM] sendAttachment: \(error)")
             messages.removeAll { $0.id == tempId }
@@ -321,10 +335,28 @@ final class ConversationViewModel {
         guard !fresh.isEmpty else { return }
         messages.append(contentsOf: fresh)
         messages.sort { $0.createdAt < $1.createdAt }
+        // Keep the list row's preview/order live while the thread is open.
+        if let last = messages.last {
+            let label = last.text.isEmpty ? Self.attachmentLabel(last.attachmentType ?? "") : last.text
+            inbox?.threadLatestChanged(
+                convoId: convoId, preview: label, at: last.createdAt,
+                fromMe: last.isFromMe, messageType: last.type
+            )
+        }
         if fresh.contains(where: { !$0.isFromMe }) {
             try? await service.markConvoRead(convoId: convoId)
             PushNotificationManager.shared.clearDeliveredNotifications(convoId: convoId)
-            await PushNotificationManager.shared.refreshBadge()
+            inbox?.threadMarkedRead(convoId: convoId)
+        }
+    }
+
+    /// Preview label for an attachment-only message (mirrors the list mapping).
+    private static func attachmentLabel(_ type: String) -> String {
+        switch type.lowercased() {
+        case let t where t.hasPrefix("image"): "Image"
+        case let t where t.hasPrefix("audio"): "Voice message"
+        case let t where t.hasPrefix("video"): "Video"
+        default: "Attachment"
         }
     }
 
@@ -413,6 +445,12 @@ final class ConversationViewModel {
                 try await service.acceptRequest(requestId: requestId)
             } else {
                 try await service.rejectRequest(requestId: requestId)
+            }
+            // The Requests bucket and any mounted profile's collab badge
+            // re-derive from the shared stores.
+            inbox?.requestStatusChanged(convoId: convoId, status: accept ? "accepted" : "rejected")
+            if let otherUserId {
+                social?.setCollabStatus(accept ? "accepted" : "none", userId: otherUserId)
             }
         } catch {
             debugLog("[ConversationVM] respondToRequest: \(error)")

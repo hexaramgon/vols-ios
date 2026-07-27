@@ -16,7 +16,7 @@ struct MessagesScreen: View {
     @Environment(ConversationState.self) private var conversationState
     @Environment(Router.self) private var router
     @Environment(PlayerController.self) private var playerController
-    @Environment(UnreadCounts.self) private var unreadCounts
+    @Environment(InboxStore.self) private var inboxStore
     @Environment(Dependencies.self) private var dependencies
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = MessagesScreenViewModel()
@@ -34,28 +34,26 @@ struct MessagesScreen: View {
                 .zIndex(1) // keep the header (and its sliding search reveal) above the content below
             ScrollView {
                 content
-                    .animation(.easeOut(duration: 0.25), value: viewModel.loadingState)
-                    .animation(.easeOut(duration: 0.25), value: viewModel.conversations.isEmpty)
+                    .animation(.easeOut(duration: 0.25), value: inboxStore.loadState)
+                    .animation(.easeOut(duration: 0.25), value: inboxStore.conversations.isEmpty)
             }
             .scrollIndicators(.hidden)
-            .refreshable { await viewModel.load() }
+            .refreshable { await inboxStore.refreshConversations() }
         }
         .animation(.easeInOut(duration: 0.2), value: showSearchField)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationBarHidden(true)
         .gradientBackground()
         .task {
-            viewModel.currentUserId = dependencies.authManager.currentUserId
-            await viewModel.load()
+            viewModel.inbox = inboxStore
+            await inboxStore.loadConversationsIfNeeded()
         }
-        .onChange(of: conversationState.activeConversation) { _, convo in
-            // Returning from a thread — refresh so unread + last-message update.
-            if convo == nil { Task { await viewModel.load() } }
-        }
+        // Returning from a thread needs NO list refetch anymore — the thread's
+        // event hooks patched the row (preview/order/read) in the store live.
         .onChange(of: scenePhase) { _, phase in
             // Foregrounding (e.g. opening the app from a message push) — refresh the
             // list so the new conversation / message shows without a manual reload.
-            if phase == .active { Task { await viewModel.load() } }
+            if phase == .active { Task { await inboxStore.refreshConversations() } }
         }
     }
 
@@ -63,7 +61,7 @@ struct MessagesScreen: View {
 
     private var header: some View {
         ScreenHeader("Inbox") {
-            HeaderIconButton(icon: .bell, showDot: unreadCounts.notifications > 0) {
+            HeaderIconButton(icon: .bell, showDot: inboxStore.unreadNotifications > 0) {
                 router.navigateToNotifications()
             }
             HeaderIconButton(icon: .search) {
@@ -88,25 +86,25 @@ struct MessagesScreen: View {
     // MARK: - Content
 
     private var isLoadError: Bool {
-        if case .error = viewModel.loadingState { return true }
+        if case .error = inboxStore.loadState { return true }
         return false
     }
 
     /// True until the first load resolves — covers `.idle` too so the skeleton
     /// shows from the very first frame instead of flashing the empty state.
     private var isInitialLoading: Bool {
-        (viewModel.loadingState == .idle || viewModel.loadingState == .loading)
-            && viewModel.conversations.isEmpty
+        (inboxStore.loadState == .idle || inboxStore.loadState == .loading)
+            && inboxStore.conversations.isEmpty
     }
 
     @ViewBuilder
     private var content: some View {
         if isInitialLoading {
             MessagesSkeleton()
-        } else if isLoadError && viewModel.conversations.isEmpty {
-            LoadErrorView { Task { await viewModel.load() } }
+        } else if isLoadError && inboxStore.conversations.isEmpty {
+            LoadErrorView { Task { await inboxStore.refreshConversations() } }
                 .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.6)
-        } else if viewModel.conversations.isEmpty {
+        } else if inboxStore.conversations.isEmpty {
             emptyState(title: "No messages yet", message: "Conversations with collaborators and buyers show up here.")
                 .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.6)
         } else {
