@@ -13,16 +13,17 @@ import SwiftUI
 struct PlaylistsScreen: View {
     @Environment(Router.self) var router
     @Environment(\.dismiss) private var dismiss
+    @Environment(LibraryStore.self) private var libraryStore
     @State private var viewModel = PlaylistsViewModel()
     @State private var scrollY: CGFloat = 0
 
     private let gridColumns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
     private var heroHeight: CGFloat { ViewConst.safeAreaInsets.top + 122 }
 
-    private var isLoading: Bool { viewModel.isLoading && viewModel.playlists.isEmpty }
+    private var isLoading: Bool { libraryStore.playlistsLoadState == .loading && libraryStore.playlists.isEmpty }
 
     private var countText: String {
-        let n = viewModel.playlists.count
+        let n = libraryStore.playlists.count
         return "\(n) playlist\(n == 1 ? "" : "s")"
     }
 
@@ -60,8 +61,11 @@ struct PlaylistsScreen: View {
         }
         .enableSwipeBack()
         .floatingAction(owner: "playlists", systemImage: "plus") { viewModel.showCreate = true }
-        .refreshable { await viewModel.load() }
-        .task { await viewModel.load() }
+        .refreshable { await libraryStore.refreshPlaylists() }
+        .task {
+            viewModel.library = libraryStore
+            await libraryStore.loadPlaylistsIfNeeded()
+        }
         .sheet(isPresented: $viewModel.showCreate) { createSheet }
     }
 
@@ -132,12 +136,12 @@ private extension PlaylistsScreen {
     var content: some View {
         if isLoading {
             skeletonGrid
-        } else if viewModel.loadFailed && viewModel.playlists.isEmpty {
-            LoadErrorView { Task { await viewModel.load() } }
+        } else if case .error = libraryStore.playlistsLoadState, libraryStore.playlists.isEmpty {
+            LoadErrorView { Task { await libraryStore.refreshPlaylists() } }
                 .frame(minHeight: UIScreen.size.height * 0.5)
         } else {
             LazyVGrid(columns: gridColumns, spacing: 18) {
-                ForEach(viewModel.playlists) { card($0) }
+                ForEach(libraryStore.playlists) { card($0) }
             }
             .padding(.horizontal, ViewConst.gridPaddings)
             .padding(.top, 10)
@@ -145,7 +149,7 @@ private extension PlaylistsScreen {
     }
 
     func card(_ playlist: ApiPlaylist) -> some View {
-        PlaylistCard(playlist: playlist, coverURL: viewModel.cover(playlist.coverUrl)) {
+        PlaylistCard(playlist: playlist, coverURL: libraryStore.playlistCover(playlist.coverUrl)) {
             router.navigateToPlaylist(playlistId: playlist.playlistId, title: playlist.title)
         }
     }
@@ -198,4 +202,5 @@ struct PlaylistCreateSheet: View {
         .withRouter()
         .environment(dependencies)
         .environment(playerController)
+        .environment(dependencies.libraryStore)
 }

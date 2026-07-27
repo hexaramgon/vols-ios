@@ -28,6 +28,9 @@ final class PlaylistDetailViewModel {
     let playlistId: String
     var currentUserId: String?
     weak var mediaState: MediaState?
+    /// The shared library store (assigned by the screen's `.task`) — playlist
+    /// mutations route through it so the Library rail/pickers stay in sync.
+    weak var library: LibraryStore?
 
     private let service: SupabaseService
     private let storage: StorageService
@@ -61,13 +64,12 @@ final class PlaylistDetailViewModel {
         }
     }
 
-    /// Removes a track from this playlist, then reloads so the list reflects it.
+    /// Removes a track from this playlist (via the shared store, which patches
+    /// the rail count), then reloads so this list reflects it.
     func removeTrack(trackId: String) async {
-        do {
-            try await service.removeTrackFromPlaylist(playlistId: playlistId, trackId: trackId)
+        guard let library else { return }
+        if await library.removeTrack(fromPlaylist: playlistId, trackId: trackId) {
             await load()
-        } catch {
-            debugLog("[PlaylistDetailVM] removeTrack: \(error)")
         }
     }
 
@@ -99,6 +101,9 @@ final class PlaylistDetailViewModel {
             pickedCoverData = nil
             showEdit = false
             await load()
+            // Title/cover changed — refresh the shared list so the Library
+            // rail and pickers show the new meta.
+            await library?.playlistEdited()
         } catch {
             debugLog("[PlaylistDetailVM] saveEdit: \(error)")
         }
@@ -106,13 +111,8 @@ final class PlaylistDetailViewModel {
     }
 
     func deletePlaylist() async -> Bool {
-        do {
-            try await service.deletePlaylist(playlistId: playlistId)
-            return true
-        } catch {
-            debugLog("[PlaylistDetailVM] delete: \(error)")
-            return false
-        }
+        guard let library else { return false }
+        return await library.deletePlaylist(playlistId: playlistId)
     }
 
     func cover(_ path: String?) -> URL? {

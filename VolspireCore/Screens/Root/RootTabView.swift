@@ -263,6 +263,9 @@ struct RootTabView: View {
         .environment(unreadCounts)
         // Unread dots refresh at every moment the counts can change.
         .task { await unreadCounts.refresh() }
+        // Warm the library store once per session so bookmark glyphs are
+        // correct on every surface — not just after the Library tab loads.
+        .task { await dependencies.libraryStore.loadIfNeeded() }
         // Cold launch: route a push tapped before the UI was ready to receive it.
         .task { routePendingPush() }
         .onChange(of: selectedTab) { _, _ in

@@ -91,6 +91,13 @@ public final class SupabaseService: Sendable {
         await cache.removeAll(matching: "rpc:get_user_folders")
     }
 
+    /// Drops the cached library response so a user-initiated refresh refetches
+    /// fresh data inside the TTL window (mutations already invalidate this key
+    /// themselves; playlists are uncached).
+    public func invalidateLibraryCaches() async {
+        await cache.removeAll(matching: "rpc:get_user_library")
+    }
+
     // MARK: - Messages
 
     /// The signed-in user's conversation list, most-recent first. Uncached — the

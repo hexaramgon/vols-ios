@@ -17,6 +17,7 @@ import SwiftUI
 struct PlaylistDetailScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(Dependencies.self) private var dependencies
+    @Environment(LibraryStore.self) private var libraryStore
 
     @State private var viewModel: PlaylistDetailViewModel
     @State private var showDeleteConfirm = false
@@ -45,6 +46,7 @@ struct PlaylistDetailScreen: View {
             .task(id: viewModel.playlistId) {
                 viewModel.mediaState = dependencies.mediaState
                 viewModel.currentUserId = dependencies.authManager.currentUserId
+                viewModel.library = libraryStore
                 await viewModel.load()
             }
             .sheet(isPresented: $showOptions) { optionsSheet }

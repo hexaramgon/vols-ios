@@ -2,9 +2,9 @@
 //  AddToPlaylistSheet.swift
 //  Volspire
 //
-//  Shared "Add to playlist" picker — lists the user's playlists and toggles the
-//  given track in the tapped one (tap to add, tap again to remove). Self-contained
-//  (owns its services) so it can be presented from anywhere: the collection "…"
+//  Shared "Add to playlist" picker — lists the user's playlists (from the
+//  shared LibraryStore) and toggles the given track in the tapped one (tap to
+//  add, tap again to remove). Presentable from anywhere: the collection "…"
 //  menu, the player, etc.
 //
 
@@ -20,16 +20,13 @@ struct AddToPlaylistSheet: View {
     var currentPlaylistId: String? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(LibraryStore.self) private var libraryStore
+    /// Per-track membership pre-check only — playlist content routes through the store.
     private let service = SupabaseService()
-    private let storage = StorageService()
 
-    @State private var playlists: [ApiPlaylist] = []
     @State private var loaded = false
     @State private var addingId: String?
     @State private var addedIds: Set<String> = []
-    /// Optimistic ±1 tweak to each playlist's track count as you toggle, so the
-    /// count reacts without re-fetching.
-    @State private var countAdjust: [String: Int] = [:]
     @State private var errorText: String?
 
     var body: some View {
@@ -55,9 +52,9 @@ struct AddToPlaylistSheet: View {
             // Load the playlists and which ones already contain this track in
             // parallel, so every row's check is accurate on open (matches the web
             // app's `get_playlists_for_track`), not just the one we arrived from.
-            async let playlistsResult = service.getUserPlaylists()
+            async let playlistsLoad: () = libraryStore.loadPlaylistsIfNeeded()
             async let memberResult = service.getPlaylistsForTrack(trackId: trackId)
-            playlists = (try? await playlistsResult) ?? []
+            _ = await playlistsLoad
             var seed = Set((try? await memberResult) ?? [])
             if let currentPlaylistId { seed.insert(currentPlaylistId) }
             addedIds = seed
@@ -76,13 +73,13 @@ struct AddToPlaylistSheet: View {
                     InlineCreateRow(label: "New playlist", placeholder: "Playlist name") { title in
                         await createAndAdd(title: title)
                     }
-                    ForEach(playlists) { row($0) }
+                    ForEach(libraryStore.playlists) { row($0) }
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
                 .padding(.bottom, 20)
 
-                if playlists.isEmpty {
+                if libraryStore.playlists.isEmpty {
                     VStack(spacing: 8) {
                         LucideIcon(.listMusic, .hero).foregroundStyle(Color.vText3)
                         Text("No playlists yet").font(.appCalloutSemibold).foregroundStyle(.white)
@@ -97,14 +94,13 @@ struct AddToPlaylistSheet: View {
         }
     }
 
-    /// Inline "New playlist": creates it, adds the track, and re-fetches the
-    /// list so the new playlist shows with an accurate count and a check.
+    /// Inline "New playlist": creates it (the store refreshes its list, so the
+    /// new playlist shows everywhere) and adds the track.
     private func createAndAdd(title: String) async -> Bool {
         errorText = nil
         do {
-            let playlistId = try await service.createPlaylist(title: title)
-            try await service.addTrackToPlaylist(playlistId: playlistId, trackId: trackId)
-            playlists = (try? await service.getUserPlaylists()) ?? playlists
+            let playlistId = try await libraryStore.createPlaylist(title: title)
+            _ = await libraryStore.addTrack(toPlaylist: playlistId, trackId: trackId)
             addedIds.insert(playlistId)
             Haptics.impact(.soft)
             return true
@@ -121,11 +117,11 @@ struct AddToPlaylistSheet: View {
             Task { await toggle(playlist) }
         } label: {
             HStack(spacing: 12) {
-                ArtworkView(.placeholder(cover(playlist.coverUrl), name: playlist.title), cornerRadius: 9)
+                ArtworkView(.placeholder(libraryStore.playlistCover(playlist.coverUrl), name: playlist.title), cornerRadius: 9)
                     .frame(width: 48, height: 48)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(playlist.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
-                    Text("\(trackCount(playlist)) tracks").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
+                    Text("\(max(0, playlist.trackCount ?? 0)) tracks").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 if addingId == playlist.playlistId {
@@ -144,32 +140,20 @@ struct AddToPlaylistSheet: View {
     }
 
     /// Tap a playlist to add the track; tap one it's already in to remove it.
+    /// The store patches the playlist's count in place, so the row reacts live.
     private func toggle(_ playlist: ApiPlaylist) async {
         let id = playlist.playlistId
         guard addingId == nil else { return }
         addingId = id
-        do {
-            if addedIds.contains(id) {
-                try await service.removeTrackFromPlaylist(playlistId: id, trackId: trackId)
+        if addedIds.contains(id) {
+            if await libraryStore.removeTrack(fromPlaylist: id, trackId: trackId) {
                 addedIds.remove(id)
-                countAdjust[id, default: 0] -= 1
-            } else {
-                try await service.addTrackToPlaylist(playlistId: id, trackId: trackId)
-                addedIds.insert(id)
-                countAdjust[id, default: 0] += 1
             }
-        } catch {
-            debugLog("[AddToPlaylistSheet] toggle failed: \(error)")
+        } else {
+            if await libraryStore.addTrack(toPlaylist: id, trackId: trackId) {
+                addedIds.insert(id)
+            }
         }
         addingId = nil
-    }
-
-    /// Base track count plus this session's optimistic add/remove tweaks.
-    private func trackCount(_ playlist: ApiPlaylist) -> Int {
-        max(0, (playlist.trackCount ?? 0) + (countAdjust[playlist.playlistId] ?? 0))
-    }
-
-    private func cover(_ path: String?) -> URL? {
-        storage.resolveTrackUrl(path).flatMap { URL(string: $0) }
     }
 }

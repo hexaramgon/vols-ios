@@ -20,14 +20,8 @@ class MediaListScreenViewModel {
     var playerState: MediaPlayerState = .paused(media: .none)
     var cancellables = Set<AnyCancellable>()
 
-    /// Per-track save state for the row bookmark buttons.
+    /// "Go to artist" metadata lookups only — saved state lives in LibraryStore.
     private let supabaseService = SupabaseService()
-    private let storageService = StorageService()
-    var savedTrackIDs: Set<String> = []
-    private var savingTrackIDs: Set<String> = []
-
-    /// The signed-in user's playlists, for the track 3-dot "Add to playlist" picker.
-    var playlists: [ApiPlaylist] = []
 
     weak var player: MediaPlayer? {
         didSet {
@@ -86,44 +80,7 @@ class MediaListScreenViewModel {
         Task { await player.play(start, queue: items) }
     }
 
-    func isSaved(_ id: MediaID) -> Bool { savedTrackIDs.contains(id.value) }
-
-    /// Saves (or unsaves) a single track. Optimistically flips the bookmark so
-    /// the tap feels instant, rolling back on failure.
-    func toggleSave(_ id: MediaID) async {
-        let key = id.value
-        guard !savingTrackIDs.contains(key) else { return }
-        savingTrackIDs.insert(key)
-        let willSave = !savedTrackIDs.contains(key)
-        if willSave { Haptics.success() } else { Haptics.impact(.light) }
-        if willSave { savedTrackIDs.insert(key) } else { savedTrackIDs.remove(key) }
-        do {
-            if willSave { try await supabaseService.saveTrack(trackId: key) }
-            else { try await supabaseService.unsaveTrack(trackId: key) }
-        } catch {
-            if willSave { savedTrackIDs.remove(key) } else { savedTrackIDs.insert(key) }
-            debugLog("[MediaListVM] toggleSave failed: \(error)")
-        }
-        savingTrackIDs.remove(key)
-    }
-
     // MARK: - Track 3-dot actions
-
-    /// Loads the signed-in user's playlists for the "Add to playlist" picker.
-    func loadPlaylists() async {
-        playlists = (try? await supabaseService.getUserPlaylists()) ?? []
-    }
-
-    /// Adds a track to a playlist. Returns true on success.
-    func addToPlaylist(playlistId: String, trackId: String) async -> Bool {
-        do {
-            try await supabaseService.addTrackToPlaylist(playlistId: playlistId, trackId: trackId)
-            return true
-        } catch {
-            debugLog("[MediaListVM] addToPlaylist: \(error)")
-            return false
-        }
-    }
 
     /// Resolves a track's artist user id (for "Go to artist") via track metadata.
     func artistUserId(for trackId: String) async -> String? {
@@ -133,11 +90,6 @@ class MediaListScreenViewModel {
             debugLog("[MediaListVM] artistUserId: \(error)")
             return nil
         }
-    }
-
-    /// Resolves a playlist's bare cover path to a public URL (for the picker rows).
-    func playlistCover(_ path: String?) -> URL? {
-        storageService.resolveTrackUrl(path).flatMap { URL(string: $0) }
     }
 
     var footer: LocalizedStringKey {

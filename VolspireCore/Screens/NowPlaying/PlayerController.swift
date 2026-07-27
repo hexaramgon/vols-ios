@@ -56,9 +56,17 @@ final class PlayerController {
     var persistAudioEdits: Bool = false
     var showingEffectsSheet: Bool = false
     var trackDetail: ApiTrackDetail?
-    /// Save/like state for the current track (mirrors the web's track interactions).
+    /// Like state for the current track (mirrors the web's track interactions).
+    /// Likes are player-only, so the controller still owns them.
     var isLiked = false
-    var isSaved = false
+    /// Saved state reads the shared LibraryStore — the single bookmark truth —
+    /// so a save/unsave made on any list is reflected here instantly (and vice
+    /// versa). Workspace files aren't tracks and are never "saved".
+    var isSaved: Bool {
+        guard currentFileId == nil, let id = state.currentMediaID?.value else { return false }
+        return library?.isSaved(id) ?? false
+    }
+
     var likeCount = 0
     var saveCount = 0
     /// Set this to trigger navigation to an artist's profile (collapses the player).
@@ -141,6 +149,10 @@ final class PlayerController {
     }
 
     weak var mediaState: MediaState?
+
+    /// The shared library store (set by `Dependencies`) — saved state and the
+    /// save mutation route through it so every surface stays in sync.
+    weak var library: LibraryStore?
 
     /// Set by `Dependencies` so discrete player actions (like/save) can be logged.
     var analytics: AnalyticsService?
@@ -272,7 +284,6 @@ final class PlayerController {
         trackDetail = nil
         lastFetchedTrackId = nil
         isLiked = false
-        isSaved = false
         likeCount = 0
         saveCount = 0
         fileIdByMediaId = [:]
@@ -318,21 +329,18 @@ final class PlayerController {
         }
     }
 
-    /// Saves/unsaves the current track, optimistically updating state + count.
+    /// Saves/unsaves the current track through the shared LibraryStore (which
+    /// flips the bookmark optimistically and rolls back on failure). The local
+    /// count math stays here — the store owns membership, not display counts.
     func toggleSave() async {
-        guard let trackId = state.currentMediaID?.value else { return }
+        guard currentFileId == nil, let trackId = state.currentMediaID?.value, let library else { return }
         let next = !isSaved
-        isSaved = next
         Haptics.impact(.soft) // very subtle tap on save/unsave (matches Follow)
         saveCount = max(0, saveCount + (next ? 1 : -1))
         analytics?.log(next ? .trackSaved : .trackUnsaved, trackId: trackId)
-        do {
-            if next { try await supabaseService.saveTrack(trackId: trackId) }
-            else { try await supabaseService.unsaveTrack(trackId: trackId) }
-        } catch {
-            isSaved = !next
+        if await library.setSaved(next, trackId: trackId) == nil {
+            // In-flight duplicate or failed-and-rolled-back — undo the count nudge.
             saveCount = max(0, saveCount + (next ? -1 : 1))
-            debugLog("[PlayerController] toggleSave failed: \(error)")
         }
     }
 }
@@ -465,7 +473,7 @@ private extension PlayerController {
     func fetchTrackDetailIfNeeded() {
         // A workspace file isn't a track — no track detail / like / save to fetch.
         if currentFileId != nil {
-            trackDetail = nil; isLiked = false; isSaved = false; likeCount = 0; saveCount = 0
+            trackDetail = nil; isLiked = false; likeCount = 0; saveCount = 0
             return
         }
         guard let trackId = state.currentMediaID?.value else { return }
@@ -483,7 +491,6 @@ private extension PlayerController {
             lastFetchedTrackId = trackId
             trackDetail = nil
             isLiked = false
-            isSaved = false
             likeCount = 0
             saveCount = 0
             // New track starts at 1× unless "carry edits" is on.
@@ -508,7 +515,9 @@ private extension PlayerController {
             if let status = try? await supabaseService.getTrackInteractionStatus(trackId: trackId) {
                 guard state.currentMediaID?.value.caseInsensitiveCompare(trackId) == .orderedSame else { return }
                 isLiked = status.isLiked
-                isSaved = status.isSaved
+                // Saved truth lives in the shared store; feed it the server's
+                // answer (it ignores ids with an optimistic write in flight).
+                library?.reconcileSaved(trackId: trackId, isSaved: status.isSaved)
             }
         }
     }

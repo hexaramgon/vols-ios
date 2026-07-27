@@ -16,6 +16,7 @@ import SwiftUI
 struct MediaCollectionScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(PlayerController.self) private var playerController
+    @Environment(LibraryStore.self) private var libraryStore
     @Environment(Router.self) private var router
     @Environment(\.dismiss) private var dismiss
 
@@ -229,9 +230,12 @@ private extension MediaCollectionScreen {
         ) {
             if showSave {
                 Button {
-                    Task { await viewModel.toggleSave(item.id) }
+                    // Haptic per direction (matches the old row behavior);
+                    // the shared store flips the glyph optimistically.
+                    if libraryStore.isSaved(item.id.value) { Haptics.impact(.light) } else { Haptics.success() }
+                    Task { await libraryStore.toggleSave(trackId: item.id.value) }
                 } label: {
-                    let saved = viewModel.isSaved(item.id)
+                    let saved = libraryStore.isSaved(item.id.value)
                     LucideIcon(saved ? .bookmarkFill : .bookmark, .lg)
                         .foregroundStyle(saved ? .white : Color.vText3)
                         .frame(width: 38, height: 44)
@@ -340,4 +344,5 @@ struct MenuRowStyle: ButtonStyle {
     )
     .withRouter()
     .environment(dependencies)
+    .environment(dependencies.libraryStore)
 }

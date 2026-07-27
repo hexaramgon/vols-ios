@@ -11,14 +11,15 @@ import SwiftUI
 
 struct LibraryTrackSheet: View {
     let track: ApiUserLike
-    let viewModel: LibraryScreenViewModel
     let router: Router
     let onDismiss: () -> Void
     let onAddToPlaylist: () -> Void
 
+    @Environment(LibraryStore.self) private var libraryStore
+
     var body: some View {
         TrackOptionsSheet(
-            artwork: .placeholder(viewModel.coverURL(for: track), name: track.title),
+            artwork: .placeholder(libraryStore.coverURL(for: track), name: track.title),
             title: track.title,
             artist: track.artist?.username,
             meta: track.streams.map { "\($0.formatted()) streams" },
@@ -41,7 +42,7 @@ struct LibraryTrackSheet: View {
             onAddToPlaylist()
         })
         list.append(.init(icon: .circleMinus, title: "Remove from Library", isDestructive: true, awaitsCompletion: true) {
-            await viewModel.removeFromLibrary(track)
+            _ = await libraryStore.setSaved(false, trackId: track.trackId)
         })
         return list
     }

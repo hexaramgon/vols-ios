@@ -47,12 +47,15 @@ class Dependencies: Observable {
         self.playerController = playerController
         self.analytics = analytics
         self.listenAnalytics = listenAnalytics
-        libraryStore = LibraryStore(service: supabaseService, auth: authManager)
+        let storageService = StorageService()
+        libraryStore = LibraryStore(service: supabaseService, storage: storageService, auth: authManager)
         workspaceStore = WorkspaceStore(service: supabaseService)
         socialStore = SocialStore(service: supabaseService, auth: authManager)
         inboxStore = InboxStore(service: supabaseService)
         listingsStore = ListingsStore(service: supabaseService)
-        feedStore = FeedStore(service: supabaseService, storage: StorageService())
+        feedStore = FeedStore(service: supabaseService, storage: storageService)
+        libraryStore.mediaState = mediaState
+        playerController.library = libraryStore
     }
 }
 

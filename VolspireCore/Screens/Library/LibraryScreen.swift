@@ -17,6 +17,7 @@ struct LibraryScreen: View {
     @Environment(Router.self) var router
     @Environment(Dependencies.self) var dependencies
     @Environment(PlayerController.self) private var playerController
+    @Environment(LibraryStore.self) private var libraryStore
 
     @State private var viewModel = LibraryScreenViewModel()
     @State private var playlistsVM = PlaylistsViewModel()
@@ -47,29 +48,29 @@ struct LibraryScreen: View {
     }
 
     private var rows: [Row] {
-        viewModel.savedTracks.map {
-            Row(id: $0.trackId, title: $0.title, artist: $0.artist?.username, coverURL: viewModel.coverURL(for: $0))
+        libraryStore.savedTracks.map {
+            Row(id: $0.trackId, title: $0.title, artist: $0.artist?.username, coverURL: libraryStore.coverURL(for: $0))
         }
     }
 
     /// True while the playlists rail should still show its skeleton.
     private var playlistsLoading: Bool {
-        playlistsVM.isLoading && playlistsVM.playlists.isEmpty
+        libraryStore.playlistsLoadState == .loading && libraryStore.playlists.isEmpty
     }
 
     /// The saved-tracks load got no response and nothing across the page is cached
     /// — show the shared offline state (same as Home / Marketplace).
     private var showLibraryError: Bool {
-        viewModel.loadFailed
-            && viewModel.savedTracks.isEmpty && viewModel.uploadedTracks.isEmpty
-            && playlistsVM.playlists.isEmpty
+        libraryStore.loadFailed
+            && libraryStore.savedTracks.isEmpty && libraryStore.uploadedTracks.isEmpty
+            && libraryStore.playlists.isEmpty
     }
 
     /// Retry every section (mirrors the pull-to-refresh).
     private func reloadAll() {
         Task {
-            async let a: () = viewModel.refresh(currentUserId: dependencies.authManager.currentUserId)
-            async let b: () = playlistsVM.load()
+            async let a: () = libraryStore.refresh()
+            async let b: () = libraryStore.refreshPlaylists()
             _ = await (a, b)
         }
     }
@@ -117,8 +118,8 @@ struct LibraryScreen: View {
             }
             .scrollIndicators(.hidden)
             .refreshable {
-                async let a: () = viewModel.refresh(currentUserId: dependencies.authManager.currentUserId)
-                async let b: () = playlistsVM.load()
+                async let a: () = libraryStore.refresh()
+                async let b: () = libraryStore.refreshPlaylists()
                 _ = await (a, b)
             }
         }
@@ -127,19 +128,19 @@ struct LibraryScreen: View {
         .navigationBarHidden(true)
         .gradientBackground()
         .task {
-            viewModel.mediaState = dependencies.mediaState
             viewModel.player = dependencies.mediaPlayer
+            playlistsVM.library = libraryStore
             // Load both sections concurrently so they resolve together
-            // instead of popping in one after another.
-            async let a: () = viewModel.load(currentUserId: dependencies.authManager.currentUserId)
-            async let b: () = playlistsVM.load()
+            // instead of popping in one after another. (Usually instant — the
+            // store is warmed once per session by RootTabView.)
+            async let a: () = libraryStore.loadIfNeeded()
+            async let b: () = libraryStore.loadPlaylistsIfNeeded()
             _ = await (a, b)
             didLoad = true
         }
         .sheet(item: $selectedTrack) { track in
             LibraryTrackSheet(
                 track: track,
-                viewModel: viewModel,
                 router: router,
                 onDismiss: { selectedTrack = nil },
                 onAddToPlaylist: { addToPlaylistTrack = track }
@@ -243,7 +244,7 @@ private extension LibraryScreen {
         VStack(alignment: .leading, spacing: 16) {
             playlistsHead
 
-            if !playlistsLoading, playlistsVM.playlists.isEmpty {
+            if !playlistsLoading, libraryStore.playlists.isEmpty {
                 // Empty: a slim full-width card with a real CTA instead of a
                 // rail-sized dashed tile.
                 emptyPlaylistsRow
@@ -255,7 +256,7 @@ private extension LibraryScreen {
                             ForEach(0 ..< 2, id: \.self) { _ in PlaylistCardSkeleton(width: 158) }
                                 .transition(.opacity)
                         } else {
-                            ForEach(playlistsVM.playlists) { playlistCard($0) }
+                            ForEach(libraryStore.playlists) { playlistCard($0) }
                                 .transition(.opacity)
                         }
                     }
@@ -278,7 +279,7 @@ private extension LibraryScreen {
         HStack(alignment: .center, spacing: 14) {
             Text("Playlists").font(.appFont.sectionTitle).foregroundStyle(.white)
             Spacer(minLength: 0)
-            if !playlistsVM.playlists.isEmpty {
+            if !libraryStore.playlists.isEmpty {
                 AccentPillButton(title: "New") { playlistsVM.showCreate = true }
                 Button { router.navigateToPlaylists() } label: {
                     HStack(spacing: 2) {
@@ -315,7 +316,7 @@ private extension LibraryScreen {
     }
 
     func playlistCard(_ playlist: ApiPlaylist) -> some View {
-        PlaylistCard(playlist: playlist, coverURL: playlistsVM.cover(playlist.coverUrl), width: 158) {
+        PlaylistCard(playlist: playlist, coverURL: libraryStore.playlistCover(playlist.coverUrl), width: 158) {
             router.navigateToPlaylist(playlistId: playlist.playlistId, title: playlist.title)
         }
     }
@@ -332,13 +333,13 @@ private extension LibraryScreen {
         VStack(alignment: .leading, spacing: 10) {
             sectionHead("Recently Saved", seeAll: rows.isEmpty ? nil : { showAllSaved() })
             savedContent
-                .animation(.easeInOut(duration: 0.3), value: viewModel.loadingState)
+                .animation(.easeInOut(duration: 0.3), value: libraryStore.loadState)
         }
     }
 
     @ViewBuilder
     var savedContent: some View {
-        switch viewModel.loadingState {
+        switch libraryStore.loadState {
         case .idle, .loading:
             SkeletonRows(count: 5)
                 .transition(.opacity)
@@ -349,7 +350,7 @@ private extension LibraryScreen {
             inlineState(icon: .listMusic, title: "No saved tracks", subtitle: "Tracks you save will live here.")
                 .transition(.opacity)
         case .loaded:
-            let visible = Array(rows.prefix(viewModel.savedLimit))
+            let visible = Array(rows.prefix(libraryStore.savedLimit))
             LazyVStack(spacing: 0) {
                 ForEach(Array(visible.enumerated()), id: \.element.id) { index, row in
                     trackRow(row, isLast: index == visible.count - 1)
@@ -362,7 +363,7 @@ private extension LibraryScreen {
 
     func showAllSaved() {
         router.navigateToMedia(
-            items: viewModel.savedMediaList(),
+            items: libraryStore.savedMediaList(),
             listMeta: MediaList.Meta(artwork: rows.first?.coverURL, title: "Saved"),
             showSave: false
         )
@@ -377,12 +378,14 @@ private extension LibraryScreen {
             showsSeparator: !isLast,
             onTap: {
                 searchFocused = false
-                if let track = viewModel.savedTracks.first(where: { $0.trackId == row.id }) { viewModel.play(track) }
+                if let track = libraryStore.savedTracks.first(where: { $0.trackId == row.id }) {
+                    viewModel.play(track, queue: libraryStore.savedMediaList())
+                }
             }
         ) {
             Button {
                 searchFocused = false
-                if let track = viewModel.savedTracks.first(where: { $0.trackId == row.id }) { selectedTrack = track }
+                if let track = libraryStore.savedTracks.first(where: { $0.trackId == row.id }) { selectedTrack = track }
             } label: {
                 LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                     .foregroundStyle(Color.vText3)
@@ -452,4 +455,5 @@ private extension LibraryScreen {
         .withRouter()
         .environment(dependencies)
         .environment(playerController)
+        .environment(dependencies.libraryStore)
 }

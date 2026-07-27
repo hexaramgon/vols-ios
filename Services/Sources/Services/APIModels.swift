@@ -759,7 +759,9 @@ public struct ApiPlaylist: Codable, Sendable, Identifiable {
     public let visibility: String?
     public let createdAt: String?
     public let updatedAt: String?
-    public let trackCount: Int?
+    /// `var`: LibraryStore patches counts in place as tracks are added/removed,
+    /// so pickers and rails react without a refetch.
+    public var trackCount: Int?
 }
 
 public struct ApiPlaylistTrack: Codable, Sendable, Identifiable {
