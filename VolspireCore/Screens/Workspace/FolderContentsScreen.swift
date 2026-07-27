@@ -680,4 +680,5 @@ private struct MemberRolePicker: View {
         .withRouter()
         .environment(dependencies)
         .environment(playerController)
+        .environment(dependencies.workspaceStore)
 }

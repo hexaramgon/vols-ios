@@ -300,5 +300,6 @@ private struct MessagesSkeleton: View {
         .withRouter()
         .environment(dependencies)
         .environment(playerController)
+        .environment(dependencies.inboxStore)
         .environment(ConversationState())
 }

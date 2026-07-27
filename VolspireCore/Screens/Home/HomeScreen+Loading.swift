@@ -504,4 +504,8 @@ extension HomeScreen {
         .withRouter()
         .environment(dependencies)
         .environment(playerController)
+        .environment(dependencies.workspaceStore)
+        .environment(dependencies.socialStore)
+        .environment(dependencies.listingsStore)
+        .environment(dependencies.feedStore)
 }

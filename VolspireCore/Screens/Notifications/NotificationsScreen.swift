@@ -296,4 +296,5 @@ struct NotificationsScreen: View {
         .withRouter()
         .environment(dependencies)
         .environment(playerController)
+        .environment(dependencies.inboxStore)
 }

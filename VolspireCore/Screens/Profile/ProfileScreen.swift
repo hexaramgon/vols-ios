@@ -408,5 +408,8 @@ private extension ProfileScreen {
         .withRouter()
         .environment(dependencies)
         .environment(playerController)
+        .environment(dependencies.socialStore)
+        .environment(dependencies.libraryStore)
+        .environment(dependencies.feedStore)
         .environment(AvatarPreviewState())
 }
