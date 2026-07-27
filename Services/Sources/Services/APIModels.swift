@@ -547,12 +547,15 @@ public struct ApiListing: Codable, Sendable, Identifiable, Hashable {
     /// array; legacy rows hold a double-encoded JSON *string* like "[]". Decoded
     /// flexibly either way, exposed via `attachments`.
     private let attachmentsValue: FlexibleListingAttachments?
-    public let status: String?
+    /// `var`: ListingsStore patches status/counts in place when the detail
+    /// screen mutates a listing, so board rows react without a refetch
+    /// (mirrors `ApiFolderMember.role` / `ApiPlaylist.trackCount`).
+    public var status: String?
     public let createdAt: String?
     public let author: ApiListingAuthor
-    public let responseCount: Int?
-    public let saveCount: Int?
-    public let commentCount: Int?
+    public var responseCount: Int?
+    public var saveCount: Int?
+    public var commentCount: Int?
     // Detail-only viewer flags (nil from the board feed; populated by `get_listing`).
     public let updatedAt: String?
     public let isAuthor: Bool?

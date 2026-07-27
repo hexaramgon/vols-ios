@@ -18,6 +18,7 @@ struct ListingDetailScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(ConversationState.self) private var conversationState
     @Environment(PlayerController.self) private var playerController
+    @Environment(ListingsStore.self) private var listingsStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var viewModel: ListingDetailViewModel
@@ -119,7 +120,10 @@ struct ListingDetailScreen: View {
         // Reset the shared chrome flag on leave so the tab bar + mini player
         // return (it's toggled by the keyboard handlers on the composer).
         .onDisappear { conversationState.composerActive = false }
-        .task { await viewModel.load() }
+        .task {
+            viewModel.listings = listingsStore
+            await viewModel.load()
+        }
         // Own avatar for the composer pill — cached profile fetch, cheap.
         .task {
             guard let uid = dependencies.authManager.currentUserId,

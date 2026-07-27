@@ -54,6 +54,7 @@ struct HomeScreen: View {
     @Environment(PlayerController.self) var playerController
     @Environment(WorkspaceStore.self) var workspaceStore
     @Environment(SocialStore.self) var socialStore
+    @Environment(ListingsStore.self) var listingsStore
     @State var viewModel = HomeScreenViewModel()
     @State var selectedTab: ExploreTab = .all
     /// True only while Home is the visible root tab. RootTabView keeps hidden tabs
@@ -145,6 +146,7 @@ struct HomeScreen: View {
             viewModel.player = dependencies.mediaPlayer
             viewModel.workspace = workspaceStore
             viewModel.social = socialStore
+            viewModel.listingsStore = listingsStore
             await viewModel.loadInitial()
         }
         // Home is a keep-alive tab, so its in-memory feed survives a block made
@@ -184,7 +186,7 @@ struct HomeScreen: View {
             unfoldHeaderInstantly()
             Task {
                 switch tab {
-                case .collab: await viewModel.loadListings()
+                case .collab: await listingsStore.loadListingsIfNeeded()
                 case .workspace: await workspaceStore.loadFoldersIfNeeded()
                 case .following: await viewModel.loadFollowing()
                 case .artists: await viewModel.loadArtists()

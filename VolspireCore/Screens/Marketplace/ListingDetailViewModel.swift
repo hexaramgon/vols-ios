@@ -37,6 +37,9 @@ final class ListingDetailViewModel {
 
     private let service = SupabaseService()
     private let storage = StorageService()
+    /// The shared listings store (assigned by the screen's `.task`) — shared
+    /// mutations report to it so the board/saved lists patch in place.
+    weak var listings: ListingsStore?
 
     init(listing: ApiListing) {
         self.listing = listing
@@ -68,6 +71,8 @@ final class ListingDetailViewModel {
             status = updated.status ?? status
             isAuthor = updated.isAuthor ?? isAuthor
             existingConvoId = updated.viewerConvoId
+            // Fresh detail truth → sync any board/saved copies' status+counts.
+            listings?.applyFresh(updated)
         }
         _ = await (commentsDone, responsesDone)
     }
@@ -94,6 +99,7 @@ final class ListingDetailViewModel {
         status = next
         do {
             try await service.updateListingStatus(listingId: listing.listingId, status: next)
+            listings?.setStatus(listingId: listing.listingId, status: next)
         } catch {
             status = previous
             debugLog("[ListingDetailVM] toggleStatus failed: \(error)")
@@ -105,6 +111,7 @@ final class ListingDetailViewModel {
     func deleteListing() async -> Bool {
         do {
             try await service.deleteListing(listingId: listing.listingId)
+            listings?.listingDeleted(listing.listingId)
             return true
         } catch {
             debugLog("[ListingDetailVM] deleteListing failed: \(error)")
@@ -120,16 +127,16 @@ final class ListingDetailViewModel {
     // MARK: - Save
 
     func toggleSave() async {
-        guard !isSaving else { return }
+        guard !isSaving, let listings else { return }
         isSaving = true
         let next = !isSaved
         isSaved = next
-        do {
-            if next { try await service.saveListing(listingId: listing.listingId) }
-            else { try await service.unsaveListing(listingId: listing.listingId) }
-        } catch {
+        // The store owns the RPC + the Saved list membership (and rolls back
+        // on failure); mirror its settled answer locally.
+        if let settled = await listings.setSaved(next, listing: listing) {
+            isSaved = settled
+        } else {
             isSaved = !next
-            debugLog("[ListingDetailVM] toggleSave failed: \(error)")
         }
         isSaving = false
     }
@@ -146,6 +153,7 @@ final class ListingDetailViewModel {
         do {
             let convoId = try await service.respondToListing(listingId: listing.listingId, message: trimmed)
             existingConvoId = convoId
+            listings?.listingResponded(listing.listingId)
             return (convoId, nil)
         } catch {
             return (nil, respondError(error))
@@ -190,6 +198,7 @@ final class ListingDetailViewModel {
             }
             commentText = ""
             replyingTo = nil
+            listings?.commentDelta(listing.listingId, 1)
             AnalyticsService.shared?.log(.commentPosted, metadata: ["kind": "listing", "listing_id": .string(listing.listingId)])
         } catch {
             debugLog("[ListingDetailVM] postComment failed: \(error)")
@@ -200,6 +209,9 @@ final class ListingDetailViewModel {
 
     func deleteComment(_ comment: ApiListingComment) async {
         let snapshot = comments
+        // A top-level delete cascades its replies server-side — the board's
+        // count drops by the whole thread.
+        let removedCount = comment.parentId == nil ? 1 + (comment.replies?.count ?? 0) : 1
         if let parentId = comment.parentId,
            let idx = comments.firstIndex(where: { $0.commentId == parentId }) {
             comments[idx].replies?.removeAll { $0.commentId == comment.commentId }
@@ -209,6 +221,7 @@ final class ListingDetailViewModel {
         }
         do {
             try await service.deleteListingComment(commentId: comment.commentId)
+            listings?.commentDelta(listing.listingId, -removedCount)
         } catch {
             comments = snapshot
             debugLog("[ListingDetailVM] deleteComment failed: \(error)")

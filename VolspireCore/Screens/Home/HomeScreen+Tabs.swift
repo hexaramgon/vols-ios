@@ -394,15 +394,15 @@ extension HomeScreen {
         // 0.35s fade the Workspace tab uses. Both loaded-flags drive it: the
         // initial board (Recent) AND the Saved list's first load, so switching to
         // Saved fades its bones into rows rather than hard-cutting.
-        .animation(.easeInOut(duration: 0.35), value: viewModel.listingsLoaded)
-        .animation(.easeInOut(duration: 0.35), value: viewModel.savedListingsLoaded)
+        .animation(.easeInOut(duration: 0.35), value: listingsStore.listingsLoaded)
+        .animation(.easeInOut(duration: 0.35), value: listingsStore.savedListingsLoaded)
     }
 
     @ViewBuilder
     private var collabFeedContent: some View {
         // Initial board load — full skeleton. The toggle is part of the header
         // bar now, so it's already in place while this runs.
-        if !viewModel.listingsLoaded {
+        if !listingsStore.listingsLoaded {
             collabFeedSkeleton
                 .transition(.opacity)
         } else {
@@ -445,8 +445,8 @@ extension HomeScreen {
         // / unsaves made elsewhere show up without a pull.
         if filter == .saved {
             Task {
-                if viewModel.savedListingsLoaded { await viewModel.refreshSavedListings() }
-                else { await viewModel.loadSavedListings() }
+                if listingsStore.savedListingsLoaded { await viewModel.refreshSavedListings() }
+                else { await listingsStore.loadSavedIfNeeded() }
             }
         }
     }
@@ -462,14 +462,14 @@ extension HomeScreen {
 
     @ViewBuilder
     private var recentListingList: some View {
-        if viewModel.collabListings.isEmpty {
+        if listingsStore.listings.isEmpty {
             EmptyStateView(icon: .handshake, title: "No collab listings yet",
                            message: "Open calls for collaborators show up here.")
                 .padding(.top, 40)
         } else {
             let shown = collabCategory == nil
-                ? viewModel.collabListings
-                : viewModel.collabListings.filter { $0.category == collabCategory }
+                ? listingsStore.listings
+                : listingsStore.listings.filter { $0.category == collabCategory }
             if shown.isEmpty {
                 EmptyStateView(icon: .handshake, title: "No listings in this category",
                                message: "Try another category or check back soon.")
@@ -482,17 +482,17 @@ extension HomeScreen {
 
     @ViewBuilder
     private var savedListingList: some View {
-        if !viewModel.savedListingsLoaded {
+        if !listingsStore.savedListingsLoaded {
             // Defensive: skeleton until the response confirms (never claim empty
             // mid-fetch). The same collab-shaped bones Recent's initial load uses,
             // so the two filters shimmer identically.
             collabListingBones
-        } else if viewModel.savedListings.isEmpty {
+        } else if listingsStore.savedListings.isEmpty {
             EmptyStateView(icon: .bookmark, title: "No saved listings yet",
                            message: "Tap the bookmark on a listing to save it here.")
                 .padding(.top, 40)
         } else {
-            listingRows(viewModel.savedListings)
+            listingRows(listingsStore.savedListings)
         }
     }
 

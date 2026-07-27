@@ -46,7 +46,7 @@ extension HomeScreen {
                         artistsRail
                             .entranceReveal(contentAppeared, index: 2, distance: 0)
                     }
-                    if !viewModel.collabListings.isEmpty {
+                    if !listingsStore.listings.isEmpty {
                         collabListingsRail
                             .entranceReveal(contentAppeared, index: 3, distance: 0)
                     }
@@ -401,7 +401,7 @@ extension HomeScreen {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(alignment: .top, spacing: 12) {
-                    ForEach(viewModel.collabListings.prefix(8)) { collabCard($0) }
+                    ForEach(listingsStore.listings.prefix(8)) { collabCard($0) }
                 }
                 .padding(.horizontal, pad)
             }

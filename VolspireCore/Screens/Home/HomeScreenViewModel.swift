@@ -56,9 +56,6 @@ class HomeScreenViewModel {
     var followingLoaded = false
     var artistsLoaded = false
 
-    // Collab listings (lazy-loaded the first time the Collab tab opens).
-    var collabListings: [ApiListing] = []
-    var listingsLoaded = false
 
     // Create-folder sheet on the Workspace tab. The folders themselves live in
     // the shared WorkspaceStore; only the form state is screen-local.
@@ -70,6 +67,9 @@ class HomeScreenViewModel {
     weak var workspace: WorkspaceStore?
     /// The shared social store — artist rows seed its follow overlay.
     weak var social: SocialStore?
+    /// The shared listings store — the Collab tab/rail render from it; these
+    /// passthroughs exist so pull-refreshes still drive the floating chip.
+    weak var listingsStore: ListingsStore?
 
     /// Random shuffle seed for the explore feed (`get_home_feed`). Fresh per VM
     /// (i.e. per app session) and re-rolled on pull-to-refresh, so the recs vary
@@ -139,10 +139,14 @@ class HomeScreenViewModel {
         async let artistRail: Void = loadArtists()
         async let feed: Void = loadTracksFeed()
         // Collab listings also feed the "All" tab's Collab rail (not just the
-        // Collab tab), so warm them on first load — `loadListings` is guarded, so
-        // opening the Collab tab afterwards is a no-op.
-        async let listings: Void = loadListings()
+        // Collab tab), so warm the shared store on first load — its load is
+        // guarded, so opening the Collab tab afterwards is a no-op.
+        async let listings: Void = warmListings()
         _ = await (home, artistRail, feed, listings)
+    }
+
+    private func warmListings() async {
+        await listingsStore?.loadListingsIfNeeded()
     }
 
     /// True while any pull-to-refresh is running. The system's refresh spinner
@@ -198,19 +202,15 @@ class HomeScreenViewModel {
     func refreshListings() async {
         pullRefreshCount += 1
         defer { pullRefreshCount -= 1 }
-        // Uncached RPC — always fresh.
-        if let fresh = try? await supabaseService.getListings(category: nil) {
-            collabListings = fresh
-            listingsLoaded = true
-        }
+        await listingsStore?.refreshListings()
     }
 
     /// After the user posts content (track or listing, `ownContentPosted`):
-    /// refetch the home surfaces that could include it — the rails and the
-    /// collab listings — in place, without any loading-state churn.
+    /// refetch the home rails in place, without any loading-state churn.
+    /// (Listings refresh themselves — ListingsStore subscribes to the same
+    /// notification.)
     func refreshAfterOwnPost() async {
         await supabaseService.invalidateHomeCaches()
-        async let listings: Void = refreshListings()
         if let response = try? await supabaseService.getHomeTracks() {
             popularTracks = mapTracks(response.popularTracks)
             demos = mapTracks(response.demos)
@@ -218,7 +218,6 @@ class HomeScreenViewModel {
             prefetchCovers(popularTracks + demos + samples)
             loadingState = .loaded
         }
-        _ = await listings
     }
 
     /// Refetches every loaded server surface after a block/unblock — the server
@@ -228,18 +227,17 @@ class HomeScreenViewModel {
     func refreshAfterBlockChange() async {
         let hadFollowing = followingLoaded
         let hadArtists = artistsLoaded
-        let hadListings = listingsLoaded
         loadingState = .idle
         feedLoaded = false
         followingLoaded = false
         artistsLoaded = false
-        listingsLoaded = false
         async let home: Void = loadHomeData()
         async let feed: Void = loadTracksFeed()
         _ = await (home, feed)
         if hadFollowing { await loadFollowing() }
         if hadArtists { await loadArtists() }
-        if hadListings { await loadListings() }
+        // Listings refresh themselves — ListingsStore subscribes to the same
+        // notification.
     }
 
     // MARK: - Explore tabs
@@ -326,42 +324,11 @@ class HomeScreenViewModel {
         }
     }
 
-    /// Same defensive shape as `loadFollowing` — flag flips on response only.
-    private var listingsLoadInFlight = false
-
-    func loadListings() async {
-        guard !listingsLoaded, !listingsLoadInFlight else { return }
-        listingsLoadInFlight = true
-        do {
-            collabListings = try await supabaseService.getListings(category: nil)
-            listingsLoaded = true
-        } catch { debugLog("[HomeVM] listings: \(error)") }
-        listingsLoadInFlight = false
-    }
-
-    // MARK: - Saved listings (the collab tab's Recent / Saved toggle)
-
-    var savedListings: [ApiListing] = []
-    var savedListingsLoaded = false
-    private var savedListingsLoadInFlight = false
-
-    /// Lazily loads the saved listings the first time the Saved toggle opens.
-    func loadSavedListings() async {
-        guard !savedListingsLoaded, !savedListingsLoadInFlight else { return }
-        savedListingsLoadInFlight = true
-        do {
-            savedListings = try await supabaseService.getSavedListings()
-            savedListingsLoaded = true
-        } catch { debugLog("[HomeVM] savedListings: \(error)") }
-        savedListingsLoadInFlight = false
-    }
-
-    /// Pull-to-refresh for the Saved list (keeps the flag set so it never blanks).
+    /// Pull-to-refresh for the Saved list, chip-wrapped like the board's.
     func refreshSavedListings() async {
-        do {
-            savedListings = try await supabaseService.getSavedListings()
-            savedListingsLoaded = true
-        } catch { debugLog("[HomeVM] refreshSavedListings: \(error)") }
+        pullRefreshCount += 1
+        defer { pullRefreshCount -= 1 }
+        await listingsStore?.refreshSaved()
     }
 
     // MARK: - Cover prefetch
