@@ -120,6 +120,65 @@ enum ProfileRoles {
     ]
 }
 
+/// The role chips, shared by the signup wizard and Edit Profile so picking your
+/// roles looks and behaves identically wherever you do it. Owns the selection
+/// rules (toggle, cap) as well as the styling — the two screens had drifted into
+/// different chip shapes AND different cap behaviour.
+struct RolePicker: View {
+    @Binding var selection: [String]
+    var limit: Int = ProfileRoles.max
+
+    /// The canonical roles, preceded by any already-selected tag that isn't one
+    /// of them. Free-text tags exist (the web app didn't always constrain them),
+    /// and without a chip they were invisible while still counting toward the
+    /// cap — the "3/3 but only one highlighted" case. Listing them first makes
+    /// them selectable-off so the slot can be reclaimed.
+    private var roles: [String] {
+        selection.filter { !ProfileRoles.all.contains($0) } + ProfileRoles.all
+    }
+
+    var body: some View {
+        ChipFlowLayout(spacing: 8, lineSpacing: 8) {
+            ForEach(roles, id: \.self) { role in
+                chip(role)
+            }
+        }
+    }
+
+    private func chip(_ role: String) -> some View {
+        let selected = selection.contains(role)
+        // At the cap the unpicked roles dim and stop responding, so the limit is
+        // visible before you tap instead of a tap that silently does nothing.
+        //
+        // Only the LABEL dims — the fill stays put. Fading the fill too (tried at
+        // 0.025) sank the chips into the background and read as the roles having
+        // disappeared rather than being unavailable.
+        let capped = !selected && selection.count >= limit
+        return Button {
+            if selected {
+                selection.removeAll { $0 == role }
+            } else if selection.count < limit {
+                selection.append(role)
+            }
+        } label: {
+            Text(role)
+                .font(.appFootnoteMedium)
+                .foregroundStyle(selected ? .black : (capped ? Color.vText3 : Color.vText2))
+                .padding(.horizontal, 13)
+                .padding(.vertical, 8)
+                .background(
+                    Color.white.opacity(selected ? 1 : 0.05),
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
+                .contentShape(.rect(cornerRadius: 11))
+        }
+        .buttonStyle(.plain)
+        .disabled(capped)
+        .animation(.easeInOut(duration: 0.15), value: selected)
+        .animation(.easeInOut(duration: 0.15), value: capped)
+    }
+}
+
 // MARK: - Flow layout (wrapping rows of chips)
 
 /// Lays subviews out left-to-right, wrapping to the next line when they don't

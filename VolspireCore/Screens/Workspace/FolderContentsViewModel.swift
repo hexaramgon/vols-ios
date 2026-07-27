@@ -62,6 +62,7 @@ final class FolderContentsViewModel {
     var isSearchingUsers = false
     /// Your collaborators, loaded once — the add field filters this list locally.
     var allCollaborators: [ApiUserSummary] = []
+    var isLoadingCollaborators = false
     /// The user id of a member currently being added/removed/updated.
     var memberActionId: String?
 
@@ -157,7 +158,9 @@ final class FolderContentsViewModel {
     /// Your collaborators — the only people who can be added to a folder (mirrors
     /// the web). Loaded once when the sheet opens; the add field filters locally.
     func loadCollaborators() async {
+        isLoadingCollaborators = true
         allCollaborators = (try? await supabaseService.getMyCollaborators()) ?? []
+        isLoadingCollaborators = false
         filterCollaborators()
     }
 
@@ -203,12 +206,21 @@ final class FolderContentsViewModel {
 
     func updateMemberRole(_ member: ApiFolderMember, role: String) async {
         guard member.role != role else { return }
+        // Optimistic: the role highlight slides immediately (no reload flicker,
+        // no round-trip lag); a failed write reverts it and surfaces the error.
+        let previous = member.role
+        setLocalRole(role, for: member.userId)
         do {
             try await supabaseService.updateFolderMemberRole(folderId: folderId, targetUserId: member.userId, role: role)
-            await loadMembers()
         } catch {
+            setLocalRole(previous, for: member.userId)
             uploadError = error.localizedDescription
         }
+    }
+
+    private func setLocalRole(_ role: String, for userId: String) {
+        guard let index = members.firstIndex(where: { $0.userId == userId }) else { return }
+        members[index].role = role
     }
 
     func avatarURL(_ path: String?) -> URL? {

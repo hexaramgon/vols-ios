@@ -172,6 +172,32 @@ struct AuthCTA: View {
     }
 }
 
+// MARK: - Secondary CTA (the quieter half of a button pair)
+
+/// The muted counterpart to `AuthCTA`: identical 54pt height and 16pt radius,
+/// filled like the provider cards instead of the gradient. Paired on the
+/// welcome screen, so the two read as one set separated by weight, not size —
+/// hence `appHeadline` here rather than the providers' `appBodyMedium`.
+struct AuthSecondaryCTA: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.appHeadline)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .frame(height: 54)
+                .background(
+                    Color.white.opacity(0.05),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                )
+        }
+        .buttonStyle(AuthPress())
+    }
+}
+
 // MARK: - Provider buttons (flat, matching the field cards)
 
 /// Custom "Continue with Apple" — official wording + logo per the HIG's
@@ -242,7 +268,12 @@ final class AppleSignInCoordinator: NSObject {
         self.onCredential = onCredential
         self.onError = onError
         let request = ASAuthorizationAppleIDProvider().createRequest()
-        request.requestedScopes = [.fullName, .email]
+        // Email only — the app never uses the name (sign-in forwards just the
+        // identity token to Supabase, and profiles are username-based), so
+        // don't ask for it: the consent sheet drops the name row entirely.
+        // Keep .email — Supabase needs the email claim in the ID token to
+        // create/link the auth user.
+        request.requestedScopes = [.email]
         let controller = ASAuthorizationController(authorizationRequests: [request])
         controller.delegate = self
         controller.presentationContextProvider = self
@@ -320,6 +351,63 @@ struct AuthWizardBackBar: View {
         .frame(height: 44)
         .padding(.horizontal, 12)
         .padding(.top, 8)
+    }
+}
+
+// MARK: - Edge swipe-back
+
+/// Stands in for the system's interactive pop, which the auth stack doesn't get
+/// for free: it's one canvas swapping custom transitions, not a NavigationStack.
+/// A drag starting at the leading edge and travelling right runs the same action
+/// as the back chevron, so every screen with a chevron is also swipeable.
+///
+/// `simultaneousGesture` rather than `gesture`: the pages scroll, and this must
+/// observe drags without competing for them. The height bound is what keeps a
+/// slightly-angled scroll from reading as a back swipe.
+private struct AuthSwipeBack: ViewModifier {
+    var isEnabled: Bool
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        content.simultaneousGesture(
+            DragGesture(minimumDistance: 20, coordinateSpace: .local)
+                .onEnded { drag in
+                    guard isEnabled,
+                          drag.startLocation.x < 44,
+                          drag.translation.width > 80,
+                          abs(drag.translation.height) < 60
+                    else { return }
+                    action()
+                }
+        )
+    }
+}
+
+extension View {
+    /// Pair with an `AuthWizardBackBar` — pass the chevron's own action, and the
+    /// same `canGoBack`/loading conditions that hide or disable it.
+    func authSwipeBack(isEnabled: Bool = true, action: @escaping () -> Void) -> some View {
+        modifier(AuthSwipeBack(isEnabled: isEnabled, action: action))
+    }
+
+    /// Chrome for a screen inside the auth `NavigationStack`. Every auth screen
+    /// draws its own flat canvas and chevron, so the system bar is hidden
+    /// throughout.
+    ///
+    /// Hiding it costs the system's interactive pop — measured on iOS 26, the
+    /// gesture is dead whenever the bar is hidden, which is why every auth
+    /// screen carries `authSwipeBack`. Letting the bar render brings real
+    /// finger-tracking back, but also a system back button stacked above the
+    /// custom chevron, so that trade is a design decision rather than a fix.
+    ///
+    /// `allowsSystemBack: false` also takes the interactive pop away, for the
+    /// screens that run their own multi-step back (the register wizard, the
+    /// password reset): to the stack they are a single destination, so a system
+    /// swipe would drop the entire flow when the user meant to step back one.
+    /// Those screens keep `authSwipeBack` instead, which knows about steps.
+    func authNavigationChrome(allowsSystemBack: Bool = true) -> some View {
+        toolbar(.hidden, for: .navigationBar)
+            .navigationBarBackButtonHidden(!allowsSystemBack)
     }
 }
 
@@ -402,13 +490,14 @@ extension AuthStepPage where Footer == EmptyView {
     }
 }
 
-/// The bottom pinned prompt + action link ("New to Volspire? Create account"),
-/// for use inside a full-screen `.overlay` on an auth page.
-// Overlay (not safeAreaInset): the link stays anchored to the screen
-// bottom and the keyboard simply covers it, instead of riding up.
-// The content here is FULL-HEIGHT for the keyboard opt-out to work —
-// ignoresSafeArea only expands views whose bounds touch the ignored
-// region, so a bare link would still be pushed up.
+/// The prompt + action link that swaps between sign-in and register
+/// ("New to Volspire? Create account").
+///
+/// Sits at the end of the page's own content, directly under the last control,
+/// rather than pinned to the screen bottom — pinning left it stranded a long
+/// way below the form on both pages. Being ordinary scroll content, it also no
+/// longer needs the full-height frame and keyboard opt-out that anchoring
+/// required, and the pages no longer reserve clearance for it.
 struct AuthBottomLink: View {
     let prompt: String
     let action: String
@@ -430,8 +519,6 @@ struct AuthBottomLink: View {
         .buttonStyle(.plain)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity)
-        .frame(maxHeight: .infinity, alignment: .bottom)
-        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 }
 

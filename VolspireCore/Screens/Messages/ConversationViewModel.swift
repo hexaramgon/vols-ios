@@ -64,11 +64,46 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
+/// Why the composer is closed for the person who sent a collab request.
+/// A request is an ask, not an open channel: until it's accepted they get the
+/// one message the request carried, and nothing more.
+enum CollabRequestGate: Equatable {
+    /// Waiting on the recipient.
+    case awaitingReply
+    /// They said no.
+    case declined
+
+    var message: String {
+        switch self {
+        case .awaitingReply: "Waiting for a reply to your collab request. You can message once they accept."
+        case .declined: "Your collab request was declined, so you can't send messages here."
+        }
+    }
+}
+
 extension ConversationViewModel {
     /// True when a collab request in this thread was accepted — the other
     /// participant is a collaborator (drives the "Remove Collaborator" option).
     var hasAcceptedCollabRequest: Bool {
         messages.contains { $0.isCollabRequest && $0.requestStatus == "accepted" }
+    }
+
+    /// Mirrors the server's `collab_request_gate` so the composer reflects what
+    /// `send_message` would do rather than failing after the fact. The RPC stays
+    /// authoritative — this only decides what the UI offers.
+    ///
+    /// Nil status reads as OPEN, matching the server: it means no `requests` row
+    /// backs the message, which is the one case the gate lets through.
+    var collabRequestGate: CollabRequestGate? {
+        // Accepted anywhere in the thread = collaborators, gate lifted.
+        guard !hasAcceptedCollabRequest else { return nil }
+        guard let mine = messages.last(where: { $0.isCollabRequest && $0.isFromMe })
+        else { return nil }
+        switch mine.requestStatus {
+        case "pending": return .awaitingReply
+        case "rejected": return .declined
+        default: return nil
+        }
     }
 }
 
@@ -81,6 +116,9 @@ final class ConversationViewModel {
     var draft = ""
     var isSending = false
     var attachmentError: String?
+    /// The collab listing this conversation was opened from (Collab Board
+    /// respond flow) — drives the "about this listing" banner. Nil for DMs.
+    var linkedListing: ApiListing?
 
     let convoId: String
     private let currentUserId: String?
@@ -118,6 +156,13 @@ final class ConversationViewModel {
             try? await service.markConvoRead(convoId: convoId)
             PushNotificationManager.shared.clearDeliveredNotifications(convoId: convoId)
             await PushNotificationManager.shared.refreshBadge()
+            // Best-effort: resolve the listing this thread was opened from
+            // (one cheap id lookup; full fetch only for listing conversations).
+            if linkedListing == nil,
+               let listingId = try? await service.getConvoListingId(convoId: convoId),
+               let listing = try? await service.getListing(listingId: listingId) {
+                linkedListing = listing
+            }
         } catch {
             debugLog("[ConversationVM] load: \(error)")
             await settled
@@ -136,7 +181,7 @@ final class ConversationViewModel {
 
     func send() async {
         let text = String(draft.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxMessageLength))
-        guard !text.isEmpty, !isSending else { return }
+        guard !text.isEmpty, !isSending, collabRequestGate == nil else { return }
         draft = ""
         isSending = true
 
@@ -157,8 +202,20 @@ final class ConversationViewModel {
             debugLog("[ConversationVM] send: \(error)")
             messages.removeAll { $0.id == tempId }
             draft = text   // restore the unsent text so it isn't lost
+            await handleCollabGateRejection(error)
         }
         isSending = false
+    }
+
+    /// The server is authoritative on the collab gate, so it can refuse a send
+    /// the UI thought was fine — the recipient may have declined mid-compose.
+    /// Re-loading pulls the new request status, which swaps the composer for the
+    /// explanation instead of leaving a silent failure.
+    private func handleCollabGateRejection(_ error: Error) async {
+        let detail = error.serverRawDetail
+        guard detail.contains("collab_request_pending") || detail.contains("collab_request_declined")
+        else { return }
+        await load()
     }
 
     /// Uploads + sends an attachment (with an optional caption from the draft).
@@ -174,7 +231,9 @@ final class ConversationViewModel {
     ]
 
     func sendAttachment(data: Data, fileName: String, fileType: String, caption: String) async {
-        guard let userId = currentUserId, !isSending else { return }
+        // An attachment is a message: same gate, checked before the upload so a
+        // blocked send never puts bytes in storage.
+        guard let userId = currentUserId, !isSending, collabRequestGate == nil else { return }
 
         // Strip EXIF/GPS from still images by re-encoding to JPEG off the main
         // thread. (Avatars/covers already do this; the DM path previously shipped
@@ -229,6 +288,7 @@ final class ConversationViewModel {
             debugLog("[ConversationVM] sendAttachment: \(error)")
             messages.removeAll { $0.id == tempId }
             attachmentError = "Couldn't send the attachment."
+            await handleCollabGateRejection(error)
         }
         isSending = false
     }

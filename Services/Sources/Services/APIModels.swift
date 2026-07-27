@@ -301,7 +301,9 @@ public struct ApiFolderMember: Codable, Sendable, Identifiable {
     public let userId: String
     public let username: String?
     public let profileImageUrl: String?
-    public let role: String
+    /// Mutable so the members sheet can update a role optimistically (the
+    /// picker slides immediately; the write confirms or reverts it).
+    public var role: String
 }
 
 // MARK: - Shared user references
@@ -579,7 +581,12 @@ public struct ApiListingComment: Codable, Sendable, Identifiable {
     public let commentId: String
     public let content: String
     public let createdAt: String?
+    /// nil for top-level comments; set to the parent's id for replies.
+    public let parentId: String?
     public let user: ApiListingAuthor
+    /// One level of nested replies (oldest first), present only on top-level
+    /// comments. `var` so the VM can insert an optimistic reply.
+    public var replies: [ApiListingComment]?
 }
 
 /// One responder to a listing (author-only, `get_listing_responses`).

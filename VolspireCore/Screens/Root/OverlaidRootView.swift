@@ -39,6 +39,13 @@ struct OverlaidRootView: View {
         conversationState.activeConversation != nil
     }
 
+    /// Slide the mini player away for a full-screen conversation OR while a
+    /// bottom composer's keyboard is up — same reason as the tab bar: it must
+    /// not float wedged above the keyboard.
+    private var hideBottomChrome: Bool {
+        isConversationActive || conversationState.composerActive
+    }
+
     private var collapsedFrame: CGRect {
         // Position the collapsed mini-player above the tab bar (measured —
         // the bar's height varies with Dynamic Type).
@@ -72,14 +79,18 @@ struct OverlaidRootView: View {
                             expanded: $expandSheet,
                             collapsedFrame: collapsedFrame
                         )
-                        // Clear the mini-player inside a conversation — the chat is
-                        // full-screen and its input bar owns the bottom.
-                        .offset(y: isConversationActive ? 140 : 0)
-                        .opacity(isConversationActive ? 0 : 1)
-                        .allowsHitTesting(!isConversationActive)
-                        // Same curve as the tab bar's hide in RootTabView so the two
-                        // move as one piece.
+                        // Clear the mini-player inside a conversation (or while a
+                        // bottom composer is up) — that chrome must not float above
+                        // the keyboard; the composer/input bar owns the bottom.
+                        .offset(y: hideBottomChrome ? 140 : 0)
+                        .opacity(hideBottomChrome ? 0 : 1)
+                        .allowsHitTesting(!hideBottomChrome)
+                        // Conversation hide keeps its tuned spring; the composer
+                        // hide uses a plain scoped ease matching the tab bar in
+                        // RootTabView — decoupled from the keyboard's system
+                        // animation so it can't merge and overshoot.
                         .animation(.smooth(duration: 0.35), value: isConversationActive)
+                        .animation(.easeInOut(duration: 0.25), value: conversationState.composerActive)
                         .toolbarColorScheme(colorScheme, for: .navigationBar)
                         // Slide up + fade in when a track starts (reverse on clear)
                         // instead of popping in/out.

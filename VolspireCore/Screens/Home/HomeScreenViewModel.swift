@@ -238,7 +238,7 @@ class HomeScreenViewModel {
         pullRefreshCount += 1
         defer { pullRefreshCount -= 1 }
         await supabaseService.invalidateHomeCaches()
-        async let activity = supabaseService.getWorkspaceActivity(limit: 100)
+        async let activity = supabaseService.getWorkspaceActivity(limit: 60)
         if let fresh = try? await supabaseService.getUserFolders() {
             folders = fresh
             foldersLoaded = true
@@ -320,7 +320,7 @@ class HomeScreenViewModel {
         foldersLoadInFlight = true
         // Generous limit: the RPC is already scoped to the past month and the
         // rail groups client-side, so fetch the whole window.
-        async let activity = supabaseService.getWorkspaceActivity(limit: 100)
+        async let activity = supabaseService.getWorkspaceActivity(limit: 60)
         do {
             folders = try await supabaseService.getUserFolders()
             foldersLoaded = true
@@ -396,6 +396,31 @@ class HomeScreenViewModel {
             listingsLoaded = true
         } catch { debugLog("[HomeVM] listings: \(error)") }
         listingsLoadInFlight = false
+    }
+
+    // MARK: - Saved listings (the collab tab's Recent / Saved toggle)
+
+    var savedListings: [ApiListing] = []
+    var savedListingsLoaded = false
+    private var savedListingsLoadInFlight = false
+
+    /// Lazily loads the saved listings the first time the Saved toggle opens.
+    func loadSavedListings() async {
+        guard !savedListingsLoaded, !savedListingsLoadInFlight else { return }
+        savedListingsLoadInFlight = true
+        do {
+            savedListings = try await supabaseService.getSavedListings()
+            savedListingsLoaded = true
+        } catch { debugLog("[HomeVM] savedListings: \(error)") }
+        savedListingsLoadInFlight = false
+    }
+
+    /// Pull-to-refresh for the Saved list (keeps the flag set so it never blanks).
+    func refreshSavedListings() async {
+        do {
+            savedListings = try await supabaseService.getSavedListings()
+            savedListingsLoaded = true
+        } catch { debugLog("[HomeVM] refreshSavedListings: \(error)") }
     }
 
     // MARK: - Cover prefetch

@@ -2,7 +2,7 @@
 //  ProfileDashboardCard.swift
 //  Volspire
 //
-//  "Creator Dashboard" entry on the owner's profile — loads a lightweight
+//  "Artist Dashboard" entry on the owner's profile — loads a lightweight
 //  analytics summary to show last-30-day plays + a week-over-week trend, and
 //  links into the full analytics screen.
 //
@@ -25,7 +25,7 @@ struct ProfileDashboardCard: View {
                     .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 9))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Creator Dashboard")
+                    Text("Artist Dashboard")
                         .font(.appSubheadlineSemibold)
                         .foregroundStyle(.white)
                     Text(subtitle)

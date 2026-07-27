@@ -241,7 +241,7 @@ private extension MediaCollectionScreen {
             }
 
             Button { optionsMedia = item } label: {
-                LucideIcon(.ellipsis, .lg)
+                LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                     .foregroundStyle(Color.vText3)
                     .frame(width: 34, height: 44)
                     .contentShape(.rect)

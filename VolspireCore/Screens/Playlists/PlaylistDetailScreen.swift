@@ -33,7 +33,7 @@ struct PlaylistDetailScreen: View {
     /// The owner-only "…" button handed to MediaCollectionScreen's trailing slot.
     private var optionsButton: some View {
         Button { showOptions = true } label: {
-            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
+            LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
         }

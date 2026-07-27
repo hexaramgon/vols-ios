@@ -113,7 +113,7 @@ struct ProfileTracksTab: View {
         Button {
             viewModel.trackOptionsTrack = track
         } label: {
-            LucideIcon(.ellipsis, .xl)
+            LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                 .foregroundStyle(Color.vText3)
                 .frame(width: 32, height: 32)
                 .contentShape(.rect)

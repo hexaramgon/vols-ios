@@ -2,10 +2,11 @@
 //  LoginScreen.swift
 //  Volspire
 //
-//  Sign-in, v2: flat app-base canvas, left-aligned wordmark + heading, one
-//  grouped email/password card with the gradient CTA beneath, providers
-//  under a quiet "or continue with", and the create-account link at the
-//  bottom. Register slides in over the same canvas.
+//  The whole unauthenticated stack, over one flat app-base canvas: the welcome
+//  landing is the root, with sign-in, register and password-reset pushed from
+//  it. The sign-in form itself is v2 — left-aligned wordmark + heading, one
+//  grouped email/password card with the gradient CTA beneath, providers under a
+//  quiet "or continue with", and the create-account link at the bottom.
 //
 
 import AuthenticationServices
@@ -14,16 +15,19 @@ import Services
 import SwiftUI
 
 struct LoginScreen: View {
+    /// The pushed destinations — the welcome landing is the stack's root, so it
+    /// isn't one of them. A real `NavigationStack` path rather than a flag per
+    /// screen, so sign-in gets the system's interactive pop for free.
+    private enum Route: Hashable { case signIn, register, forgot }
+
     @Environment(Dependencies.self) var dependencies
     @State private var email = ""
     @State private var password = ""
     @State private var isLoading = false
-    @State private var showRegister = false
-    @State private var showForgot = false
+    @State private var path: [Route] = []
     /// Flips true after a failed email sign-in — only then does the
     /// "Forgot password?" link appear.
     @State private var loginFailed = false
-    @State private var registerViewModel: RegisterViewModel?
 
     private var authManager: AuthManager {
         dependencies.authManager
@@ -34,82 +38,126 @@ struct LoginScreen: View {
     }
 
     var body: some View {
-        ZStack {
-            AuthCanvas()
-
-            if showRegister, let registerViewModel {
-                RegisterScreen(viewModel: registerViewModel) {
-                    withAnimation(.smooth(duration: 0.35)) { showRegister = false }
-                }
-                .transition(.push(from: .trailing))
-            } else if showForgot {
-                ForgotPasswordFlow(initialEmail: email) {
-                    authManager.setError(nil)
-                    withAnimation(.smooth(duration: 0.35)) { showForgot = false }
-                }
-                .transition(.push(from: .trailing))
-            } else {
-                loginForm
-                    .transition(.push(from: .leading))
-            }
+        NavigationStack(path: $path) {
+            WelcomeScreen(
+                onCreateAccount: startRegister,
+                onSignIn: startSignIn
+            )
+            .background(AuthCanvas())
+            .authNavigationChrome()
+            .navigationDestination(for: Route.self, destination: destination)
         }
-        .animation(.smooth(duration: 0.35), value: showRegister)
-        .animation(.smooth(duration: 0.35), value: showForgot)
         .preferredColorScheme(.dark)
     }
 
+    @ViewBuilder
+    private func destination(_ route: Route) -> some View {
+        switch route {
+        case .signIn:
+            loginForm
+                .background(AuthCanvas())
+                .authNavigationChrome()
+        case .register:
+            // Built right here rather than hoisted into `@State` and read back:
+            // this closure is captured, so it can run before an assignment made
+            // in the same update lands, and an optional read as nil rendered a
+            // blank screen. RegisterScreen keeps it in its own `@State`, so the
+            // wizard still gets exactly one view model per push.
+            //
+            // The wizard owns its own step-back, so the system pop is off; it
+            // exits the stack explicitly through `onExit`.
+            RegisterScreen(
+                viewModel: RegisterViewModel(
+                    authManager: authManager,
+                    supabaseService: dependencies.supabaseService
+                )
+            ) { exit in
+                switch exit {
+                case .back: pop()
+                case .signIn: startSignIn()
+                }
+            }
+            .authNavigationChrome(allowsSystemBack: false)
+        case .forgot:
+            ForgotPasswordFlow(initialEmail: email) {
+                authManager.setError(nil)
+                pop()
+            }
+            .authNavigationChrome(allowsSystemBack: false)
+        }
+    }
+
+    private func pop() {
+        guard !path.isEmpty else { return }
+        path.removeLast()
+    }
+
+    /// Opens the wizard on fresh state each visit — the destination builds the
+    /// view model, so there is no state to stage before pushing. REPLACES the
+    /// path (not append): switching between sign-in and register must never
+    /// stack the two forms — back always returns to the welcome landing.
+    private func startRegister() {
+        authManager.setError(nil)
+        path = [.register]
+    }
+
+    /// Same contract for sign-in: a fresh page (fields cleared — they live on
+    /// this stack host, so they'd otherwise survive a round-trip through
+    /// register) and a REPLACED path, so back goes to the welcome landing.
+    private func startSignIn() {
+        authManager.setError(nil)
+        email = ""
+        password = ""
+        loginFailed = false
+        path = [.signIn]
+    }
+
+    /// Sign-in runs through the wizards' own `AuthStepPage`, so its heading,
+    /// spacing and scroll behaviour are register's by construction rather than
+    /// by hand-matched numbers. The wordmark is gone — the welcome screen one
+    /// push back already carries the brand, and register never had one.
     private var loginForm: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 0) {
-                VolspireWordmark(height: 32)
-                    .foregroundStyle(.white)
-                    .padding(.top, 64)
+        VStack(spacing: 0) {
+            // Same chevron the wizards use — sign-in is pushed from the landing
+            // now, so it needs the way back out.
+            AuthWizardBackBar(disabled: isLoading, onBack: pop)
 
-                Text("Sign in")
-                    .font(.appTitleXXL)
-                    .foregroundStyle(.white)
-                    .padding(.top, 48)
-
-                Text("Welcome back — pick up where you left off.")
-                    .font(.appCalloutRegular)
-                    .foregroundStyle(Color.vText2)
-                    .padding(.top, 6)
-
-                AuthFieldGroup {
-                    AuthRow(
-                        icon: .mail,
-                        placeholder: "Email address",
-                        text: $email,
-                        keyboard: .emailAddress,
-                        contentType: .emailAddress
-                    )
-                    AuthRowDivider()
-                    AuthSecureRow(placeholder: "Password", text: $password)
-                }
-                .padding(.top, 32)
-
-                // Appears only once a sign-in attempt has failed.
-                if loginFailed {
-                    Button {
-                        authManager.setError(nil)
-                        withAnimation(.smooth(duration: 0.35)) { showForgot = true }
-                    } label: {
-                        Text("Forgot password?")
-                            .font(.appFootnote)
-                            .foregroundStyle(Color.vText3)
-                            .contentShape(.rect)
+            AuthStepPage(
+                title: "Sign in",
+                subtitle: "Welcome back — pick up where you left off.",
+                error: authManager.errorMessage
+            ) {
+                VStack(alignment: .leading, spacing: 0) {
+                    AuthFieldGroup {
+                        AuthRow(
+                            icon: .mail,
+                            placeholder: "Email address",
+                            text: $email,
+                            keyboard: .emailAddress,
+                            contentType: .emailAddress
+                        )
+                        AuthRowDivider()
+                        AuthSecureRow(placeholder: "Password", text: $password)
                     }
-                    .buttonStyle(.plain)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.top, 12)
-                    .transition(.opacity)
-                }
 
-                if let error = authManager.errorMessage {
-                    ErrorBanner(error)
-                        .padding(.top, 14)
+                    // Appears only once a sign-in attempt has failed.
+                    if loginFailed {
+                        Button {
+                            authManager.setError(nil)
+                            path.append(.forgot)
+                        } label: {
+                            Text("Forgot password?")
+                                .font(.appFootnote)
+                                .foregroundStyle(Color.vText3)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.top, 12)
+                        .transition(.opacity)
+                    }
                 }
-
+            } footer: {
                 AuthCTA(
                     title: "Sign In",
                     loadingTitle: "Signing in…",
@@ -125,7 +173,7 @@ struct LoginScreen: View {
                         isLoading = false
                     }
                 }
-                .padding(.top, 16)
+                .padding(.top, 24)
 
                 AuthOrDivider()
                     .padding(.vertical, 24)
@@ -149,29 +197,22 @@ struct LoginScreen: View {
                         }
                     }
                 }
+
+                AuthBottomLink(prompt: "New to Volspire?", action: "Create account", onTap: startRegister)
+                    .padding(.top, 8)
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 72) // clears the pinned create-account link
-            .frame(maxWidth: 440)
-            .frame(maxWidth: .infinity)
         }
-        .scrollDismissesKeyboard(.interactively)
-        // No rubber-band on a form that fits the screen — keyboard-driven
-        // scroll adjustments stay pinned instead of bouncing the page.
-        .scrollBounceBehavior(.basedOnSize)
-        // Pinned bottom link — AuthBottomLink carries the overlay/keyboard
-        // opt-out rationale.
-        .overlay {
-            AuthBottomLink(prompt: "New to Volspire?", action: "Create account") {
-                authManager.setError(nil)
-                // Fresh wizard state each visit, built before the transition
-                // so the slide animates real content.
-                registerViewModel = RegisterViewModel(
-                    authManager: authManager,
-                    supabaseService: dependencies.supabaseService
-                )
-                withAnimation(.smooth(duration: 0.35)) { showRegister = true }
-            }
+        // Load-bearing, not a fallback: measured on iOS 26, hiding the navigation
+        // bar also disables the system's interactive pop, so this gesture is the
+        // only back swipe sign-in has. Restoring the real finger-tracking pop
+        // means letting the bar render, which puts a system back button above
+        // our own chevron — see `authNavigationChrome`.
+        //
+        // The `path.last` check keeps it a no-op if a future iOS revives the
+        // system gesture; sign-in only ever sits at depth 1, so even both firing
+        // together can't pop past the landing.
+        .authSwipeBack(isEnabled: !isLoading) {
+            if path.last == .signIn { pop() }
         }
     }
 }
@@ -202,16 +243,13 @@ private struct ForgotPasswordFlow: View {
         newPassword.count >= 8 && newPassword == confirmPassword
     }
 
+    /// Back once the code is verified is a dead end — the reset finishes
+    /// forward — so both the chevron and the swipe stop at step 2.
+    private var canGoBack: Bool { step < 2 }
+
     var body: some View {
         VStack(spacing: 0) {
-            // No back once the code is verified — the reset finishes forward.
-            AuthWizardBackBar(canGoBack: step < 2, disabled: isLoading) {
-                if step == 0 {
-                    onClose()
-                } else {
-                    go(to: 0)
-                }
-            }
+            AuthWizardBackBar(canGoBack: canGoBack, disabled: isLoading, onBack: goBack)
 
             ZStack {
                 Group {
@@ -225,7 +263,16 @@ private struct ForgotPasswordFlow: View {
             }
         }
         .background(AuthCanvas())
+        .authSwipeBack(isEnabled: canGoBack && !isLoading, action: goBack)
         .onAppear { email = initialEmail }
+    }
+
+    private func goBack() {
+        if step == 0 {
+            onClose()
+        } else {
+            go(to: 0)
+        }
     }
 
     private func go(to newStep: Int) {

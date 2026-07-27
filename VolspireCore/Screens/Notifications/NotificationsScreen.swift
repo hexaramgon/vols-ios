@@ -97,6 +97,15 @@ struct NotificationsScreen: View {
 
         return HStack(alignment: .top, spacing: 12) {
             avatar(item, meta: m)
+                // The row routes to the OBJECT (track/folder/listing); the
+                // avatar keeps the actor's profile reachable.
+                .onTapGesture {
+                    if let userId = item.actor?.userId {
+                        router.navigateToProfile(userId: userId)
+                    } else {
+                        navigate(item)
+                    }
+                }
 
             VStack(alignment: .leading, spacing: 3) {
                 messageText(item, meta: m)
@@ -233,30 +242,45 @@ struct NotificationsScreen: View {
         action.split(separator: " ").first.map(String.init) ?? "content"
     }
 
-    /// Purchases carry the real product type in `object_type`; relabel so packs
-    /// and services don't read as "purchased your track".
+    /// The liked/saved/shared/purchased labels name the content — resolve the
+    /// noun from `object_type` so an action on a listing/pack/service doesn't
+    /// read as "your track" (the meta table's labels are track-flavored defaults).
     private func displayLabel(_ item: ApiNotification, meta: ActionMeta) -> String {
-        guard item.action == "purchased" else { return meta.label }
+        let noun: String
         switch item.objectType {
-        case "pack":    return "purchased your pack"
-        case "service": return "booked your service"
-        default:        return "purchased your track"
+        case "listing": noun = "listing"
+        case "pack":    noun = "pack"
+        case "service": noun = "service"
+        case "folder":  noun = "folder"
+        default:        noun = "track"
+        }
+        switch item.action {
+        case "purchased":
+            return item.objectType == "service" ? "booked your service" : "purchased your \(noun)"
+        case "liked":  return "liked your \(noun)"
+        case "saved":  return "saved your \(noun)"
+        case "shared": return "shared your \(noun)"
+        default:       return meta.label
         }
     }
 
     // MARK: Navigation
 
+    /// Routes by the notification's OBJECT first — a track notification opens
+    /// the track, not the liker's profile (the actor's profile stays reachable
+    /// via the avatar). Actor-profile is the fallback for object-less rows
+    /// (e.g. "followed you").
     private func navigate(_ item: ApiNotification) {
         if item.objectType == "folder", let folderId = item.objectId {
             router.navigateToFolder(folderId: folderId, folderName: item.objectTitle ?? "Folder")
-        } else if let userId = item.actor?.userId {
-            router.navigateToProfile(userId: userId)
         } else if item.objectType == "track", let id = item.objectId {
-            // System notice (moderation) — open your own track in the player
-            // (same machinery as the post-publish reveal).
+            // Notifications are about YOUR OWN content — open the track in the
+            // player (same machinery as the post-publish reveal / push taps).
             NotificationCenter.default.post(name: .openOwnPost, object: nil, userInfo: ["trackId": id])
         } else if item.objectType == "listing", let id = item.objectId {
             NotificationCenter.default.post(name: .openOwnPost, object: nil, userInfo: ["listingId": id])
+        } else if let userId = item.actor?.userId {
+            router.navigateToProfile(userId: userId)
         }
     }
 

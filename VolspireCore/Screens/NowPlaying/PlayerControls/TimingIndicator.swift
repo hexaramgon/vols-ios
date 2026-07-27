@@ -9,6 +9,9 @@ import SwiftUI
 
 struct TimingIndicator: View {
     let spacing: CGFloat
+    /// Minimized (immersive video): the blurred backdrop is gone, so the time
+    /// labels sit on bare video and need a shadow to stay readable.
+    var minimized: Bool = false
     @Environment(PlayerController.self) var controller
     @State private var scrubValue: Double = 0
 
@@ -47,6 +50,9 @@ struct TimingIndicator: View {
             }
         )
         .sliderStyle(.playbackProgress)
+        // Comet sweep along the track while the current track buffers (pairs
+        // with the play button's spinner).
+        .sliderLoading(controller.isBuffering)
         // Glide between progress ticks instead of stepping (most visible on
         // short tracks, where each tick is a large slice of the bar). Off
         // while scrubbing so the thumb tracks the finger with zero lag.
@@ -60,6 +66,9 @@ private extension TimingIndicator {
     func label(_ text: String) -> some View {
         Text(text)
             .font(.appFont.timingIndicator)
+            // Light, not strong: at this type size the tight layer read as a
+            // bolder font rather than a shadow.
+            .playerOverlayShadow(minimized ? .light : .off)
             .padding(.top, 11)
     }
 

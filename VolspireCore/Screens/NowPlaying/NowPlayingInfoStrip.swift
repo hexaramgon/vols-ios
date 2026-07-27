@@ -113,11 +113,17 @@ private extension NowPlayingInfoStrip {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    // Everything rides the panel's BOTTOM edge: the About block (header,
-    // description, tags) bottom-left, the credits affordance bottom-right,
-    // with the panel's width as the horizontal space between them.
+    // The panel as a whole rides the strip's BOTTOM edge (see `infoPanel`): the
+    // About block left, the credits affordance right, with the panel's width as
+    // the horizontal space between them.
+    //
+    // The two are centred against EACH OTHER rather than sharing a bottom edge.
+    // The facepile is 28pt tall (24pt avatars + 2pt), while a one-line
+    // description is ~16pt — bottom-aligning left that single line sitting
+    // visibly below the "Credits" label it should read alongside. At the two-line
+    // cap the heights are near enough that centring looks the same as before.
     var descriptionPanel: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
             // The whole About block opens the full About sheet — the strip
             // truncates (one description line, capped tag row + "…"), the
             // sheet shows everything.
@@ -130,8 +136,6 @@ private extension NowPlayingInfoStrip {
                 )
             } label: {
                 VStack(alignment: .leading, spacing: 8) {
-                    panelHeader("About")
-
                     // Layout only ever changes on a CONFIRMED response: the
                     // skeleton holds the previous description's exact height,
                     // then the block animates to the new track's real height
@@ -147,7 +151,7 @@ private extension NowPlayingInfoStrip {
                             .font(.appFootnote)
                             .lineLimit(2)
                             .foregroundStyle(Theme.body)
-                            .infoTextShadow()
+                            .playerOverlayShadow()
                             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { descHeight = $0 })
                             .transition(.opacity)
                     } else {
@@ -155,7 +159,7 @@ private extension NowPlayingInfoStrip {
                             .font(.appFootnote)
                             .italic()
                             .foregroundStyle(Theme.muted)
-                            .infoTextShadow()
+                            .playerOverlayShadow()
                             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { descHeight = $0 })
                             .transition(.opacity)
                     }
@@ -198,10 +202,10 @@ private extension NowPlayingInfoStrip {
                 Text(creditPeople.count > 3 ? "Credits · \(creditPeople.count)" : "Credits")
                     .font(.appCaption2Semibold)
                     .foregroundStyle(Theme.body)
-                    .infoTextShadow()
+                    .playerOverlayShadow()
                 LucideIcon(.chevronRight, .xs)
                     .foregroundStyle(Theme.muted)
-                    .infoTextShadow()
+                    .playerOverlayShadow()
             }
             .padding(.vertical, 2)
             .contentShape(.rect)
@@ -264,23 +268,50 @@ private extension NowPlayingInfoStrip {
         .accessibilityLabel(label)
     }
 
-    func panelHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.appMicroSemibold)
-            .tracking(0.6)
-            .foregroundStyle(Theme.header)
-            .textCase(.uppercase)
-            .infoTextShadow()
-    }
-
 }
 
-private extension View {
-    /// Soft dark drop shadow so white text stays legible over a bright video.
-    /// Applied per-text (not the whole panel) so the white-backed tag chips are
-    /// left untouched.
-    func infoTextShadow() -> some View {
-        shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+/// How hard `playerOverlayShadow()` works, which depends on what's behind the
+/// element. The minimized/immersive transport sits on BARE video; the default
+/// player keeps a blurred backdrop that already does most of the separating.
+enum PlayerOverlayShadow {
+    /// On bare video, body size or larger — title, artist, transport glyphs.
+    case strong
+    /// On bare video, small type (the scrubber's time labels). `.strong`'s tight
+    /// layer visibly fattens glyphs at that size — it read as a bolder weight
+    /// rather than a shadow — so this is one soft pool with no hard edge.
+    case light
+    /// Over the blurred player: the long-standing gentle shadow. Enough to keep
+    /// white text off a busy backdrop without darkening the whole panel.
+    case subtle
+    /// No shadow — the blur behind it is doing the work.
+    case off
+}
+
+extension View {
+    /// Dark drop shadow so white content stays legible over video or artwork.
+    /// Shared by everything that floats over the player surface. Applied
+    /// per-element (not to a whole panel) so white-backed pieces — the tag
+    /// chips, the play circle — are left untouched.
+    ///
+    /// `.strong` is two layers rather than one: a tight, near-opaque shadow
+    /// hugging the glyphs gives the letterforms a hard edge, and a wide soft one
+    /// pools darkness behind the whole line. A single shadow can only do one of
+    /// those — pushing one radius far enough to darken the backdrop turns the
+    /// text into a grey halo, which is why the description washed out over
+    /// bright artwork at radius 3.
+    @ViewBuilder
+    func playerOverlayShadow(_ weight: PlayerOverlayShadow = .strong) -> some View {
+        switch weight {
+        case .strong:
+            shadow(color: .black.opacity(0.75), radius: 2, y: 1)
+                .shadow(color: .black.opacity(0.45), radius: 8)
+        case .light:
+            shadow(color: .black.opacity(0.5), radius: 4, y: 1)
+        case .subtle:
+            shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+        case .off:
+            self
+        }
     }
 }
 

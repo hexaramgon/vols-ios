@@ -44,6 +44,27 @@ class SystemMediaInterface {
         center.playbackState = info.isPlaying ? .playing : .paused
     }
 
+    /// Resets the lock-screen scrubber to `info`'s (elapsed 0) position when the SAME
+    /// track loops on repeat. At a track's natural end iOS has already interpolated the
+    /// scrubber to the duration; a plain re-push of elapsed 0 on the same item — arriving
+    /// exactly as iOS considers the track finished — is ignored, so the scrubber sticks at
+    /// the end while audio restarts from the top. Pushing a PAUSED snapshot at 0 first
+    /// makes iOS drop its ended-at-duration clock, then resuming on the next runloop (so
+    /// the media daemon samples the paused state in between) re-anchors it cleanly.
+    func setNowPlayingInfoReanchoring(_ info: NowPlayingInfo) {
+        let center = MPNowPlayingInfoCenter.default()
+        var frozen = info.mpNowPlayingInfo
+        frozen[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
+        center.nowPlayingInfo = frozen
+        center.playbackState = .paused
+        let live = info.mpNowPlayingInfo
+        let isPlaying = info.isPlaying
+        Task { @MainActor in
+            center.nowPlayingInfo = live
+            center.playbackState = isPlaying ? .playing : .paused
+        }
+    }
+
     /// Removes the lock-screen now-playing entry entirely (sign-out teardown).
     func clearNowPlayingInfo() {
         let center = MPNowPlayingInfoCenter.default()

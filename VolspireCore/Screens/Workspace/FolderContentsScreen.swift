@@ -99,7 +99,7 @@ struct FolderContentsScreen: View {
     /// Top-right "…" — folder options (owner only).
     private var optionsButton: some View {
         Button { viewModel.showOptions = true } label: {
-            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
+            LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                 .foregroundStyle(.white)
                 .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
         }
@@ -222,7 +222,7 @@ private extension FolderContentsScreen {
             Spacer(minLength: 8)
 
             Button { fileForOptions = file } label: {
-                LucideIcon(.ellipsis, .xl)
+                LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                     .foregroundStyle(Color.vText3)
                     .frame(width: 40, height: 44)
                     .contentShape(.rect)
@@ -264,7 +264,10 @@ private extension FolderContentsScreen {
             return .init(
                 mediaId: file.fileId, fileId: file.fileId,           // workspace file → file comments
                 title: file.name, artist: file.uploaderUsername ?? "",
-                audioURL: audio, coverURL: nil
+                audioURL: audio, coverURL: nil,
+                // A file has no track detail, so its uploader has to travel with
+                // the queue item for the player's artist line to be tappable.
+                artistUserId: file.ownerId
             )
         }
         return nil
@@ -434,7 +437,12 @@ private struct ManageMembersSheet: View {
     @Bindable var viewModel: FolderContentsViewModel
     @Environment(\.dismiss) private var dismiss
 
-    private let roles = ["viewer", "editor", "admin"]
+    /// Animation keys as plain strings, so the API structs need no Equatable.
+    private var resultKeys: [String] { viewModel.searchResults.map(\.userId) }
+    private var memberKeys: [String] { viewModel.members.map { "\($0.userId)-\($0.role)" } }
+    private var isFiltering: Bool {
+        !viewModel.memberSearch.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -444,14 +452,19 @@ private struct ManageMembersSheet: View {
                 subtitle: viewModel.folderName
             ) { dismiss() }
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 24) {
                     addSection
                     membersSection
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
                 .padding(.bottom, 24)
+                // Every list edit (add, remove, filter, role change) glides
+                // instead of popping — keyed on derived ids, not the structs.
+                .animation(.smooth(duration: 0.28), value: resultKeys)
+                .animation(.smooth(duration: 0.28), value: memberKeys)
             }
+            .scrollDismissesKeyboard(.interactively)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .presentationDetents([.medium, .large])
@@ -463,52 +476,108 @@ private struct ManageMembersSheet: View {
     }
 
     private var addSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("ADD MEMBERS").font(.appLabel).tracking(0.6).foregroundStyle(.white.opacity(0.45))
-            HStack(spacing: 8) {
-                LucideIcon(.search, .sm).foregroundStyle(.white.opacity(0.4))
-                TextField("", text: $viewModel.memberSearch, prompt: Text("Search collaborators…").foregroundColor(.white.opacity(0.35)))
-                    .font(.appCalloutRegular).foregroundStyle(.white).tint(.white)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                if viewModel.isSearchingUsers { ProgressView().controlSize(.small).tint(.white) }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 11)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.white.opacity(0.08)))
-            .onChange(of: viewModel.memberSearch) { _, _ in Task { await viewModel.searchUsers() } }
+        VStack(alignment: .leading, spacing: 10) {
+            searchField
 
-            if !viewModel.searchResults.isEmpty {
-                VStack(spacing: 2) {
+            // The list under the field is self-explaining: your remaining
+            // collaborators by default, live results while typing.
+            Text(isFiltering ? "RESULTS" : "YOUR COLLABORATORS")
+                .font(.appLabel).tracking(0.6).foregroundStyle(.white.opacity(0.45))
+                .padding(.top, 4)
+                .contentTransition(.opacity)
+                .animation(.smooth(duration: 0.2), value: isFiltering)
+
+            if viewModel.isLoadingCollaborators && viewModel.searchResults.isEmpty {
+                ProgressView().tint(.white.opacity(0.6))
+                    .frame(maxWidth: .infinity).padding(.vertical, 18)
+            } else if viewModel.searchResults.isEmpty {
+                emptyResultsHint
+                    .transition(.opacity)
+            } else {
+                VStack(spacing: 8) {
                     ForEach(viewModel.searchResults) { searchResultRow($0) }
                 }
-                .padding(.top, 2)
             }
         }
     }
 
-    private func searchResultRow(_ user: ApiUserSummary) -> some View {
-        Button { Task { await viewModel.addMember(user) } } label: {
-            HStack(spacing: 12) {
-                avatar(viewModel.avatarURL(user.profileImageUrl))
-                Text(user.username ?? "user").font(.appCallout).foregroundStyle(.white).lineLimit(1)
-                Spacer()
-                if viewModel.memberActionId == user.userId {
-                    ProgressView().controlSize(.small).tint(.white)
-                } else {
-                    LucideIcon(.circlePlus, .lg).foregroundStyle(Color.brand)
+    private var searchField: some View {
+        HStack(spacing: 10) {
+            LucideIcon(.search, .sm).foregroundStyle(.white.opacity(0.4))
+            TextField("", text: $viewModel.memberSearch, prompt: Text("Search your collaborators…").foregroundColor(.white.opacity(0.35)))
+                .font(.appCalloutRegular).foregroundStyle(.white).tint(.white)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+            if isFiltering {
+                Button {
+                    viewModel.memberSearch = ""
+                } label: {
+                    LucideIcon(.circleX, .sm)
+                        .foregroundStyle(.white.opacity(0.4))
+                        .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
+                .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
-            .padding(.horizontal, 10).padding(.vertical, 8)
-            .contentShape(.rect)
         }
-        .buttonStyle(.plain)
-        .disabled(viewModel.memberActionId != nil)
+        .padding(.horizontal, 14)
+        .frame(height: 46)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .animation(.smooth(duration: 0.2), value: isFiltering)
+        .onChange(of: viewModel.memberSearch) { _, _ in Task { await viewModel.searchUsers() } }
+    }
+
+    /// Explains WHY the list is empty — no matches vs. no collaborators vs.
+    /// everyone's already in — instead of silently showing nothing.
+    private var emptyResultsHint: some View {
+        let message: String = if isFiltering {
+            "No collaborators match “\(viewModel.memberSearch.trimmingCharacters(in: .whitespaces))”."
+        } else if viewModel.allCollaborators.isEmpty {
+            "No collaborators yet — connect with people from their profile, then add them here."
+        } else {
+            "All of your collaborators are already in this folder."
+        }
+        return Text(message)
+            .font(.appFootnote)
+            .foregroundStyle(Color.vText3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func searchResultRow(_ user: ApiUserSummary) -> some View {
+        HStack(spacing: 12) {
+            avatar(viewModel.avatarURL(user.profileImageUrl))
+            Text(user.username ?? "user").font(.appCalloutSemibold).foregroundStyle(.white).lineLimit(1)
+            Spacer(minLength: 8)
+            if viewModel.memberActionId == user.userId {
+                ProgressView().controlSize(.small).tint(.white)
+            } else {
+                // Only the pill is tappable — the row itself is inert, so a
+                // stray tap on the card can't add someone by accident.
+                Button { Task { await viewModel.addMember(user) } } label: {
+                    HStack(spacing: 4) {
+                        LucideIcon(.plus, .xs)
+                        Text("Add").font(.appCaptionMedium)
+                    }
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(.white, in: Capsule())
+                    .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .disabled(viewModel.memberActionId != nil)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .transition(.opacity.combined(with: .scale(scale: 0.97)))
     }
 
     private var membersSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("MEMBERS (\(viewModel.members.count))").font(.appLabel).tracking(0.6).foregroundStyle(.white.opacity(0.45))
+            Text("IN THIS FOLDER (\(viewModel.members.count))")
+                .font(.appLabel).tracking(0.6).foregroundStyle(.white.opacity(0.45))
             if viewModel.isLoadingMembers && viewModel.members.isEmpty {
                 ProgressView().tint(.white.opacity(0.6)).frame(maxWidth: .infinity).padding(.vertical, 30)
             } else {
@@ -524,10 +593,7 @@ private struct ManageMembersSheet: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
                 avatar(viewModel.avatarURL(member.profileImageUrl))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(member.username ?? "user").font(.appCalloutSemibold).foregroundStyle(.white).lineLimit(1)
-                    Text(roleDescription(member.role)).font(.appCaption).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
-                }
+                Text(member.username ?? "user").font(.appCalloutSemibold).foregroundStyle(.white).lineLimit(1)
                 Spacer(minLength: 8)
                 if isOwnerMember {
                     HStack(spacing: 4) {
@@ -540,45 +606,68 @@ private struct ManageMembersSheet: View {
                     ProgressView().controlSize(.small).tint(.white)
                 } else {
                     Button { Task { await viewModel.removeMember(member) } } label: {
-                        LucideIcon(.circleX, .lg).foregroundStyle(Color.vDestructive)
+                        Text("Remove").font(.appCaptionMedium)
+                            .foregroundStyle(Color.vDestructive)
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                            .background(Color.vDestructive.opacity(0.14), in: Capsule())
+                            .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
                 }
             }
             if !isOwnerMember {
-                HStack(spacing: 6) {
-                    ForEach(roles, id: \.self) { roleChip(member: member, role: $0) }
+                MemberRolePicker(member: member) { role in
+                    Task { await viewModel.updateMemberRole(member, role: role) }
                 }
             }
         }
         .padding(12)
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    private func roleChip(member: ApiFolderMember, role: String) -> some View {
-        let selected = member.role == role
-        return Button { Task { await viewModel.updateMemberRole(member, role: role) } } label: {
-            Text(role.capitalized)
-                .font(selected ? .appLabel : .appCaptionMedium)
-                .foregroundStyle(selected ? .white : .white.opacity(0.6))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
-                .background(selected ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(Color.white.opacity(0.06)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .scale(scale: 0.97)))
     }
 
     private func avatar(_ url: URL?) -> some View {
         AvatarView(url: url, name: nil, size: 38)
     }
 
-    private func roleDescription(_ role: String) -> String {
-        switch role {
-        case "owner": "Full control over the folder"
-        case "admin": "Can manage folder and members"
-        case "editor": "Can view, upload, and edit files"
-        default: "Can only view files"
+}
+
+/// The viewer/editor/admin segmented picker on a member card. One gradient
+/// highlight SLIDES between segments (matched geometry) — with the role
+/// updated optimistically in the view model, the slide is instant.
+private struct MemberRolePicker: View {
+    let member: ApiFolderMember
+    let onPick: (String) -> Void
+
+    private static let roles = ["viewer", "editor"]
+    @Namespace private var highlight
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.roles, id: \.self) { role in
+                let selected = member.role == role
+                Button { onPick(role) } label: {
+                    Text(role.capitalized)
+                        .font(selected ? .appLabel : .appCaptionMedium)
+                        .foregroundStyle(selected ? .white : .white.opacity(0.6))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 7)
+                        .background {
+                            if selected {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(LinearGradient.sendAccent)
+                                    .matchedGeometryEffect(id: "role", in: highlight)
+                            } else {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color.white.opacity(0.06))
+                            }
+                        }
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
         }
+        .animation(.smooth(duration: 0.28), value: member.role)
     }
 }
 

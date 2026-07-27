@@ -90,7 +90,7 @@ struct PlayerControls: View {
         VStack(spacing: spacing) {
             trackInfo
 
-            TimingIndicator(spacing: spacing)
+            TimingIndicator(spacing: spacing, minimized: minimized)
                 .padding(.top, spacing)
                 .padding(.horizontal, ViewConst.playerCardPaddings)
                 .padding(.horizontal, -ElasticSliderConfig.playbackProgress.growth)
@@ -126,6 +126,11 @@ private extension PlayerControls {
 }
 
 private extension PlayerControls {
+    /// Minimized is the immersive state: the blurred backdrop is gone and the
+    /// transport sits on bare video, so it needs the heavy shadow. The default
+    /// player keeps its blur, and there the gentle long-standing one is enough.
+    var overlayShadow: PlayerOverlayShadow { minimized ? .strong : .subtle }
+
     var palette: Palette.PlayerCard.Type {
         UIColor.palette.playerCard.self
     }
@@ -159,7 +164,9 @@ private extension PlayerControls {
             Button {
                 showTrackOptions = true
             } label: {
-                LucideIcon(.ellipsis, .xl)
+                // Same size token as the hero-overlay "…" buttons (profile /
+                // detail pages), so all the floating ellipses match.
+                LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                     .foregroundStyle(Color(palette.translucent))
             }
             .buttonStyle(.plain)
@@ -200,15 +207,17 @@ private extension PlayerControls {
                         .transformEffect(.identity)
                         .font(.appTitle2)
                         .foregroundStyle(Color(palette.opaque))
-                        .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+                        .playerOverlayShadow(overlayShadow)
                     MarqueeText(subtitle, config: cfg)
                         .transformEffect(.identity)
                         .font(.appBodyLarge)
                         .foregroundStyle(.white)
-                        .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+                        .playerOverlayShadow(overlayShadow)
                         .contentShape(.rect)
                         .onTapGesture {
-                            if let userId = model.trackDetail?.artist?.userId {
+                            // Resolves for workspace files too (their uploader),
+                            // not just tracks with loaded detail.
+                            if let userId = model.currentArtistUserId {
                                 model.pendingProfileNavigation = userId
                             }
                         }
@@ -222,15 +231,17 @@ private extension PlayerControls {
             .animation(.smooth(duration: 0.3), value: model.display)
             .padding(.leading, ViewConst.playerCardPaddings)
 
-            // Workspace files aren't real, shareable tracks — drop the save /
-            // playback-fx actions; only comments apply.
-            if model.currentFileId == nil {
-                HStack(spacing: 18) {
-                    saveButton
-                    fxButton
-                }
-                .padding(.trailing, ViewConst.playerCardPaddings)
+            // Workspace files aren't real, shareable tracks — no save / playback-fx
+            // actions. Kept in layout (invisible), like the "…" above: removing
+            // them re-flowed the title as a folder queue stepped from a track to a
+            // file, which is exactly the movement this player is trying not to make.
+            HStack(spacing: 18) {
+                saveButton
+                fxButton
             }
+            .padding(.trailing, ViewConst.playerCardPaddings)
+            .opacity(model.currentFileId == nil ? 1 : 0)
+            .allowsHitTesting(model.currentFileId == nil)
         }
         .sheet(isPresented: $showTrackOptions, onDismiss: runPendingPlayerAction) { trackOptionsSheet }
         .sheet(isPresented: $showReportSong) {
@@ -255,7 +266,7 @@ private extension PlayerControls {
         } label: {
             LucideIcon(model.isSaved ? .bookmarkFill : .bookmark, .xl)
                 .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+                .playerOverlayShadow(overlayShadow)
         }
     }
 
@@ -267,7 +278,7 @@ private extension PlayerControls {
         } label: {
             LucideIcon(.slidersHorizontal, .xl)
                 .foregroundStyle(isActive ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(Color.white))
-                .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+                .playerOverlayShadow(overlayShadow)
         }
     }
 

@@ -112,12 +112,7 @@ struct ProfileScreen: View {
             // Report / Block — only on other people's profiles.
             if !isOwnProfile {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showUserOptions = true } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: ViewConst.headerIconSize, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
-                    }
+                    HeaderIconButton(icon: .ellipsis, shadow: true, size: ViewConst.heroOverlayIconSize) { showUserOptions = true }
                 }
             }
         }

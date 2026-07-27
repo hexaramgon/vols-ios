@@ -13,12 +13,19 @@ struct HeaderIconButton: View {
     let icon: LucideIcon.Name
     /// Unread indicator — a small dot on the icon's top-trailing corner.
     var showDot: Bool = false
+    /// Soft drop shadow for buttons floating over hero art (profile / detail
+    /// pages) — keeps the glyph legible on bright covers.
+    var shadow: Bool = false
+    /// Glyph size — header rows use the default; hero-overlay buttons pass
+    /// `ViewConst.heroOverlayIconSize`.
+    var size: CGFloat = ViewConst.headerIconSize
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            LucideIcon(icon, size: ViewConst.headerIconSize)
+            LucideIcon(icon, size: size)
                 .foregroundStyle(.white)
+                .shadow(color: .black.opacity(shadow ? 0.5 : 0), radius: 2, y: 1)
                 .overlay(alignment: .topTrailing) {
                     if showDot {
                         Circle()

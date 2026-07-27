@@ -51,11 +51,11 @@ extension HomeScreen {
                             .entranceReveal(contentAppeared, index: 3, distance: 0)
                     }
                     if !viewModel.demos.isEmpty {
-                        trackRail("Demos", subtitle: "Works in progress", tracks: viewModel.demos)
+                        trackRail("Short Tracks", subtitle: "Under three minutes", tracks: viewModel.demos)
                             .entranceReveal(contentAppeared, index: 4, distance: 0)
                     }
                     if !viewModel.samples.isEmpty {
-                        trackRail("Samples", subtitle: "Loops & one-shots", tracks: viewModel.samples)
+                        trackRail("Snippets", subtitle: "Loops & one-shots", tracks: viewModel.samples)
                             .entranceReveal(contentAppeared, index: 5, distance: 0)
                     }
                     if !viewModel.feedTracks.isEmpty {

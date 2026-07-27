@@ -19,6 +19,10 @@ struct PlayerButtons: View {
     private var opaque: Color { Color(Palette.PlayerCard.opaque) }
     private var playGlyphSize: IconSize { compact ? .xxl : .hero }
     private var playCircle: CGFloat { compact ? 56 : 72 }
+    /// Compact IS the minimized/immersive state, where the blurred backdrop is
+    /// gone and these glyphs sit on bare video. In the default player the blur
+    /// behind them is enough, which is how they shipped.
+    private var glyphShadow: PlayerOverlayShadow { compact ? .strong : .off }
 
     var body: some View {
         let switchDisabled = !model.commandProfile.isSwitchTrackEnabled
@@ -29,12 +33,12 @@ struct PlayerButtons: View {
             Button { model.toggleShuffle() } label: {
                 LucideIcon(.shuffle, size: sideSize)
                     .foregroundStyle(model.isShuffleOn ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(opaque))
+                    .playerOverlayShadow(glyphShadow)
                     // Declared-instant tint. Same value-scoped idiom as the action-row
                     // like/save icons (which declare a 0.18s ease) — owning the toggle's
                     // animation means no ambient transaction can leak in, while layout
                     // changes (resize/move when minimizing) still animate.
                     .animation(nil, value: model.isShuffleOn)
-                    .compactChip(compact)
             }
 
             Spacer(minLength: 0)
@@ -42,7 +46,7 @@ struct PlayerButtons: View {
             Button { model.onBackward() } label: {
                 LucideIcon(.skipBack, skipSize)
                     .foregroundStyle(Color(Palette.PlayerCard.opaque))
-                    .compactChip(compact)
+                    .playerOverlayShadow(glyphShadow)
             }
             .disabled(switchDisabled)
             .opacity(switchDisabled ? 0.4 : 1)
@@ -56,7 +60,13 @@ struct PlayerButtons: View {
                     Circle()
                         .fill(.white)
                         .frame(width: playCircle, height: playCircle)
-                        .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+                        // Deliberately NOT `playerOverlayShadow()`: that's tuned
+                        // for thin glyphs, and its tight near-black layer would
+                        // draw a hard rim around a solid 56–72pt disc. This one
+                        // reads as depth — deepened only on bare video, where
+                        // the circle has no blur to separate it.
+                        .shadow(color: .black.opacity(compact ? 0.45 : 0.25),
+                                radius: compact ? 10 : 8, y: 4)
                     LucideIcon(model.state.isPlaying ? .pauseFill : .playFill, playGlyphSize)
                         .foregroundStyle(.black)
                         .offset(x: model.state.isPlaying ? 0 : 2) // nudge the play triangle to optical center
@@ -74,7 +84,7 @@ struct PlayerButtons: View {
             Button { model.onForward() } label: {
                 LucideIcon(.skipForward, skipSize)
                     .foregroundStyle(Color(Palette.PlayerCard.opaque))
-                    .compactChip(compact)
+                    .playerOverlayShadow(glyphShadow)
             }
             .disabled(switchDisabled)
             .opacity(switchDisabled ? 0.4 : 1)
@@ -84,38 +94,15 @@ struct PlayerButtons: View {
             Button { model.toggleRepeat() } label: {
                 LucideIcon(.`repeat`, size: sideSize)
                     .foregroundStyle(model.isRepeatOn ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(opaque))
+                    .playerOverlayShadow(glyphShadow)
                     // Declared-instant tint (see shuffle above).
                     .animation(nil, value: model.isRepeatOn)
-                    .compactChip(compact)
             }
         }
         .buttonStyle(.plain)
     }
 }
 
-private extension View {
-    /// In minimized (immersive) mode the side transport icons lose the frost behind
-    /// them, so give each a small darkened circle so it stays visible over the video.
-    func compactChip(_ active: Bool) -> some View {
-        modifier(CompactChip(active: active))
-    }
-}
-
-private struct CompactChip: ViewModifier {
-    let active: Bool
-    func body(content: Content) -> some View {
-        content
-            .padding(active ? 10 : 0)
-            .background(
-                // A plain translucent scrim, not a material: five per-button
-                // backdrop blurs over live video each cost a blur pass every
-                // frame, and at this size the darkened look reads the same.
-                Circle()
-                    .fill(.black.opacity(0.35))
-                    .opacity(active ? 1 : 0)
-            )
-    }
-}
 
 /// A button style that never changes appearance on press (no dim, no recolor,
 /// no scale) — used for the play/pause circle so it stays static while held.

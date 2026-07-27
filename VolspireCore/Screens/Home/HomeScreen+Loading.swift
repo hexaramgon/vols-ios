@@ -66,33 +66,44 @@ extension HomeScreen {
         .scrollDisabled(true)
     }
 
-    /// Twitter-style listing-row bones — Collab listings tab.
-    var collabFeedSkeleton: some View {
+    /// Twitter-style listing-row bones, shaped to `CollabListingRow` (avatar +
+    /// username · title · two description lines · stats). Rows only — the caller
+    /// supplies the container — so Recent's full-screen initial load and Saved's
+    /// in-feed load shimmer identically instead of Saved falling back to the
+    /// generic 2-line `SkeletonRows`.
+    var collabListingBones: some View {
         let bone = Color.white.opacity(0.08)
-        return ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(0 ..< 6, id: \.self) { _ in
-                    HStack(alignment: .top, spacing: 12) {
-                        Circle().fill(bone).frame(width: 44, height: 44)
-                        VStack(alignment: .leading, spacing: 8) {
-                            Capsule().fill(bone).frame(width: 140, height: 11)
-                            Capsule().fill(bone).frame(width: 220, height: 14)
-                            Capsule().fill(bone).frame(maxWidth: .infinity).frame(height: 11)
-                            Capsule().fill(bone).frame(width: 180, height: 11)
-                            HStack(spacing: 20) {
-                                Capsule().fill(bone).frame(width: 40, height: 10)
-                                Capsule().fill(bone).frame(width: 40, height: 10)
-                            }
-                            .padding(.top, 2)
+        return LazyVStack(spacing: 0) {
+            ForEach(0 ..< 6, id: \.self) { _ in
+                HStack(alignment: .top, spacing: 12) {
+                    Circle().fill(bone).frame(width: 44, height: 44)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Capsule().fill(bone).frame(width: 140, height: 11)
+                        Capsule().fill(bone).frame(width: 220, height: 14)
+                        Capsule().fill(bone).frame(maxWidth: .infinity).frame(height: 11)
+                        Capsule().fill(bone).frame(width: 180, height: 11)
+                        HStack(spacing: 20) {
+                            Capsule().fill(bone).frame(width: 40, height: 10)
+                            Capsule().fill(bone).frame(width: 40, height: 10)
                         }
+                        .padding(.top, 2)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    Rectangle().fill(Color.vBorder).frame(height: 0.5).padding(.leading, 16)
                 }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                Rectangle().fill(Color.vBorder).frame(height: 0.5).padding(.leading, 16)
             }
-            .padding(.top, headerHeight + 14)
-            .shimmering()
+        }
+        .shimmering()
+    }
+
+    /// Full-screen initial-board skeleton — the bones in their own scroll view.
+    var collabFeedSkeleton: some View {
+        ScrollView {
+            collabListingBones
+                // Matches the loaded feed (flush under the bar's pinned hairline)
+                // so nothing shifts as the bones cross-fade into real rows.
+                .padding(.top, headerHeight)
         }
         .scrollIndicators(.hidden)
         .scrollDisabled(true)

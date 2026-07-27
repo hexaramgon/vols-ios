@@ -73,15 +73,15 @@ private extension ProfileMarketTab {
                     ListingTagRow(tags: tags)
                 }
 
-                // Engagement on the left, status · time on the bottom right.
+                // Engagement on the left, time · status on the bottom right.
                 HStack(spacing: 8) {
                     ListingStatsRow(listing: listing)
                     Spacer(minLength: 8)
-                    statusBadge(listing)
-                    Text("· \(MessageTime.ago(MessageTime.parse(listing.createdAt)))")
+                    Text("\(MessageTime.ago(MessageTime.parse(listing.createdAt))) ·")
                         .font(.appCaption)
                         .foregroundStyle(Color.vText3)
                         .lineLimit(1)
+                    statusBadge(listing)
                 }
                 .padding(.top, 2)
             }

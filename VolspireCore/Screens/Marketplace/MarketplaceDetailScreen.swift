@@ -150,12 +150,7 @@ private extension MarketplaceDetailScreen {
     /// Three-dots affordance, styled like the collab listing's — shadowed so it
     /// stays legible over the cover, then sits on the solid bar once scrolled.
     var optionsButton: some View {
-        Button { showOptions = true } label: {
-            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
-        }
-        .buttonStyle(.plain)
+        HeaderIconButton(icon: .ellipsis, shadow: true, size: ViewConst.heroOverlayIconSize) { showOptions = true }
     }
 
     /// True when the signed-in user owns this listing.

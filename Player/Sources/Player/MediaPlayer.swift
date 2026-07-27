@@ -141,13 +141,13 @@ public final class MediaPlayer {
     public func forward() {
         // Repeat-one locks playback to the current track — skipping just restarts it.
         if repeatEnabled {
-            seek(to: 0)
+            loopToStart()
             return
         }
         // A single-track queue wraps to itself: restart instead of a dead button
         // (e.g. playing the only track on someone's profile).
         if items.count == 1 {
-            seek(to: 0)
+            loopToStart()
             return
         }
         guard items.count > 1,
@@ -163,6 +163,16 @@ public final class MediaPlayer {
     public func seek(to time: TimeInterval) {
         urlPlayer.seek(to: time)
         updateSystemNowPlaying()
+    }
+
+    /// Restart the current track from the top for a repeat-one loop or a single-track
+    /// queue wrap. Same as `seek(to: 0)` but force-re-anchors the lock-screen scrubber:
+    /// when the loop fires at the track's natural end, a plain push of elapsed 0 is
+    /// ignored and the scrubber sticks at the end while audio restarts (see
+    /// `SystemMediaInterface.setNowPlayingInfoReanchoring`).
+    private func loopToStart() {
+        urlPlayer.seek(to: 0)
+        updateSystemNowPlaying(reanchor: true)
     }
 
     public func applyEffects(_ effects: AudioEffects) {
@@ -202,12 +212,12 @@ public final class MediaPlayer {
     public func backward() {
         // Repeat-one locks playback to the current track — skipping just restarts it.
         if repeatEnabled {
-            seek(to: 0)
+            loopToStart()
             return
         }
         // Single-track queue: previous always means "start over".
         if items.count == 1 {
-            seek(to: 0)
+            loopToStart()
             return
         }
         // If more than 3 seconds in, restart the current track. Route through
@@ -359,7 +369,10 @@ private extension MediaPlayer {
     /// interpolates the scrubber between pushes. Call this only when something
     /// actually changes (track, play/pause, seek, speed) — NOT on every progress
     /// tick.
-    func updateSystemNowPlaying() {
+    /// `reanchor: true` forces the lock-screen scrubber to snap to the pushed elapsed
+    /// time — needed only when the SAME track loops on repeat, where a plain push is
+    /// ignored and the scrubber sticks at the end (see `setNowPlayingInfoReanchoring`).
+    func updateSystemNowPlaying(reanchor: Bool = false) {
         guard let mediaID = state.currentMediaID,
               let mediaIndex = items.firstIndex(of: mediaID),
               let nowPlayingMeta
@@ -373,16 +386,19 @@ private extension MediaPlayer {
             duration: urlPlayer.duration
         )
         if urlPlayer.duration > 0 { pushedDurationForCurrentTrack = true }
-        systemMediaInterface.setNowPlayingInfo(
-            .init(
-                meta: nowPlayingMeta,
-                artwork: cachedArtwork ?? UIImage(),
-                isPlaying: state.isPlaying,
-                playbackRate: Double(audioEffects.speed),
-                queue: .init(index: mediaIndex, count: items.count),
-                progress: prog
-            )
+        let info = NowPlayingInfo(
+            meta: nowPlayingMeta,
+            artwork: cachedArtwork ?? UIImage(),
+            isPlaying: state.isPlaying,
+            playbackRate: Double(audioEffects.speed),
+            queue: .init(index: mediaIndex, count: items.count),
+            progress: prog
         )
+        if reanchor {
+            systemMediaInterface.setNowPlayingInfoReanchoring(info)
+        } else {
+            systemMediaInterface.setNowPlayingInfo(info)
+        }
     }
 }
 
@@ -507,7 +523,7 @@ extension MediaPlayer: URLAudioPlayerDelegate {
         // no-ops when the target is already the current track, so it can't be
         // used to replay the same one.)
         if repeatEnabled || items.count == 1, state.currentMediaID != nil {
-            seek(to: 0)
+            loopToStart()
             return
         }
         if items.count > 1,

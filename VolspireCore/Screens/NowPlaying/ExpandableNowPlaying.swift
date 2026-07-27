@@ -57,15 +57,13 @@ struct ExpandableNowPlaying: View {
         expandableNowPlaying
             .onChange(of: expanded) {
                 if expanded {
-                    // A workspace file only has comments — open straight to it.
-                    if model.currentFileId != nil { selectedPanel = 1 }
                     stacked(progress: 1, withAnimation: true)
                 }
             }
-            // Lock to the comments panel for files (reset to artwork for real tracks).
-            .onChange(of: model.currentFileId) { _, fileId in
-                selectedPanel = fileId != nil ? 1 : 0
-            }
+            // NB: no panel forcing when `currentFileId` changes. Files open on the
+            // artwork panel like tracks; yanking the pager mid-playback as the
+            // queue stepped between a folder's tracks and its files was half the
+            // jank there.
             // Leaving immersive eligibility (comments open, collapse, non-video
             // track) always restores the controls; entering starts with them shown.
             .onChange(of: immersiveEligible) { _, eligible in
@@ -322,7 +320,7 @@ private extension ExpandableNowPlaying {
     /// real track with the comments panel open) — when it is, a downward drag should
     /// only dismiss from the very top.
     private var commentsShowing: Bool {
-        model.currentFileId != nil || selectedPanel == 1
+        selectedPanel == 1
     }
 
     /// The cover used to GLIDE between the expanded artwork and the mini-player
@@ -359,8 +357,6 @@ private extension ExpandableNowPlaying {
         // Horizontal swipe: slide the panels live under the finger, with a little
         // resistance when there's no panel to slide to.
         if gestureAxis == .horizontal {
-            // Files are comments-only — no artwork panel to swipe to.
-            if model.currentFileId != nil { return }
             var x = dx
             if (selectedPanel == 0 && x > 0) || (selectedPanel == 1 && x < 0) {
                 x *= 0.25
@@ -389,7 +385,6 @@ private extension ExpandableNowPlaying {
 
         // Horizontal swipe → settle to the nearest panel (with a slide).
         if axis == .horizontal {
-            if model.currentFileId != nil { withAnimation(.smooth(duration: 0.32)) { pageDragX = 0 }; return }
             let projected = value.translation.width + value.velocity.width / 6
             withAnimation(.smooth(duration: 0.32)) {
                 if projected < -viewSize.width * 0.2 {

@@ -134,7 +134,7 @@ extension TrackListRow where Accessory == EmptyView {
             showsSeparator: true,
             onTap: {}
         ) {
-            LucideIcon(.ellipsis, .xl).foregroundStyle(Color.vText3)
+            LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize).foregroundStyle(Color.vText3)
         }
         TrackListRow(
             artwork: .placeholder(name: "Demo"),

@@ -12,6 +12,7 @@ import DesignSystem
 import Kingfisher
 import MediaLibrary
 import PhotosUI
+import Services
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -54,11 +55,17 @@ struct ConversationScreen: View {
             header
 
             if let viewModel {
+                // Context strip for threads born from a Collab Board listing —
+                // shows which listing this conversation is about, tap to open.
+                if let listing = viewModel.linkedListing {
+                    listingBanner(listing)
+                }
                 ChatThread(viewModel: viewModel, otherUsername: conversation.username)
             } else {
                 Color.clear
             }
         }
+        .animation(.smooth(duration: 0.3), value: viewModel?.linkedListing?.listingId)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.vBase.ignoresSafeArea())
         .task {
@@ -118,6 +125,59 @@ struct ConversationScreen: View {
         .blockUserDialog(username: conversation.username, isPresented: $showBlockConfirm) {
             blockOtherUser()
         }
+    }
+
+    // MARK: Listing context banner
+
+    /// Whether the listing context strip is showing — the header hands its
+    /// bottom hairline to the strip so the two read as one header block.
+    private var showsListingBanner: Bool { viewModel?.linkedListing != nil }
+
+    /// "About this listing" strip — one compact line under the header: a small
+    /// brand "Listing" tag, the title, and a chevron. Tap anywhere to open the
+    /// listing. Sits on the vBar chrome fill and carries the header's hairline.
+    private func listingBanner(_ listing: ApiListing) -> some View {
+        Button { router.navigateToCollabListing(listing) } label: {
+            HStack(spacing: 12) {
+                // Reply-quote treatment: a thin brand bar marks this as
+                // referenced context, no tag chrome needed.
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Color.brand)
+                    .frame(width: 3, height: 30)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Listing")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
+                    Text(listing.title)
+                        .font(.appSubheadlineSemibold)
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                if listing.status != "open" {
+                    Text("Closed")
+                        .font(.appCaptionMedium)
+                        .foregroundStyle(Color.vText3)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.white.opacity(0.06), in: Capsule())
+                }
+                LucideIcon(.chevronRight, .sm).foregroundStyle(Color.vText3)
+            }
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .padding(.vertical, 12)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .background {
+            // A shade apart from the header's vBase so the listing context
+            // reads as its own slim band within the header block.
+            Color.vBar
+                .overlay(alignment: .bottom) { Rectangle().fill(Color.vBorder).frame(height: 1) }
+        }
+        .transition(.opacity)
     }
 
     // MARK: Header
@@ -191,7 +251,13 @@ struct ConversationScreen: View {
         .padding(.bottom, 10)
         .background {
             Color.vBase
-                .overlay(alignment: .bottom) { Rectangle().fill(Color.vBorder).frame(height: 1) }
+                .overlay(alignment: .bottom) {
+                    // When the listing strip is showing it carries the hairline
+                    // instead, so header + strip read as one block.
+                    if !showsListingBanner {
+                        Rectangle().fill(Color.vBorder).frame(height: 1)
+                    }
+                }
                 .ignoresSafeArea(edges: .top)
         }
     }
@@ -199,7 +265,7 @@ struct ConversationScreen: View {
     /// Trailing "…" — report or block the other participant.
     private var conversationMenu: some View {
         Button { showUserOptions = true } label: {
-            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
+            LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .contentShape(.rect)

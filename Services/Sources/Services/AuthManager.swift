@@ -18,6 +18,11 @@ public final class AuthManager {
     public enum AuthState: Equatable {
         case loading
         case authenticated(userId: String)
+        /// A valid session whose auth user owns no profile row. Signing in with
+        /// Google/Apple mints the `auth.users` row on the spot, so this is where
+        /// a first-time social sign-in lands — the app stays shut until the
+        /// profile step runs `create_user`.
+        case needsProfile(userId: String)
         case unauthenticated
     }
 
@@ -79,9 +84,11 @@ public final class AuthManager {
     }
 
     private let client: SupabaseClient
+    private let service: SupabaseService
 
     public init(client: SupabaseClient = supabaseClient) {
         self.client = client
+        self.service = SupabaseService(client: client)
     }
 
     // MARK: - Session Lifecycle
@@ -97,16 +104,49 @@ public final class AuthManager {
     /// is rejected by the server.
     public func restoreSession() async {
         if let session = client.auth.currentSession {
-            setAuthenticated(session)
+            // Open from the stored session immediately, then confirm the
+            // profile in the background: blocking the splash on a round-trip
+            // would undo the offline-first launch this method exists to protect.
+            // A definitive answer still demotes (or signs out) a moment later.
+            state = .authenticated(userId: session.lowercasedUserId)
+            Task { await resolve(session) }
         } else {
             state = .unauthenticated
         }
     }
 
-    /// The one place `state` flips to authenticated — the id is normalized to
-    /// DB casing (see `Session.lowercasedUserId`).
-    private func setAuthenticated(_ session: Session) {
-        state = .authenticated(userId: session.lowercasedUserId)
+    /// The one place `state` flips out of `.unauthenticated` — the id is
+    /// normalized to DB casing (see `Session.lowercasedUserId`), and the app
+    /// only opens for a session that actually owns a profile row.
+    ///
+    /// A session alone never meant an account exists: nothing server-side
+    /// creates `public.users`, so a first-time "Continue with Google" used to
+    /// land straight in the app with no profile, where every write failed a
+    /// foreign key (analytics, push tokens, uploading a track).
+    private func resolve(_ session: Session) async {
+        let userId = session.lowercasedUserId
+        switch await accountStatus() {
+        case .active:
+            state = .authenticated(userId: userId)
+        case .missing:
+            state = .needsProfile(userId: userId)
+        case .deleted:
+            // Tombstoned from another device while this one still held a
+            // session — there's no profile left to finish, so end it.
+            await signOut()
+            errorMessage = "This account has been deleted."
+        }
+    }
+
+    /// Fails OPEN: only a definitive answer from the server gates the app, so a
+    /// flaky network can never strand a real user on the onboarding step.
+    private func accountStatus() async -> AccountStatus {
+        do {
+            return try await service.accountStatus()
+        } catch {
+            debugLog("[AuthManager] account status check failed, allowing entry: \(error)")
+            return .active
+        }
     }
 
     /// Listen for auth state changes
@@ -115,7 +155,7 @@ public final class AuthManager {
             switch event {
             case .signedIn:
                 if let session, !holdSessionForOnboarding {
-                    setAuthenticated(session)
+                    await resolve(session)
                 }
             case .signedOut:
                 // Covers server-driven sign-outs (revoked/rejected refresh)
@@ -189,11 +229,12 @@ public final class AuthManager {
     }
 
     /// Ends the register wizard — releases the hold and reveals the session
-    /// (no-op when there is no session).
+    /// (no-op when there is no session). Bailing out of the wizard early lands
+    /// on `.needsProfile`, not in the app: the profile row is what counts.
     public func finishOnboarding() async {
         holdSessionForOnboarding = false
         if let session = try? await client.auth.session {
-            setAuthenticated(session)
+            await resolve(session)
         }
     }
 
@@ -201,7 +242,7 @@ public final class AuthManager {
         errorMessage = nil
         do {
             let session = try await client.auth.signIn(email: email, password: password)
-            setAuthenticated(session)
+            await resolve(session)
         } catch {
             errorMessage = friendly(error)
         }
@@ -266,7 +307,7 @@ public final class AuthManager {
                     idToken: tokenString
                 )
             )
-            setAuthenticated(session)
+            await resolve(session)
         } catch {
             errorMessage = friendly(error)
         }
@@ -298,7 +339,7 @@ public final class AuthManager {
                     accessToken: result.user.accessToken.tokenString
                 )
             )
-            setAuthenticated(session)
+            await resolve(session)
         } catch {
             // GIDSignInError.canceled (-5): the user dismissed the sheet — no-op.
             if (error as NSError).code == -5 { return }
@@ -346,6 +387,51 @@ public final class AuthManager {
         GIDSignIn.sharedInstance.signOut()
         state = .unauthenticated
         await APICache.shared.clear()
+    }
+
+    // MARK: - Account deletion
+
+    /// Email of the signed-in auth user (shown on the Manage-account screen).
+    public var currentEmail: String? { client.auth.currentSession?.user.email }
+
+    /// When the auth account was created (shown on the Manage-account screen).
+    public var accountCreatedAt: Date? { client.auth.currentSession?.user.createdAt }
+
+    /// Whether the signed-in auth user has an email/password identity — drives
+    /// whether the delete-account sheet asks for the password (social-only
+    /// accounts confirm by typing DELETE instead; they have no password).
+    public var hasPasswordIdentity: Bool {
+        guard let user = client.auth.currentSession?.user else { return false }
+        return (user.identities ?? []).contains { $0.provider == "email" }
+    }
+
+    /// Deletes the signed-in account via the `delete-account` edge function:
+    /// the server re-verifies the password (email accounts), anonymizes the
+    /// profile with the same RPC the web uses (scrub PII + drop push tokens),
+    /// and deletes the auth user — then this runs the normal local sign-out
+    /// teardown. Returns a user-facing error message, or nil on success.
+    public func deleteAccount(password: String?) async -> String? {
+        struct Body: Encodable { let password: String? }
+        do {
+            try await client.functions.invoke(
+                "delete-account",
+                options: FunctionInvokeOptions(body: Body(password: password))
+            )
+        } catch let error as FunctionsError {
+            if case .httpError(let code, _) = error, code == 403 {
+                return "That password isn't right — double-check and try again."
+            }
+            return "Couldn't delete your account just now. Please try again."
+        } catch {
+            if let offline = SupabaseError.connectionFriendly(fromLowercased: error.localizedDescription.lowercased()) {
+                return offline
+            }
+            return "Couldn't delete your account just now. Please try again."
+        }
+        // Server side is done (the auth user is gone) — the revoke inside
+        // signOut fails harmlessly; everything local is torn down as usual.
+        await signOut()
+        return nil
     }
 
     // MARK: - Helpers

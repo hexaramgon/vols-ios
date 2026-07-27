@@ -75,8 +75,10 @@ struct UploadBottomBar<CTA: View>: View {
         VStack(spacing: 10) {
             if let error {
                 statusRow(error, color: UploadTheme.errorText)
+                    .transition(.opacity)
             } else if let hint {
                 statusRow(hint, color: Color.vText3)
+                    .transition(.opacity)
             }
 
             cta
@@ -93,6 +95,12 @@ struct UploadBottomBar<CTA: View>: View {
                 }
                 .ignoresSafeArea()
         }
+        // The status row is driven by LIVE validation (hint/error flip to nil
+        // the instant a step becomes complete — e.g. right before publish),
+        // outside any withAnimation transaction — so the bar's height snapped.
+        // Animate on the values themselves so grow/shrink always eases.
+        .animation(.smooth(duration: 0.25), value: error)
+        .animation(.smooth(duration: 0.25), value: hint)
     }
 
     private func statusRow(_ message: String, color: Color) -> some View {

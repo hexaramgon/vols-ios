@@ -25,6 +25,11 @@ class ConversationState {
     // mini-player observe it with their own scoped animations, so no withAnimation
     // is needed (or wanted — competing curves made the hide look janky).
     var activeConversation: ActiveConversation?
+
+    /// Set by a bottom-docked composer (e.g. the listing detail's comment field)
+    /// while its keyboard is up, so the tab bar slides away instead of wedging
+    /// between the composer and the keyboard — the same hide conversations use.
+    var composerActive = false
 }
 
 /// App-wide unread indicators: the Inbox tab dot (DMs) and the notifications
@@ -36,6 +41,11 @@ final class UnreadCounts {
     private(set) var notifications = 0
     private(set) var messages = 0
     private let service = SupabaseService()
+
+    /// The Inbox tab hosts BOTH the DM list and the notifications bell (its
+    /// header), so its tab-bar dot lights for either kind of unread — otherwise
+    /// an unread notification shows on the bell but not the tab.
+    var inboxHasUnread: Bool { messages > 0 || notifications > 0 }
 
     func refresh() async {
         guard let counts = try? await service.getUnreadCounts() else { return }
@@ -112,6 +122,10 @@ struct RootTabView: View {
 
     private var isConversationOpen: Bool { conversationState.activeConversation != nil }
 
+    /// Tab bar slides away for a full-screen conversation OR while a bottom
+    /// composer's keyboard is up (so it doesn't wedge above the keyboard).
+    private var hideTabBar: Bool { isConversationOpen || conversationState.composerActive }
+
     /// Bottom safe-area reservation: the tab bar plus clearance for the floating mini-player.
     private var bottomBarReservation: CGFloat {
         tabBarHeight + (showMiniPlayer ? ViewConst.compactNowPlayingHeight + 16 : 0)
@@ -159,8 +173,8 @@ struct RootTabView: View {
                 // jump happens behind the sliding bar / incoming chat, so it's
                 // never visible.
                 Color.clear
-                    .frame(height: isConversationOpen ? 0 : bottomBarReservation)
-                    .animation(nil, value: isConversationOpen)
+                    .frame(height: hideTabBar ? 0 : bottomBarReservation)
+                    .animation(nil, value: hideTabBar)
             }
             .overlay(alignment: .bottom) {
                 // The visible bar never unmounts — hiding is a pure offset, which
@@ -174,9 +188,14 @@ struct RootTabView: View {
                         // drifted from the real bar at larger Dynamic Type).
                         playerController.tabBarHeight = $0
                     }
-                    .offset(y: isConversationOpen ? tabBarHeight + ViewConst.safeAreaInsets.bottom : 0)
+                    .offset(y: hideTabBar ? tabBarHeight + ViewConst.safeAreaInsets.bottom : 0)
+                    // Conversation hide keeps its tuned spring. The composer hide
+                    // uses a plain scoped ease — decoupled from the keyboard's
+                    // system animation (never withAnimation'd in the keyboard
+                    // handler) so it can't merge and overshoot.
                     .animation(.smooth(duration: 0.35), value: isConversationOpen)
-                    .allowsHitTesting(!isConversationOpen)
+                    .animation(.easeInOut(duration: 0.25), value: conversationState.composerActive)
+                    .allowsHitTesting(!hideTabBar)
             }
             .sheet(isPresented: $showNewPost) {
                 NewPostView { postType in
@@ -402,23 +421,27 @@ struct RootTabView: View {
                     if item == .newPost {
                         showNewPost = true
                     } else if selectedTab == item {
-                        // Re-tapping the active tab pops its nav stack back to
-                        // the tab's root (e.g. Marketplace detail → Marketplace).
+                        // Re-tapping the ACTIVE tab pops its nav stack back to
+                        // the tab's root (e.g. Marketplace detail → Marketplace),
+                        // and Home additionally resets to the top of All (it
+                        // observes rootResetTick).
                         router(for: item).popToRoot()
                     } else {
+                        // Arriving from another tab resumes this tab exactly
+                        // where it was left — same page, same scroll. Home used
+                        // to reset here too, which threw away the user's place
+                        // for a gesture that only means "go to Home".
                         selectedTab = item
                         visitedTabs.insert(item)
-                        // Home always lands fully reset — root page, scrolled
-                        // to the top (HomeScreen observes rootResetTick).
-                        if item == .home { router(for: .home).popToRoot() }
                         AnalyticsService.shared?.log(.pageView, metadata: ["to": .string(analyticsName(item))])
                     }
                 } label: {
                     VStack(spacing: 3) {
                         tabIcon(for: item)
-                            // Unread-DM dot on the Inbox tab.
+                            // Unread dot on the Inbox tab — DMs OR notifications
+                            // (both live under this tab).
                             .overlay(alignment: .topTrailing) {
-                                if item == .inbox, unreadCounts.messages > 0 {
+                                if item == .inbox, unreadCounts.inboxHasUnread {
                                     Circle()
                                         .fill(Color.vUnread)
                                         .frame(width: 8, height: 8)

@@ -173,6 +173,11 @@ struct ExploreHeaderBar: View {
     /// Collab tab's category filter (nil = all) — drives the sliders dot there.
     @Binding var collabCategory: String?
     @Binding var headerHeight: CGFloat
+    /// Collab tab's Recent/Saved toggle. Rendered here so it stays put while the
+    /// listings scroll; selecting it needs the view model, so the action stays
+    /// with HomeScreen.
+    let collabFilter: CollabListingFilter
+    let onSelectCollabFilter: (CollabListingFilter) -> Void
     let onBell: () -> Void
     let onSearch: () -> Void
     /// Opens the floating filter overlay (owned by HomeScreen).
@@ -192,6 +197,21 @@ struct ExploreHeaderBar: View {
             filterTabs
                 .padding(.top, 3)
                 .padding(.bottom, 10)
+            // Spacing reproduces the un-pinned layout exactly: the toggle sat
+            // 14pt below the bar (10 here + 4), then 12pt to the list's hairline.
+            // The hairline comes along so the pinned block ends on an edge rather
+            // than letting rows slide out from under bare text.
+            //
+            // It rides the brand row's fold, like the pills above it — listings
+            // never scroll past it, but the whole bar still shortens on scroll.
+            if selectedTab == .collab {
+                collabFilterToggle
+                    .padding(.top, 4)
+                    .padding(.bottom, 12)
+                Rectangle()
+                    .fill(Color.white.opacity(0.1))
+                    .frame(height: 0.5)
+            }
         }
         .background { backgroundVeil }
         .background(
@@ -268,6 +288,35 @@ struct ExploreHeaderBar: View {
         .animation(.easeInOut(duration: 0.18), value: hasFilter)
     }
 
+    /// Recent (public board) / Saved toggle — replaces the old "Recent Listings"
+    /// header. Same section-title type; the inactive option dims (opacity
+    /// crossfade, like the profile tabs).
+    private var collabFilterToggle: some View {
+        HStack(spacing: 18) {
+            collabFilterTab("Recent", .recent)
+            collabFilterTab("Saved", .saved)
+            Spacer(minLength: 0)
+        }
+        // Match `sectionHeader`'s inset so the toggle lines up with the rows
+        // exactly like the old "Recent Listings" header did.
+        .padding(.horizontal, pad)
+    }
+
+    private func collabFilterTab(_ title: String, _ filter: CollabListingFilter) -> some View {
+        Button {
+            onSelectCollabFilter(filter)
+        } label: {
+            Text(title)
+                .font(.appFont.sectionTitle)
+                .foregroundStyle(collabFilter == filter ? .white : Color.vText3)
+                .contentShape(.rect)
+                // Scoped to the label so the selected/dimmed colours still
+                // crossfade without the feed's swap joining the transaction.
+                .animation(.easeInOut(duration: 0.2), value: collabFilter)
+        }
+        .buttonStyle(.plain)
+    }
+
     /// Tabs that carry a filter sheet (All → sections, Collab → categories).
     private var hasFilter: Bool {
         selectedTab == .all || selectedTab == .collab
@@ -303,11 +352,13 @@ struct ExploreHeaderBar: View {
     private func tabButton(_ tab: ExploreTab, label: String, icon: LucideIcon.Name) -> some View {
         let isSelected = selectedTab == tab
         return Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                // Tapping All always lands on the plain feed (clears any filter).
-                if tab == .all { allSection = .everything }
-                selectedTab = tab
-            }
+            // Deliberately NOT in a `withAnimation`. The switch changes the bar's
+            // height (Collab adds the pinned toggle) and unfolds the brand row,
+            // which moves every tab's top padding — animating that transaction
+            // played as the outgoing content scrolling away. The pill's own
+            // highlight still animates, scoped below.
+            if tab == .all { allSection = .everything }   // All always lands on the plain feed
+            selectedTab = tab
         } label: {
             HStack(spacing: 6) {
                 LucideIcon(icon, .sm)
@@ -323,6 +374,9 @@ struct ExploreHeaderBar: View {
                     .fill(isSelected ? Color.white : Color.white.opacity(0.08))
             }
             .contentShape(.rect(cornerRadius: 11))
+            // Scoped to the pill: the selected fill/label still crossfade on tap
+            // without putting the header's height change in the same transaction.
+            .animation(.easeInOut(duration: 0.18), value: isSelected)
         }
         .buttonStyle(.plain)
     }
@@ -336,56 +390,121 @@ extension HomeScreen {
         ZStack {
             collabFeedContent
         }
-        // Crossfade the skeleton into the rows instead of an instant swap.
+        // Crossfade the skeleton into the rows instead of an instant swap — same
+        // 0.35s fade the Workspace tab uses. Both loaded-flags drive it: the
+        // initial board (Recent) AND the Saved list's first load, so switching to
+        // Saved fades its bones into rows rather than hard-cutting.
         .animation(.easeInOut(duration: 0.35), value: viewModel.listingsLoaded)
+        .animation(.easeInOut(duration: 0.35), value: viewModel.savedListingsLoaded)
     }
 
     @ViewBuilder
     private var collabFeedContent: some View {
+        // Initial board load — full skeleton. The toggle is part of the header
+        // bar now, so it's already in place while this runs.
         if !viewModel.listingsLoaded {
             collabFeedSkeleton
                 .transition(.opacity)
-        } else if viewModel.collabListings.isEmpty {
-            // Scrollable so the empty state can still pull-to-refresh.
+        } else {
             ScrollView {
-                emptyState(icon: .handshake, title: "No collab listings yet", message: "Open calls for collaborators show up here")
-                    .frame(minHeight: UIScreen.size.height * 0.6)
+                collabListingList
+                    // Flush: the bar ends in the hairline, and each row's own 14pt
+                    // inset supplies the gap — the same 14pt that used to sit
+                    // between the hairline and the first row.
+                    .padding(.top, headerHeight)
+                    .padding(.bottom, bottomInset)
             }
+            // A scroll view PER filter. Sharing one let a fling's deceleration
+            // continue into the list you just switched to — the new rows arrived
+            // already moving. Separate identities each start at rest, at the top.
+            .id(collabFilter)
             .scrollIndicators(.hidden)
-            .refreshable { await viewModel.refreshListings() }
+            .refreshable {
+                if collabFilter == .saved { await viewModel.refreshSavedListings() }
+                else { await viewModel.refreshListings() }
+            }
+            .trackExploreHeader(headerState)
             .transition(.opacity)
+        }
+    }
+
+    /// Runs the header bar's Recent/Saved toggle — the bar renders the control,
+    /// the load lives here with the view model.
+    func selectCollabFilter(_ filter: CollabListingFilter) {
+        // Not animated, for the same reason as the tab pills: animating the swap
+        // put the scroll view's own settling inside the transaction, which played
+        // as the feed scrolling. The toggle's label still crossfades, scoped in
+        // the bar.
+        collabFilter = filter
+        // The `.id(collabFilter)` swap mounts a fresh list at the top, and the
+        // scroll tracker always unfolds the brand row at the top — preempt it
+        // instantly so the header doesn't animate open under the new rows and
+        // drag the pinned toggle with it.
+        unfoldHeaderInstantly()
+        // First open shows a skeleton; reopening silently refreshes so saves
+        // / unsaves made elsewhere show up without a pull.
+        if filter == .saved {
+            Task {
+                if viewModel.savedListingsLoaded { await viewModel.refreshSavedListings() }
+                else { await viewModel.loadSavedListings() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var collabListingList: some View {
+        if collabFilter == .saved {
+            savedListingList
+        } else {
+            recentListingList
+        }
+    }
+
+    @ViewBuilder
+    private var recentListingList: some View {
+        if viewModel.collabListings.isEmpty {
+            EmptyStateView(icon: .handshake, title: "No collab listings yet",
+                           message: "Open calls for collaborators show up here.")
+                .padding(.top, 40)
         } else {
             let shown = collabCategory == nil
                 ? viewModel.collabListings
                 : viewModel.collabListings.filter { $0.category == collabCategory }
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    sectionHeader("Recent Listings")
-                    if shown.isEmpty {
-                        // A category with no open calls right now.
-                        EmptyStateView(icon: .handshake, title: "No listings in this category",
-                                       message: "Try another category or check back soon.")
-                            .padding(.top, 40)
-                    } else {
-                        LazyVStack(spacing: 0) {
-                            // Full-width hairline top boundary, then a separator after every
-                            // row — same clean divided-list treatment as the profile feed.
-                            // `Color.vBorder` is `.clear` app-wide, so use explicit opacity.
-                            Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5)
-                            ForEach(shown) { listing in
-                                CollabListingRow(listing: listing)
-                                Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5)
-                            }
-                        }
-                    }
-                }
-                .padding(.top, headerHeight + 14)
-                .padding(.bottom, bottomInset)
+            if shown.isEmpty {
+                EmptyStateView(icon: .handshake, title: "No listings in this category",
+                               message: "Try another category or check back soon.")
+                    .padding(.top, 40)
+            } else {
+                listingRows(shown)
             }
-            .scrollIndicators(.hidden)
-            .refreshable { await viewModel.refreshListings() }
-            .trackExploreHeader(headerState)
-            .transition(.opacity)
+        }
+    }
+
+    @ViewBuilder
+    private var savedListingList: some View {
+        if !viewModel.savedListingsLoaded {
+            // Defensive: skeleton until the response confirms (never claim empty
+            // mid-fetch). The same collab-shaped bones Recent's initial load uses,
+            // so the two filters shimmer identically.
+            collabListingBones
+        } else if viewModel.savedListings.isEmpty {
+            EmptyStateView(icon: .bookmark, title: "No saved listings yet",
+                           message: "Tap the bookmark on a listing to save it here.")
+                .padding(.top, 40)
+        } else {
+            listingRows(viewModel.savedListings)
+        }
+    }
+
+    /// The divided listing list — a separator after every row (the profile-feed
+    /// treatment; `Color.vBorder` is `.clear`). The list's TOP boundary lives in
+    /// the header bar, pinned under the Recent/Saved toggle.
+    private func listingRows(_ items: [ApiListing]) -> some View {
+        LazyVStack(spacing: 0) {
+            ForEach(items) { listing in
+                CollabListingRow(listing: listing)
+                Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5)
+            }
         }
     }
 }
@@ -574,10 +693,14 @@ extension HomeScreen {
     }
 
     /// The expanded past-month history for one collaborator — each row opens
-    /// the folder the action happened in.
+    /// the folder the action happened in. Capped to the most recent handful so
+    /// one busy collaborator can't push the folders grid off the screen; the
+    /// footer says how much more happened this month.
     func activityDetail(_ group: WorkspaceActivityGroup) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(group.events.enumerated()), id: \.element.id) { index, event in
+        let shown = Array(group.events.prefix(4))
+        let hidden = group.events.count - shown.count
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(shown.enumerated()), id: \.element.id) { index, event in
                 Button {
                     router.navigateToFolder(folderId: event.folderId, folderName: event.folderName ?? "Folder")
                 } label: {
@@ -600,9 +723,17 @@ extension HomeScreen {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                if index < group.events.count - 1 {
+                if index < shown.count - 1 {
                     Rectangle().fill(Color.white.opacity(0.07)).frame(height: 0.5).padding(.leading, 40)
                 }
+            }
+            if hidden > 0 {
+                Text("+\(hidden) more this month")
+                    .font(.appCaption2Medium)
+                    .foregroundStyle(Color.vText3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 40)
+                    .padding(.vertical, 9)
             }
         }
         .padding(.horizontal, 14)

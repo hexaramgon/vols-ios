@@ -384,7 +384,7 @@ private extension LibraryScreen {
                 searchFocused = false
                 if let track = viewModel.savedTracks.first(where: { $0.trackId == row.id }) { selectedTrack = track }
             } label: {
-                LucideIcon(.ellipsis, .xl)
+                LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                     .foregroundStyle(Color.vText3)
                     .frame(width: 40, height: 44)
                     .contentShape(.rect)

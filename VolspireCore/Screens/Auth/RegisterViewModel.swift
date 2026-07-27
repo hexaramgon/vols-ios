@@ -17,6 +17,17 @@ final class RegisterViewModel {
     enum UsernameStatus: Equatable { case idle, checking, available, taken }
     enum ResendStatus: Equatable { case idle, sending, sent }
 
+    /// How the wizard was entered.
+    enum Mode: Equatable {
+        /// The full email signup: email → password → profile → code → photos.
+        case signUp
+        /// An existing, already-verified session that owns no profile row —
+        /// a first-time social sign-in, or a signup abandoned after the code
+        /// step. Email/password/verification are all moot, so this resumes at
+        /// the profile step and finishes with the same `create_user` call.
+        case completeProfile
+    }
+
     static let stepTitles = [
         "Create your account",
         "Choose a password",
@@ -46,7 +57,8 @@ final class RegisterViewModel {
     /// account can be created via email, Apple, or Google.
     var agreedToTerms = false
     var agreedToPrivacy = false
-    /// Both signup consents (Terms + Privacy) — gates the step-0 Continue.
+    /// Both signup consents (Terms + Privacy) — gates the Continue on whichever
+    /// step precedes account creation (password for email, profile for social).
     var agreedToLegal: Bool { agreedToTerms && agreedToPrivacy }
     var password = ""
     var confirmPassword = ""
@@ -68,10 +80,15 @@ final class RegisterViewModel {
     private var usernameTask: Task<Void, Never>?
     private let authManager: AuthManager
     private let supabaseService: SupabaseService
+    let mode: Mode
 
-    init(authManager: AuthManager, supabaseService: SupabaseService) {
+    init(authManager: AuthManager, supabaseService: SupabaseService, mode: Mode = .signUp) {
         self.authManager = authManager
         self.supabaseService = supabaseService
+        self.mode = mode
+        // Resuming an existing session starts at the profile step; there is
+        // nothing to collect before it.
+        self.step = mode == .completeProfile ? 2 : 0
     }
 
     // MARK: - Validation (mirrors the web's zod schema)
@@ -98,9 +115,16 @@ final class RegisterViewModel {
 
     var canContinue: Bool {
         switch step {
-        case 0: emailValid && agreedToLegal
+        case 0: emailValid
+        // The EULA gates whichever step precedes account creation, rather than
+        // the entry screen: the password step for email (`handleSignUp` runs
+        // from step 2), and the profile step for a social sign-in that skipped
+        // straight here (`create_user` runs from step 4). Social sign-in used
+        // to create accounts with no consent recorded at all (App Store 1.2).
         case 1: passwordChecks.allSatisfy(\.ok) && passwordsMatch && !confirmPassword.isEmpty
+            && agreedToLegal
         case 2: usernameValid && usernameStatus != .taken && usernameStatus != .checking
+            && (mode == .signUp || agreedToLegal)
         default: true
         }
     }
@@ -130,20 +154,20 @@ final class RegisterViewModel {
         }
     }
 
-    func toggleTag(_ tag: String) {
-        if let index = tags.firstIndex(of: tag) {
-            tags.remove(at: index)
-        } else if tags.count < ProfileRoles.max {
-            tags.append(tag)
-        }
-    }
-
     // MARK: - Navigation
 
     func goNext() async {
         guard !loading, canContinue else { return }
         if step == 2 {
-            await handleSignUp()
+            // `.completeProfile` already has a verified session — there's no
+            // account to sign up for, so skip straight to photos and let
+            // `finish()` write the profile row.
+            if mode == .completeProfile {
+                slideForward = true
+                withAnimation(.smooth(duration: 0.35)) { step = 4 }
+            } else {
+                await handleSignUp()
+            }
             return
         }
         slideForward = true
@@ -152,7 +176,25 @@ final class RegisterViewModel {
 
     func goBack() {
         slideForward = false
-        withAnimation(.smooth(duration: 0.35)) { step -= 1 }
+        // `.completeProfile` jumps 2 → 4, so it has to come back the same way
+        // (3 is the email-code step, which that mode never runs).
+        let previous = (mode == .completeProfile && step == 4) ? 2 : step - 1
+        withAnimation(.smooth(duration: 0.35)) { step = previous }
+    }
+
+    /// The only way out of `.completeProfile`: there is no screen behind it —
+    /// the app itself is gated on the profile row — so backing out ends the
+    /// session rather than dropping the user somewhere they can't act.
+    func abandonProfileSetup() async {
+        await authManager.signOut()
+    }
+
+    /// Step copy, adjusted for the entry mode.
+    func subtitle(for step: Int) -> String {
+        if mode == .completeProfile, step == 2 {
+            return "You're signed in — pick a username to finish setting up your account."
+        }
+        return Self.stepSubtitles[step]
     }
 
     func resetToStart() {

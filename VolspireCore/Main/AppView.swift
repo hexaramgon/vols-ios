@@ -30,6 +30,10 @@ struct AppView: View {
                 case .authenticated:
                     OverlaidRootView()
                         .environment(dependencies.playerController)
+                case .needsProfile:
+                    // Signed in with no profile row — finish the account before
+                    // the app opens (see AuthManager.AuthState.needsProfile).
+                    CompleteProfileScreen()
                 case .unauthenticated:
                     LoginScreen()
                 }

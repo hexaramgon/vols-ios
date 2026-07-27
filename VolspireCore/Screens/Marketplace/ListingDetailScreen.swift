@@ -45,16 +45,6 @@ struct ListingDetailScreen: View {
     /// Signed-in user's avatar for the composer pill (matches the player's).
     @State private var myAvatarUrl: String?
     @State private var myInitial: String = "?"
-    /// Keyboard tracking for the composer lift — the player composer's
-    /// technique: we ignore the system keyboard avoidance and drive the lift
-    /// ourselves on ONE curve (two competing animations looked janky).
-    @State private var keyboardTopY: CGFloat = .greatestFiniteMagnitude
-    @State private var composerMaxY: CGFloat = 0
-
-    private var keyboardOverlap: CGFloat {
-        guard keyboardTopY < composerMaxY else { return 0 }
-        return composerMaxY - keyboardTopY + 8
-    }
 
     enum DiscussionTab { case comments, responses }
 
@@ -98,9 +88,9 @@ struct ListingDetailScreen: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        // The composer lifts itself over the keyboard (see keyboardOverlap) —
-        // the system must not ALSO move things, or the two curves fight.
-        .ignoresSafeArea(.keyboard)
+        // Let the system inset the scroll for the keyboard (like the Messages
+        // thread) so the bottom comments stay reachable while typing — the
+        // composer's `safeAreaInset` rides up with it.
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
             barState.update(offsetY: y)
         }
@@ -126,6 +116,9 @@ struct ListingDetailScreen: View {
             )
         }
         .enableSwipeBack()
+        // Reset the shared chrome flag on leave so the tab bar + mini player
+        // return (it's toggled by the keyboard handlers on the composer).
+        .onDisappear { conversationState.composerActive = false }
         .task { await viewModel.load() }
         // Own avatar for the composer pill — cached profile fetch, cheap.
         .task {
@@ -196,14 +189,7 @@ struct ListingDetailScreen: View {
 
     /// Author-only "…" — opens a slide-up sheet to open/close or delete.
     private var adminButton: some View {
-        Button { showAdminOptions = true } label: {
-            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
-                .frame(width: 40, height: 40)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
+        HeaderIconButton(icon: .ellipsis, shadow: true, size: ViewConst.heroOverlayIconSize) { showAdminOptions = true }
     }
 
     private enum ViewerAction { case reportListing, reportAuthor, block }
@@ -211,14 +197,7 @@ struct ListingDetailScreen: View {
 
     /// Non-author "…" — report the listing or its author, or block the author.
     private var viewerButton: some View {
-        Button { showViewerOptions = true } label: {
-            LucideIcon(.ellipsis, size: ViewConst.headerIconSize)
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
-                .frame(width: 40, height: 40)
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
+        HeaderIconButton(icon: .ellipsis, shadow: true, size: ViewConst.heroOverlayIconSize) { showViewerOptions = true }
     }
 
     /// Viewer options as a slide-up sheet — mirrors `adminOptionsSheet`.
@@ -599,23 +578,101 @@ private extension ListingDetailScreen {
                 .multilineTextAlignment(.center)
         } else {
             VStack(alignment: .leading, spacing: 16) {
-                ForEach(viewModel.comments) { commentRow($0) }
+                ForEach(viewModel.comments) { comment in
+                    VStack(alignment: .leading, spacing: 12) {
+                        commentRow(comment)
+                        if let replies = comment.replies, !replies.isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                ForEach(replies) { commentRow($0, isReply: true) }
+                            }
+                            // Indent replies under the parent's avatar + gutter.
+                            .padding(.leading, 42)
+                        }
+                    }
+                }
             }
         }
     }
 
-    /// Bottom-pinned comment bar — the expanded player's composer treatment:
-    /// an `.appBody` field in a rounded pill with the gradient send circle.
-    /// Cleared above the tab bar + mini player at rest; hugging the keyboard
-    /// while typing (the keyboard covers that chrome anyway).
+    /// Bottom comment bar — an `.appBody` field in a rounded pill with the
+    /// gradient send circle. It's a `safeAreaInset` the system lifts over the
+    /// keyboard (so the scroll insets and every comment stays reachable), and it
+    /// clears the tab bar + mini player at rest / hugs the keyboard while typing.
     var composerBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // "Replying to @user" chip — shown while the composer is aimed at a
+            // thread; the ✕ clears it back to posting a new top-level comment.
+            if let replyingTo = viewModel.replyingTo {
+                HStack(spacing: 6) {
+                    LucideIcon(.reply, .xs).foregroundStyle(Color.vText3)
+                    Text("Replying to @\(replyingTo.user.username)")
+                        .font(.appCaption2Medium).foregroundStyle(Color.vText2)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Button { viewModel.replyingTo = nil } label: {
+                        LucideIcon(.x, .xs).foregroundStyle(Color.vText3)
+                            .frame(width: 24, height: 24)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+                .transition(.opacity)
+            }
+
+            composerRow
+        }
+        .padding(.horizontal, ViewConst.screenPaddings)
+        .padding(.top, 10)
+        // Clear the floating tab bar + mini player at rest; while the keyboard
+        // is up that chrome is behind it, so hug the keyboard instead. Driven by
+        // `composerActive`, which ALSO hides the tab bar + mini player — all in
+        // one keyboard-triggered transaction below, so nothing bounces.
+        .padding(.bottom, conversationState.composerActive ? 10 : bottomChromeInset)
+        .background {
+            Color.vBar
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Color.vBorder).frame(height: 0.5)
+                }
+                // Bleed DOWNWARD only (behind the keyboard / home indicator),
+                // like the chat input bar — ignoring all edges made the fill
+                // fail to reach the bottom mid-dismiss, leaving a dark gap.
+                .ignoresSafeArea(edges: .bottom)
+        }
+        .animation(.easeOut(duration: 0.22), value: canPostComment)
+        .animation(.easeOut(duration: 0.2), value: viewModel.replyingTo?.id)
+        // SCOPED animation for the composer's clearance change (and, via the
+        // shared flag, the tab-bar / mini-player hide). Two rules that killed the
+        // bounce: (1) NEVER wrap `composerActive` in `withAnimation` in the
+        // keyboard handler — it merges with the system keyboard animation and
+        // overshoots; a scoped `.animation(value:)` stays decoupled. (2) Use a
+        // SLOW-START curve (easeInOut). The keyboard HIDES with a slow start
+        // (ease-in); a fast-start easeOut here grows the 60pt clearance quicker
+        // than the keyboard begins descending, so the pill hops UP ~50pt before
+        // it falls (the tiny residual spring). easeInOut keeps the padding still
+        // until the keyboard commits → monotonic both ways.
+        .animation(.easeInOut(duration: 0.25), value: conversationState.composerActive)
+        // Toggle the shared flag PLAINLY (no withAnimation). Gated on our own
+        // field so a presented sheet's keyboard never moves this page.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            guard commentFocused else { return }
+            conversationState.composerActive = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            conversationState.composerActive = false
+        }
+    }
+
+    /// The avatar-pill field + gradient send circle (the row the "Replying to"
+    /// chip sits above).
+    var composerRow: some View {
         HStack(alignment: .bottom, spacing: 10) {
             // Your avatar + the field share one pill — the expanded player's
             // composer look.
             HStack(alignment: .center, spacing: 10) {
                 myAvatar
 
-                TextField("", text: $viewModel.commentText, prompt: Text("Add a comment…").foregroundColor(Color.vText3), axis: .vertical)
+                TextField("", text: $viewModel.commentText, prompt: Text(viewModel.replyingTo == nil ? "Add a comment…" : "Add a reply…").foregroundColor(Color.vText3), axis: .vertical)
                     .font(.appBody)
                     .foregroundStyle(.white)
                     .tint(.white)
@@ -651,37 +708,6 @@ private extension ListingDetailScreen {
                 .padding(.bottom, 5) // optically centred against the pill's first line
             }
         }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        // Measure the pill row's rest position (layout frame — .offset below is
-        // render-only and doesn't feed back into this).
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { composerMaxY = geo.frame(in: .global).maxY }
-                    .onChange(of: geo.frame(in: .global).maxY) { _, v in composerMaxY = v }
-            }
-        )
-        .padding(.top, 10)
-        .padding(.bottom, bottomChromeInset)
-        .background {
-            Color.vBar
-                .overlay(alignment: .top) {
-                    Rectangle().fill(Color.vBorder).frame(height: 0.5)
-                }
-                .ignoresSafeArea()
-        }
-        // One curve, driven by the keyboard's own frame — the player's recipe.
-        .offset(y: -keyboardOverlap)
-        .animation(.easeOut(duration: 0.25), value: keyboardTopY)
-        .animation(.spring(response: 0.32, dampingFraction: 0.72), value: canPostComment)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { notif in
-            if let frame = notif.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
-                keyboardTopY = frame.minY
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            keyboardTopY = .greatestFiniteMagnitude
-        }
     }
 
     /// Clearance for the floating tab bar (+ mini player when a track plays).
@@ -697,10 +723,10 @@ private extension ListingDetailScreen {
         !viewModel.commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.isPostingComment
     }
 
-    func commentRow(_ comment: ApiListingComment) -> some View {
+    func commentRow(_ comment: ApiListingComment, isReply: Bool = false) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Button { router.navigateToProfile(userId: comment.user.userId) } label: {
-                avatar(comment.user, size: 30)
+                avatar(comment.user, size: isReply ? 24 : 30)
             }
             .buttonStyle(.plain)
 
@@ -715,6 +741,21 @@ private extension ListingDetailScreen {
                         .font(.appCaption2).foregroundStyle(.white.opacity(0.3))
                 }
                 ExpandableText(comment.content)
+
+                // Only top-level comments carry a reply affordance (one level
+                // of nesting); tapping it aims the composer at this thread.
+                if !isReply {
+                    Button {
+                        viewModel.startReply(to: comment)
+                        commentFocused = true
+                    } label: {
+                        Text("Reply")
+                            .font(.appCaption2Medium)
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
+                }
             }
 
             Spacer(minLength: 0)
@@ -823,9 +864,17 @@ private struct RespondSheet: View {
             .padding(.horizontal, 20)
             .padding(.top, 14)
         }
-        .selfSizedDetent()
+        // keyboardSafe: measured once at rest then grow-only — fits the content
+        // exactly (no dead space) while keyboard compression can never re-target
+        // the detent (the AttributeGraph-cycle hang this sheet used to hit).
+        .selfSizedDetent(keyboardSafe: true)
         .sheetBackground()
-        .onAppear { focused = true }
+        // Focus only after the present animation settles (the search-reveal
+        // pattern) — raising the keyboard mid-presentation stacks two layout
+        // storms into the same frames.
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focused = true }
+        }
     }
 
     var canSend: Bool {
@@ -869,8 +918,8 @@ private extension ListingDetailScreen {
 // MARK: - Comment options sheet
 
 /// Options for a listing comment — the same `SheetHeader` + rows as the track
-/// comment sheet (`CommentOptionsSheet`), so both read identically. Listing
-/// comments are flat, so there's no Reply.
+/// comment sheet (`CommentOptionsSheet`), so both read identically. (Reply is an
+/// inline affordance on the row, not a sheet option.)
 private struct ListingCommentOptionsSheet: View {
     let comment: ApiListingComment
     let isOwn: Bool

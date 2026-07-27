@@ -217,80 +217,128 @@ private extension EditProfileScreen {
 // MARK: - Form card
 
 private extension EditProfileScreen {
+    /// The same `AuthFieldGroup` rows the signup wizard uses — icon column, one
+    /// grouped card, hairlines inset past the icons — rather than this screen's
+    /// old labelled rows, so editing a profile looks like creating one.
     var formCard: some View {
-        VStack(spacing: 0) {
-            inputRow("Username", text: $editUsername, prefix: "@", placeholder: "username", capitalize: false)
-            rowDivider
-            locationRow
-            if showLocationSuggestions {
-                rowDivider
-                locationSuggestions
+        // One labelled section per field — they're unrelated values, so sharing
+        // a single grouped card read as one control split in two.
+        VStack(alignment: .leading, spacing: 22) {
+            fieldSection("Username") {
+                AuthRow(icon: .user, placeholder: "Username", text: $editUsername)
             }
-            rowDivider
-            multilineRow("Bio", text: $editBio, placeholder: "Tell people about yourself")
+
+            fieldSection("Bio") { bioRow }
+
+            fieldSection("Location") {
+                locationRow
+                if showLocationSuggestions {
+                    locationSuggestions
+                }
+            }
         }
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 16))
         .animation(.easeInOut(duration: 0.15), value: showLocationSuggestions)
+    }
+
+    /// Section heading over its own grouped card.
+    func fieldSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(title)
+            AuthFieldGroup { content() }
+        }
+    }
+
+    /// Section heading in the wizard's voice (`appCalloutSemibold`, white).
+    func sectionHeader(_ text: String) -> some View {
+        Text(text)
+            .font(.appCalloutSemibold)
+            .foregroundStyle(.white)
+    }
+
+    /// Multi-line bio in the icon-row language. Grows like the register wizard's
+    /// fields rather than sitting in a fixed-height `TextEditor` well.
+    var bioRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            LucideIcon(.squarePen, .md)
+                .foregroundStyle(Color.vText3)
+                .frame(height: 22) // optical align with the first text line
+            TextField(
+                "",
+                text: $editBio,
+                prompt: Text("Tell people about yourself").foregroundStyle(Color.vText3),
+                axis: .vertical
+            )
+            .font(.appBody)
+            .foregroundStyle(.white)
+            .tint(.white)
+            .lineLimit(2 ... 6)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
     }
 
     var showLocationSuggestions: Bool {
         locationFocused && !locationCompleter.suggestions.isEmpty
     }
 
+    /// Mirrors the wizard's location field: pin icon that brightens on focus,
+    /// 54pt row, suggestions dropping into the same card below it.
     var locationRow: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            fieldLabel("Location")
-            HStack(spacing: 8) {
-                TextField("City, Country", text: $editLocation)
-                    .font(.appCalloutRegular)
-                    .foregroundStyle(.white)
-                    .tint(.white)
-                    .textInputAutocapitalization(.words)
-                    .autocorrectionDisabled()
-                    .focused($locationFocused)
-                    .onChange(of: editLocation) { _, newValue in
-                        locationCompleter.update(newValue)
-                    }
-                if !editLocation.isEmpty {
-                    clearButton {
-                        editLocation = ""
-                        locationCompleter.clear()
-                    }
+        HStack(spacing: 12) {
+            LucideIcon(.mapPin, .md)
+                .foregroundStyle(locationFocused ? .white : Color.vText3)
+            TextField(
+                "",
+                text: $editLocation,
+                prompt: Text("City, Country").foregroundStyle(Color.vText3)
+            )
+            .font(.appBody)
+            .foregroundStyle(.white)
+            .tint(.white)
+            .textInputAutocapitalization(.words)
+            .autocorrectionDisabled()
+            .focused($locationFocused)
+            .onChange(of: editLocation) { _, newValue in
+                locationCompleter.update(newValue)
+            }
+            if !editLocation.isEmpty {
+                clearButton {
+                    editLocation = ""
+                    locationCompleter.clear()
                 }
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 13)
+        .frame(height: 54)
+        .animation(.easeInOut(duration: 0.15), value: locationFocused)
     }
 
     var locationSuggestions: some View {
-        VStack(spacing: 0) {
-            ForEach(locationCompleter.suggestions, id: \.self) { suggestion in
-                Button {
-                    editLocation = formatted(suggestion)
-                    locationCompleter.clear()
-                    locationFocused = false
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "mappin.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Color.vText3)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(suggestion.title)
-                                .font(.appFootnote).foregroundStyle(.white).lineLimit(1)
-                            if !suggestion.subtitle.isEmpty {
-                                Text(suggestion.subtitle)
-                                    .font(.appCaption).foregroundStyle(Color.vText3).lineLimit(1)
-                            }
+        ForEach(locationCompleter.suggestions, id: \.self) { suggestion in
+            AuthRowDivider()
+            Button {
+                editLocation = formatted(suggestion)
+                locationCompleter.clear()
+                locationFocused = false
+            } label: {
+                HStack(spacing: 12) {
+                    LucideIcon(.mapPin, .sm)
+                        .foregroundStyle(Color.vText3)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(suggestion.title)
+                            .font(.appCallout).foregroundStyle(.white).lineLimit(1)
+                        if !suggestion.subtitle.isEmpty {
+                            Text(suggestion.subtitle)
+                                .font(.appFootnote).foregroundStyle(Color.vText3).lineLimit(1)
                         }
-                        Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .contentShape(.rect)
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .contentShape(.rect)
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -304,17 +352,6 @@ private extension EditProfileScreen {
         return region.isEmpty ? suggestion.title : "\(suggestion.title), \(region)"
     }
 
-    var rowDivider: some View {
-        Rectangle().fill(.white.opacity(0.06)).frame(height: 1).padding(.leading, 16)
-    }
-
-    func fieldLabel(_ text: String) -> some View {
-        // Soft sentence-case label — same voice as the upload/auth forms.
-        Text(text)
-            .font(.appFootnoteSemibold)
-            .foregroundStyle(Color.vText3)
-    }
-
     func clearButton(_ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: "xmark.circle.fill")
@@ -325,97 +362,30 @@ private extension EditProfileScreen {
         .buttonStyle(.plain)
     }
 
-    func inputRow(_ label: String, text: Binding<String>, prefix: String? = nil,
-                  placeholder: String = "", capitalize: Bool = true) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            fieldLabel(label)
-            HStack(spacing: 2) {
-                if let prefix {
-                    Text(prefix).font(.appCalloutRegular).foregroundStyle(Color.vText2)
-                }
-                TextField(placeholder, text: text)
-                .font(.appCalloutRegular)
-                .foregroundStyle(.white)
-                .tint(.white)
-                .autocorrectionDisabled(!capitalize)
-                .textInputAutocapitalization(capitalize ? .sentences : .never)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 13)
-    }
-
-    func multilineRow(_ label: String, text: Binding<String>, placeholder: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                fieldLabel(label)
-                Spacer()
-                if !text.wrappedValue.isEmpty {
-                    clearButton { text.wrappedValue = "" }
-                }
-            }
-            ZStack(alignment: .topLeading) {
-                if text.wrappedValue.isEmpty {
-                    Text(placeholder)
-                        .font(.appCalloutRegular).foregroundStyle(Color.vText3)
-                        .padding(.top, 8).padding(.leading, 5)
-                }
-                TextEditor(text: text)
-                    .font(.appCalloutRegular)
-                    .foregroundStyle(.white)
-                    .tint(.white)
-                    .frame(minHeight: 78)
-                    .scrollContentBackground(.hidden)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 13)
-    }
 }
 
 // MARK: - Roles card
 
 private extension EditProfileScreen {
+    /// Section header + chips, laid out like the signup wizard's roles step (no
+    /// surrounding card) so the two read as the same form.
     var rolesCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                fieldLabel("Roles")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                sectionHeader("Your roles")
                 Spacer()
                 Text("\(selectedTags.count)/\(ProfileRoles.max)")
                     .font(.appFootnoteMedium)
                     .foregroundStyle(Color.vText3)
             }
-            ChipFlowLayout(spacing: 8, lineSpacing: 8) {
-                ForEach(ProfileRoles.all, id: \.self) { role in
-                    roleChip(role)
-                }
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 16))
-    }
+            Text("Helps people find your work. Pick up to \(ProfileRoles.max).")
+                .font(.appFootnote)
+                .foregroundStyle(Color.vText3)
 
-    func roleChip(_ role: String) -> some View {
-        let selected = selectedTags.contains(role)
-        let disabled = !selected && selectedTags.count >= ProfileRoles.max
-        return Button {
-            if selected {
-                selectedTags.removeAll { $0 == role }
-            } else if selectedTags.count < ProfileRoles.max {
-                selectedTags.append(role)
-            }
-        } label: {
-            Text(role)
-                .font(.appFootnoteMedium)
-                .foregroundStyle(selected ? .black : (disabled ? Color.vText3 : .white))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(selected ? Color.white : Color.white.opacity(0.07), in: Capsule())
+            RolePicker(selection: $selectedTags)
+                .padding(.top, 4)
         }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .animation(.easeInOut(duration: 0.15), value: selected)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     func save() {

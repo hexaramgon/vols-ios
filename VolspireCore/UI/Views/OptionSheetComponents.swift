@@ -99,13 +99,29 @@ extension OptionSheetRow where Trailing == EmptyView {
 /// the content's natural height, pin it to the sheet's top with a trailing
 /// spacer, and size the detent to the measurement (+ home-indicator inset).
 private struct SelfSizedDetentModifier: ViewModifier {
+    let keyboardSafe: Bool
     /// Pre-measurement fallback — replaced by the real height on first layout.
     @State private var contentHeight: CGFloat = 300
+    @State private var hasMeasured = false
 
     func body(content: Content) -> some View {
         VStack(spacing: 0) {
             content
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { height in
+                    if !hasMeasured {
+                        // First real layout replaces the fallback in any mode.
+                        hasMeasured = true
+                        contentHeight = height
+                    } else if keyboardSafe {
+                        // Grow-only: content additions (an error banner) still
+                        // fit, but keyboard COMPRESSION is ignored — a shrink
+                        // can never re-target the detent, so the measure→detent
+                        // →layout loop is impossible by construction.
+                        contentHeight = max(contentHeight, height)
+                    } else {
+                        contentHeight = height
+                    }
+                })
 
             Spacer(minLength: 0)
         }
@@ -119,7 +135,15 @@ extension View {
     /// (measuring the scroll container would feed the granted height back into
     /// the detent). Re-measures live, so sheets whose rows change (e.g. the
     /// report sheet collapsing to its confirmation) resize with their content.
-    func selfSizedDetent() -> some View {
-        modifier(SelfSizedDetentModifier())
+    ///
+    /// ⚠️ A sheet that shows the KEYBOARD (text fields, especially auto-focused
+    /// ones) MUST pass `keyboardSafe: true`: in live mode, keyboard avoidance
+    /// compresses the content, the new measurement re-targets the detent, the
+    /// sheet re-lays-out, and the loop hangs the app in an AttributeGraph cycle
+    /// (this crashed the listing Respond sheet). `keyboardSafe` measures once
+    /// and then only grows, which cannot loop. (Also delay any auto-focus until
+    /// the present animation settles — see RespondSheet.)
+    func selfSizedDetent(keyboardSafe: Bool = false) -> some View {
+        modifier(SelfSizedDetentModifier(keyboardSafe: keyboardSafe))
     }
 }

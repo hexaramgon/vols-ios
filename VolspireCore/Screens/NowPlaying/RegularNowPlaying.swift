@@ -45,60 +45,47 @@ struct RegularNowPlaying: View {
     var body: some View {
         VStack(spacing: 0) {
             if renderContent {
-                if model.currentFileId != nil {
-                    // Workspace file → comments only. No artwork/info pager (so no
-                    // cover, ABOUT strip, cart/folder, save/playlist/fx) — it's not a
-                    // real track. Open straight to the comments panel.
-                    NowPlayingCommentsPanel(model: commentsModel, atTop: $commentsAtTop, scrollLocked: commentsScrollLocked)
-                        .padding(.top, ViewConst.safeAreaInsets.top)
-                        .padding(.bottom, 6)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: expandedCommentsHeight)
-                        .transition(.identity)
+                // ONE tree for tracks and workspace files alike: artwork ⇄ comments
+                // pager, then the controls. Files used to render a completely
+                // different branch (comments-only, `commentsOpen: true` hardcoded),
+                // so stepping between a folder's track and its file swapped the
+                // whole subtree — PlayerControls lost its identity and its measured
+                // transport height, the bottom bar jumped between the action row and
+                // the composer, and the pager fought the forced panel. What a file
+                // lacks is CONTENT (no info strip), not a different player.
+                GeometryReader { geo in
+                    HStack(spacing: 0) {
+                        mainPanel
+                            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
 
-                    PlayerControls(
-                        commentsModel: commentsModel,
-                        composerNamespace: animationNamespace,
-                        commentsOpen: true
-                    )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .transition(.move(edge: .bottom))
-                } else {
-                    // Real track → artwork ⇄ comments pager.
-                    GeometryReader { geo in
-                        HStack(spacing: 0) {
-                            mainPanel
-                                .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
-
-                            NowPlayingCommentsPanel(
-                                model: commentsModel,
-                                onClose: { withAnimation(.smooth(duration: 0.32)) { selectedPanel = 0 } },
-                                atTop: $commentsAtTop,
-                                scrollLocked: commentsScrollLocked
-                            )
-                                .padding(.top, ViewConst.safeAreaInsets.top)
-                                .padding(.bottom, 6)
-                                .frame(width: geo.size.width, height: geo.size.height)
-                        }
-                        .offset(x: -CGFloat(selectedPanel) * geo.size.width + pageDragX)
+                        NowPlayingCommentsPanel(
+                            model: commentsModel,
+                            onClose: { withAnimation(.smooth(duration: 0.32)) { selectedPanel = 0 } },
+                            atTop: $commentsAtTop,
+                            scrollLocked: commentsScrollLocked
+                        )
+                            .padding(.top, ViewConst.safeAreaInsets.top)
+                            .padding(.bottom, 6)
+                            .frame(width: geo.size.width, height: geo.size.height)
                     }
-                    .frame(height: selectedPanel == 1 ? expandedCommentsHeight : mainContentHeight)
-                    .transition(.identity)
-
-                    PlayerControls(
-                        onComment: {
-                            withAnimation(.smooth(duration: 0.32)) {
-                                selectedPanel = selectedPanel == 1 ? 0 : 1
-                            }
-                        },
-                        commentsModel: commentsModel,
-                        composerNamespace: animationNamespace,
-                        commentsOpen: selectedPanel == 1,
-                        minimized: minimized
-                    )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .transition(.move(edge: .bottom))
+                    .offset(x: -CGFloat(selectedPanel) * geo.size.width + pageDragX)
                 }
+                .frame(height: selectedPanel == 1 ? expandedCommentsHeight : mainContentHeight)
+                .transition(.identity)
+
+                PlayerControls(
+                    onComment: {
+                        withAnimation(.smooth(duration: 0.32)) {
+                            selectedPanel = selectedPanel == 1 ? 0 : 1
+                        }
+                    },
+                    commentsModel: commentsModel,
+                    composerNamespace: animationNamespace,
+                    commentsOpen: selectedPanel == 1,
+                    minimized: minimized
+                )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .transition(.move(edge: .bottom))
             }
         }
         .allowsHitTesting(expanded)
@@ -172,6 +159,12 @@ private extension RegularNowPlaying {
     var artworkVerticalPadding: CGFloat {
         size.height < 700 ? 8 : 16
     }
+
+    /// A workspace file isn't a real track: no description, credits, playlist or
+    /// workspace actions apply. The strip is hidden rather than removed, and this
+    /// height is unconditional — a file and a track then lay out IDENTICALLY, so
+    /// stepping between them in a folder queue moves nothing on screen.
+    var isWorkspaceFile: Bool { model.currentFileId != nil }
 
     /// Info-strip thumbnail height — mirrors `NowPlayingInfoStrip.thumbSize`
     /// (the strip is sized to its square thumbnail).
@@ -340,8 +333,15 @@ private extension RegularNowPlaying {
                 // Align the credits/About + buttons with the title, scrubber and the
                 // rest of the player content (same inset everywhere).
                 .padding(.horizontal, ViewConst.playerCardPaddings)
-                // Hidden in minimized (immersive) mode.
-                .opacity(minimized ? 0 : 1)
+                // Hidden in minimized (immersive) mode, and for workspace files —
+                // which have no description, credits, playlist or folder actions.
+                // Faded, never unmounted: keeping it in the layout is what makes a
+                // file and a track occupy exactly the same space.
+                .opacity(minimized || isWorkspaceFile ? 0 : 1)
+                // Invisible must also mean untappable — otherwise the About sheet
+                // opens from blank space (and, when minimized, swallows the tap
+                // that should bring the controls back).
+                .allowsHitTesting(!minimized && !isWorkspaceFile)
         }
         // A little below the safe-area edge so the cover doesn't hug the notch and
         // the stack reads more vertically centred (kept in sync with mainContentHeight).

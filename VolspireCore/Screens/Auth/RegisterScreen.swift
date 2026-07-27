@@ -16,13 +16,18 @@ import Services
 import SwiftUI
 
 struct RegisterScreen: View {
+    /// Which way the wizard was left. The chevron unwinds to wherever the
+    /// wizard was opened from; the "Already have an account?" link means
+    /// something more specific and should land on sign-in itself.
+    enum Exit { case back, signIn }
+
     @Environment(Dependencies.self) private var dependencies
 
     /// Injected fully-formed so the slide-in transition animates real content
     /// (a lazily-created view model would insert an empty frame that pops).
     @State var viewModel: RegisterViewModel
-    /// Returns to the login form (the auth container swaps screens in place).
-    let onClose: () -> Void
+    /// Hands the container the screen to swap to (it swaps them in place).
+    let onExit: (Exit) -> Void
 
     /// MapKit city/region autocomplete for the location field (same completer
     /// as Edit Profile).
@@ -56,34 +61,44 @@ struct RegisterScreen: View {
             }
         }
         .background(AuthCanvas())
-        // Pinned bottom link — AuthBottomLink carries the overlay/keyboard
-        // opt-out rationale.
-        .overlay {
-            if viewModel.step == 0 {
-                AuthBottomLink(prompt: "Already have an account?", action: "Sign in") {
-                    leaveWizard()
-                }
-            }
-        }
+        .authSwipeBack(isEnabled: canSwipeBack, action: goBack)
         .sheet(isPresented: $showTermsDoc) { SettingsDocScreen(doc: .terms, inSheet: true) }
         .sheet(isPresented: $showPrivacyDoc) { SettingsDocScreen(doc: .privacy, inSheet: true) }
     }
 
     // MARK: - Top bar (back chevron)
 
-    /// Back steps the wizard; on the first step it returns to login. Hidden
-    /// mid-verification (the verify step has its own "start over") and on the
-    /// done step.
+    /// Hidden mid-verification (the verify step has its own "start over") and on
+    /// the done step.
+    private var canGoBack: Bool {
+        viewModel.step != 3 && viewModel.step < RegisterViewModel.totalSteps
+    }
+
+    /// In `.completeProfile` the only way back is out of the account entirely,
+    /// which is too destructive to hang off a gesture — that one stays a
+    /// deliberate tap on the chevron.
+    private var canSwipeBack: Bool {
+        canGoBack && !viewModel.loading && !isProfileSetupRoot
+    }
+
+    private var isProfileSetupRoot: Bool {
+        viewModel.mode == .completeProfile && viewModel.step == 2
+    }
+
+    /// Back steps the wizard; on the first step it returns to the landing.
     private var topBar: some View {
-        AuthWizardBackBar(
-            canGoBack: viewModel.step != 3 && viewModel.step < RegisterViewModel.totalSteps,
-            disabled: viewModel.loading
-        ) {
-            if viewModel.step == 0 {
-                leaveWizard()
-            } else {
-                viewModel.goBack()
-            }
+        AuthWizardBackBar(canGoBack: canGoBack, disabled: viewModel.loading, onBack: goBack)
+    }
+
+    private func goBack() {
+        if isProfileSetupRoot {
+            // Nothing sits behind the profile step in this mode — backing out
+            // means ending the session, not returning to login.
+            Task { await viewModel.abandonProfileSetup() }
+        } else if viewModel.step == 0 {
+            leaveWizard(to: .back)
+        } else {
+            viewModel.goBack()
         }
     }
 
@@ -92,11 +107,9 @@ struct RegisterScreen: View {
     private func stepPage(_ step: Int, @ViewBuilder content: () -> some View) -> some View {
         AuthStepPage(
             title: RegisterViewModel.stepTitles[step],
-            subtitle: RegisterViewModel.stepSubtitles[step],
+            subtitle: viewModel.subtitle(for: step),
             // The existing-account notice replaces the raw error message.
-            error: viewModel.existingAccount ? nil : viewModel.error,
-            // Extra clearance on the first step for the pinned sign-in link.
-            bottomPadding: step == 0 ? 72 : 32
+            error: viewModel.existingAccount ? nil : viewModel.error
         ) {
             content()
         } footer: {
@@ -107,6 +120,15 @@ struct RegisterScreen: View {
 
             stepPrimaryButton(step)
                 .padding(.top, 24)
+
+            // Only the first step offers the swap to sign-in; past it there's a
+            // half-made account behind you.
+            if step == 0 {
+                AuthBottomLink(prompt: "Already have an account?", action: "Sign in") {
+                    leaveWizard(to: .signIn)
+                }
+                .padding(.top, 8)
+            }
         }
     }
 
@@ -148,31 +170,12 @@ struct RegisterScreen: View {
         }
     }
 
-    private var signInLink: some View {
-        Button {
-            leaveWizard()
-        } label: {
-            HStack(spacing: 4) {
-                Text("Already have an account?")
-                    .foregroundStyle(Color.vText3)
-                Text("Sign in")
-                    .foregroundStyle(.white)
-                    .fontWeight(.semibold)
-            }
-            .font(.appCalloutRegular)
-            .frame(maxWidth: .infinity)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .padding(.vertical, 14)
-    }
-
     /// Closes the wizard. If a held session exists (user verified but bailed
-    /// early), reveal it so they land in the app rather than limbo.
-    private func leaveWizard() {
+    /// early), release it — the profile gate decides where they actually land.
+    private func leaveWizard(to exit: Exit) {
         Task {
             await dependencies.authManager.finishOnboarding()
-            onClose()
+            onExit(exit)
         }
     }
 
@@ -181,12 +184,10 @@ struct RegisterScreen: View {
     @ViewBuilder
     private func emailStep(_ viewModel: RegisterViewModel) -> some View {
         VStack(spacing: 0) {
-            // EULA gate (App Store 1.2): must be accepted before any account is
-            // created. Gates the email "Continue" (via canContinue) and the
-            // social buttons below.
-            termsAgreement(viewModel)
-                .padding(.bottom, 20)
-
+            // No EULA gate here: consent is taken once the user has actually
+            // committed to a path — on the password step for email, and on the
+            // profile step after a social sign-in. Both land before the account
+            // is created (App Store 1.2), which is what the requirement is about.
             VStack(spacing: 10) {
                 AppleAuthButton(label: "Continue with Apple") { credential in
                     Task { await dependencies.authManager.signInWithApple(credential: credential) }
@@ -198,8 +199,6 @@ struct RegisterScreen: View {
                     Task { await dependencies.authManager.signInWithGoogle() }
                 }
             }
-            .disabled(!viewModel.agreedToLegal)
-            .opacity(viewModel.agreedToLegal ? 1 : 0.5)
 
             AuthOrDivider()
                 .padding(.vertical, 22)
@@ -214,7 +213,6 @@ struct RegisterScreen: View {
                 )
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: viewModel.agreedToLegal)
     }
 
     /// Age/Terms + Privacy acceptance — SEPARATE checkboxes, each with its
@@ -270,7 +268,7 @@ struct RegisterScreen: View {
     }
 
     private static var termsString: AttributedString {
-        var lead = AttributedString("I'm 18 or older and agree to Volspire's ")
+        var lead = AttributedString("I'm 13 or older and agree to Volspire's ")
         lead.font = .appFootnote
         lead.foregroundColor = Color.vText2
         var terms = AttributedString("Terms of Service")
@@ -294,6 +292,12 @@ struct RegisterScreen: View {
     @ViewBuilder
     private func passwordStep(_ viewModel: RegisterViewModel) -> some View {
         VStack(alignment: .leading, spacing: 18) {
+            // EULA gate for the email path — the last step before `handleSignUp`
+            // creates the account. Social sign-ins never reach this step and
+            // take the same consent on the profile step instead.
+            termsAgreement(viewModel)
+                .padding(.bottom, 4)
+
             AuthFieldGroup {
                 AuthSecureRow(
                     placeholder: "Password",
@@ -393,26 +397,16 @@ struct RegisterScreen: View {
                     .font(.appFootnote)
                     .foregroundStyle(Color.vText3)
 
-                ChipFlowLayout(spacing: 8, lineSpacing: 8) {
-                    ForEach(ProfileRoles.all, id: \.self) { role in
-                        let selected = viewModel.tags.contains(role)
-                        Button {
-                            viewModel.toggleTag(role)
-                        } label: {
-                            Text(role)
-                                .font(.appFootnoteMedium)
-                                .foregroundStyle(selected ? .black : Color.vText2)
-                                .padding(.horizontal, 13)
-                                .padding(.vertical, 8)
-                                .background(
-                                    Color.white.opacity(selected ? 1 : 0.05),
-                                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-                                )
-                                .contentShape(.rect(cornerRadius: 11))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+                RolePicker(selection: Binding(
+                    get: { viewModel.tags },
+                    set: { viewModel.tags = $0 }
+                ))
+            }
+
+            // Social sign-in never sees the password step, where the email path
+            // takes the EULA — so it's collected here, before `create_user` runs.
+            if viewModel.mode == .completeProfile {
+                termsAgreement(viewModel)
             }
         }
     }
@@ -654,7 +648,7 @@ struct RegisterScreen: View {
                 .foregroundStyle(.white)
             HStack(spacing: 4) {
                 Button {
-                    leaveWizard()
+                    leaveWizard(to: .signIn)
                 } label: {
                     Text("Sign in instead")
                         .foregroundStyle(.white)
@@ -691,7 +685,7 @@ struct RegisterScreen: View {
                 authManager: dependencies.authManager,
                 supabaseService: dependencies.supabaseService
             ),
-            onClose: {}
+            onExit: { _ in }
         )
     }
     .preferredColorScheme(.dark)

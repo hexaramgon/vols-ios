@@ -63,6 +63,14 @@ final class PlayerController {
     var saveCount = 0
     /// Set this to trigger navigation to an artist's profile (collapses the player).
     var pendingProfileNavigation: String?
+
+    /// Profile behind the artist line, whichever kind of item is playing: a track's
+    /// credited artist, or a workspace file's uploader (files have no `trackDetail`,
+    /// so their tap used to do nothing at all).
+    var currentArtistUserId: String? {
+        if let fileArtist = fileArtistIdByMediaId[state.currentMediaID?.value ?? ""] { return fileArtist }
+        return trackDetail?.artist?.userId
+    }
     /// Non-nil when the current item is a workspace file (not a track) — drives the
     /// comments panel to load file comments instead of track comments. Derived from
     /// `fileIdByMediaId` as the queue advances.
@@ -85,6 +93,9 @@ final class PlayerController {
     /// media-id → file-id for the current workspace queue. Only file items appear;
     /// track-reference items are absent so they read as normal tracks.
     private var fileIdByMediaId: [String: String] = [:]
+    /// Uploader per workspace-file media id — a file has no `trackDetail`, so this
+    /// is the only route from the playing item to a profile.
+    private var fileArtistIdByMediaId: [String: String] = [:]
 
     /// One item in a workspace play queue.
     struct WorkspacePlayItem: Sendable {
@@ -94,6 +105,9 @@ final class PlayerController {
         let artist: String
         let audioURL: URL
         let coverURL: URL?
+        /// Who to open when the artist line is tapped. A file has no track detail
+        /// to read an artist off, so its uploader comes along with the queue item.
+        var artistUserId: String?
     }
 
     /// Feeds the expanded player's visualizer. Installed on the player's
@@ -190,15 +204,20 @@ final class PlayerController {
     }
 
     /// Plays a workspace folder's files as a queue (so Next/Previous move through
-    /// the folder), starting at `mediaId`. File items load file comments and open
-    /// straight to the comments panel; track-reference items behave like tracks.
+    /// the folder), starting at `mediaId`. File items load file comments instead of
+    /// track ones; otherwise they use the same player as tracks (artwork panel,
+    /// swipe to comments) minus the info strip.
     func playWorkspace(_ items: [WorkspacePlayItem], startAt mediaId: String) {
         guard !items.isEmpty else { return }
         var map: [String: String] = [:]
-        for item in items where item.fileId != nil { map[item.mediaId] = item.fileId }
+        var artistMap: [String: String] = [:]
+        for item in items where item.fileId != nil {
+            map[item.mediaId] = item.fileId
+            artistMap[item.mediaId] = item.artistUserId
+        }
         fileIdByMediaId = map
+        fileArtistIdByMediaId = artistMap
         currentFileId = map[mediaId]
-        pendingExpand = currentFileId != nil   // files open straight to comments
         Task {
             for item in items {
                 await mediaState?.addTrack(
@@ -218,6 +237,7 @@ final class PlayerController {
     func playSingle(_ media: Media) {
         guard media.meta.audioURL != nil else { return }
         fileIdByMediaId = [:]
+        fileArtistIdByMediaId = [:]
         currentFileId = nil
         Task {
             await mediaState?.addTrack(media)
@@ -256,6 +276,7 @@ final class PlayerController {
         likeCount = 0
         saveCount = 0
         fileIdByMediaId = [:]
+        fileArtistIdByMediaId = [:]
         currentFileId = nil
         isRepeatOn = false
         persistAudioEdits = false

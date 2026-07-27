@@ -21,13 +21,16 @@ enum ExploreTab: Hashable {
     case all, collab, following, workspace, artists
 }
 
+/// The collab tab's feed toggle: the public board vs. the user's saved listings.
+enum CollabListingFilter { case recent, saved }
+
 /// Sub-categories of the All tab — a second, smaller pill row under the main
 /// one. Raw values match the rail titles so "See all" maps straight to a pill.
 enum AllSection: String, CaseIterable, Hashable {
     case everything = "All"
     case popular = "Popular"
-    case demos = "Demos"
-    case samples = "Samples"
+    case demos = "Short Tracks"
+    case samples = "Snippets"
     case tracks = "All Tracks"
 
     /// Pill label ("All Tracks" reads as just "Tracks" in the row).
@@ -64,6 +67,8 @@ struct HomeScreen: View {
     @State var expandedActivityActor: String? = nil
     /// Category filter on the Collab tab's listings (nil = all categories).
     @State var collabCategory: String? = nil
+    /// Recent (public board) vs. Saved listings, toggled from the section header.
+    @State var collabFilter: CollabListingFilter = .recent
     /// Measured so the collab filter sheet detents to exactly fit its tiles.
     @State var collabFilterSheetHeight: CGFloat = 480
     @State var searchText = ""
@@ -108,6 +113,8 @@ struct HomeScreen: View {
                 allSection: $allSection,
                 collabCategory: $collabCategory,
                 headerHeight: $headerHeight,
+                collabFilter: collabFilter,
+                onSelectCollabFilter: selectCollabFilter,
                 onBell: { router.navigateToNotifications() },
                 onSearch: {
                     withAnimation(.easeOut(duration: 0.22)) { showSearchOverlay = true }
@@ -148,21 +155,29 @@ struct HomeScreen: View {
             Task { await viewModel.refreshAfterOwnPost() }
         }
         .onChange(of: router.rootResetTick) { _, _ in
+            // Tapping the Home tab lands fully reset: back on the default All
+            // page with filters cleared and search closed — not just scrolled
+            // to the top (the id-swap on tabContent handles the scroll).
+            selectedTab = .all
+            allSection = .everything
+            collabCategory = nil
+            collabFilter = .recent
+            isSearchFocused = false
+            if showSearchOverlay {
+                withAnimation(.easeOut(duration: 0.22)) { showSearchOverlay = false }
+            }
             // Un-fold the brand row along with the scroll reset.
-            headerState.collapsed = false
-            headerState.accumulated = 0
+            unfoldHeaderInstantly()
         }
         .onChange(of: allSection) { _, _ in
             // Filter applied/cleared mid-scroll: the content swaps to a fresh
             // scroll view at the top, so the folded-header state from the old
             // scroll must not survive (it left a collapsed header over a
             // top-of-page feed).
-            headerState.collapsed = false
-            headerState.accumulated = 0
+            unfoldHeaderInstantly()
         }
         .onChange(of: selectedTab) { _, tab in
-            headerState.collapsed = false
-            headerState.accumulated = 0
+            unfoldHeaderInstantly()
             Task {
                 switch tab {
                 case .collab: await viewModel.loadListings()
@@ -172,6 +187,19 @@ struct HomeScreen: View {
                 default: break
                 }
             }
+        }
+    }
+
+    /// Restores the brand row WITHOUT animating it. Every caller here also swaps
+    /// the content to a fresh, top-of-page scroll view, and the bar owns a 0.32s
+    /// animation on `collapsed` — letting that run slid the newly-mounted content
+    /// down as the header grew under it, which read as the old tab scrolling away.
+    func unfoldHeaderInstantly() {
+        var instant = Transaction()
+        instant.disablesAnimations = true
+        withTransaction(instant) {
+            headerState.collapsed = false
+            headerState.accumulated = 0
         }
     }
 

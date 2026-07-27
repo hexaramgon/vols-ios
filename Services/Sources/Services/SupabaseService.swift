@@ -23,6 +23,20 @@ public let supabaseClient = SupabaseClient(
     supabaseKey: SupabaseConfig.apiKey
 )
 
+/// What a valid session's auth user actually owns, per `get_account_status`.
+///
+/// Signing in is not the same as having an account: Supabase mints an
+/// `auth.users` row the first time someone taps "Continue with Google", while
+/// the `public.users` row is only ever written by the wizard's `create_user`.
+public enum AccountStatus: String, Sendable {
+    /// A live profile row — the only state that may open the app.
+    case active
+    /// Tombstoned by `anonymize_self` (deleted from another device/the web).
+    case deleted
+    /// Auth user with no profile row: onboarding was never finished.
+    case missing = "none"
+}
+
 // MARK: - Supabase Service Implementation
 
 public final class SupabaseService: Sendable {
@@ -190,6 +204,10 @@ public final class SupabaseService: Sendable {
     public func markNotificationsRead() async throws {
         // Void-returning RPC — empty body, must not be decoded.
         try await executeRpc("mark_notifications_read", params: nil)
+        // Drop the cached (now-stale, is_read=false) feed so reopening the page
+        // within the realtime TTL re-fetches the read state instead of showing
+        // the rows unread again.
+        await cache.remove(APICache.key("get_user_notifications", params: nil))
     }
 
     /// Fetches the signed-in user's notification toggles (cached 1 min).
@@ -250,6 +268,12 @@ public final class SupabaseService: Sendable {
         ])
     }
 
+    /// The signed-in user's saved collab listings (`get_saved_listings`),
+    /// newest-saved first. Same `ApiListing` shape as `get_listings`.
+    public func getSavedListings() async throws -> [ApiListing] {
+        return try await performRpc("get_saved_listings")
+    }
+
     /// A specific user's collab-board listings (`get_user_listings`) — same shape as
     /// the board feed. Includes the owner's non-open listings when they're viewing.
     public func getUserListings(userId: String) async throws -> [ApiListing] {
@@ -279,8 +303,11 @@ public final class SupabaseService: Sendable {
         return try await performRpc("get_listing_comments", params: ["p_listing_id": listingId])
     }
 
-    public func postListingComment(listingId: String, content: String) async throws -> ApiListingComment {
-        return try await performRpc("post_listing_comment", params: ["p_listing_id": listingId, "p_content": content])
+    public func postListingComment(listingId: String, content: String, parentId: String? = nil) async throws -> ApiListingComment {
+        var params: [String: Any] = ["p_listing_id": listingId, "p_content": content]
+        // Omit when nil — the RPC defaults p_parent_id to null (a top-level comment).
+        if let parentId { params["p_parent_id"] = parentId }
+        return try await performRpc("post_listing_comment", params: params)
     }
 
     public func deleteListingComment(commentId: String) async throws {
@@ -497,6 +524,12 @@ public final class SupabaseService: Sendable {
     /// the conversation's Remove Collaborator option) asks this instead.
     public func getCollabStatus(otherUserId: String) async throws -> String {
         return try await performRpc("get_collab_status", params: ["p_other_id": otherUserId])
+    }
+
+    /// The collab listing a conversation was opened from — nil for plain DMs
+    /// or when the listing was deleted (`get_convo_listing_id`, participant-scoped).
+    public func getConvoListingId(convoId: String) async throws -> String? {
+        return try await performRpc("get_convo_listing_id", params: ["p_convo_id": convoId])
     }
 
     /// Ends an accepted collaboration (`remove_collaborator`) — the RPC deletes
@@ -1363,6 +1396,17 @@ public final class SupabaseService: Sendable {
     /// True when the username is free to claim (signup wizard).
     public func checkUsernameAvailable(_ username: String) async throws -> Bool {
         try await performRpc("check_username_available", params: ["p_username": username])
+    }
+
+    /// Which account state the signed-in session is in — the gate `AuthManager`
+    /// opens the app with.
+    ///
+    /// Not `get_user_profile`: that answers `{}` for a tombstoned account AND
+    /// for one that never onboarded, which need opposite handling. Deliberately
+    /// uncached — a stale answer here decides whether someone gets into the app.
+    public func accountStatus() async throws -> AccountStatus {
+        let raw: String = try await performRpc("get_account_status")
+        return AccountStatus(rawValue: raw) ?? .active
     }
 
     /// Creates the user's profile row after auth (signup wizard) — mirrors

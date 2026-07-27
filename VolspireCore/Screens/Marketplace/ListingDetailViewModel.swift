@@ -32,6 +32,8 @@ final class ListingDetailViewModel {
     var isPostingComment = false
     var isTogglingStatus = false
     var commentText = ""
+    /// The top-level comment the composer is replying to (nil = a new thread).
+    var replyingTo: ApiListingComment?
 
     private let service = SupabaseService()
     private let storage = StorageService()
@@ -161,14 +163,33 @@ final class ListingDetailViewModel {
 
     // MARK: - Comments
 
+    /// Sets the composer to reply to a thread. Replying from a reply row still
+    /// targets its top-level parent (one level of nesting).
+    func startReply(to comment: ApiListingComment) {
+        if comment.parentId == nil {
+            replyingTo = comment
+        } else {
+            replyingTo = comments.first { $0.commentId == comment.parentId } ?? comment
+        }
+    }
+
     func postComment() async {
         let trimmed = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isPostingComment else { return }
         isPostingComment = true
+        let parentId = replyingTo?.commentId
         do {
-            let comment = try await service.postListingComment(listingId: listing.listingId, content: trimmed)
-            comments.insert(comment, at: 0)
+            let comment = try await service.postListingComment(
+                listingId: listing.listingId, content: trimmed, parentId: parentId
+            )
+            if let parentId, let idx = comments.firstIndex(where: { $0.commentId == parentId }) {
+                // Nest the reply under its parent (server returns it oldest-last).
+                comments[idx].replies = (comments[idx].replies ?? []) + [comment]
+            } else {
+                comments.insert(comment, at: 0)
+            }
             commentText = ""
+            replyingTo = nil
             AnalyticsService.shared?.log(.commentPosted, metadata: ["kind": "listing", "listing_id": .string(listing.listingId)])
         } catch {
             debugLog("[ListingDetailVM] postComment failed: \(error)")
@@ -179,7 +200,13 @@ final class ListingDetailViewModel {
 
     func deleteComment(_ comment: ApiListingComment) async {
         let snapshot = comments
-        comments.removeAll { $0.commentId == comment.commentId }
+        if let parentId = comment.parentId,
+           let idx = comments.firstIndex(where: { $0.commentId == parentId }) {
+            comments[idx].replies?.removeAll { $0.commentId == comment.commentId }
+        } else {
+            // Deleting a top-level comment cascades its replies server-side.
+            comments.removeAll { $0.commentId == comment.commentId }
+        }
         do {
             try await service.deleteListingComment(commentId: comment.commentId)
         } catch {

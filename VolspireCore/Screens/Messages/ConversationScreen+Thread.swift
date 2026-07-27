@@ -82,6 +82,7 @@ struct ChatThread: View {
     private var canSend: Bool {
         let hasText = !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return (hasText || pendingAttachment != nil) && !viewModel.isSending
+            && viewModel.collabRequestGate == nil
     }
 
     var body: some View {
@@ -114,7 +115,15 @@ struct ChatThread: View {
                     .transition(.scale(scale: 0.9, anchor: .bottomLeading).combined(with: .opacity))
             }
         }
-        .safeAreaInset(edge: .bottom) { inputBar }
+        .safeAreaInset(edge: .bottom) {
+            // A gated thread swaps the composer for the reason it's closed —
+            // a disabled field with no explanation reads as a bug.
+            if let gate = viewModel.collabRequestGate {
+                gatedNotice(gate)
+            } else {
+                inputBar
+            }
+        }
         .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { _, item in handlePhoto(item) }
         .fileImporter(
@@ -591,6 +600,28 @@ struct ChatThread: View {
 
     // MARK: Input
 
+    /// Replaces the composer while a collab request of ours is unanswered or
+    /// declined. Same chrome as `inputBar` (hairline + `vBase` bleeding into the
+    /// safe area) so the bottom of the screen doesn't change shape.
+    private func gatedNotice(_ gate: CollabRequestGate) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            LucideIcon(.clock, .sm)
+                .foregroundStyle(Color.vText3)
+                .padding(.top, 1)
+            Text(gate.message)
+                .font(.appFootnote)
+                .foregroundStyle(Color.vText2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, ViewConst.screenPaddings)
+        .padding(.vertical, 14)
+        .background {
+            Color.vBase
+                .overlay(alignment: .top) { Rectangle().fill(Color.vBorder).frame(height: 1) }
+                .ignoresSafeArea(edges: .bottom)
+        }
+    }
+
     private var inputBar: some View {
         VStack(spacing: 8) {
             if let att = pendingAttachment {
@@ -618,7 +649,9 @@ struct ChatThread: View {
 
                 HStack(alignment: .bottom, spacing: 6) {
                     TextField("", text: $viewModel.draft, prompt: Text(pendingAttachment != nil ? "Add a caption…" : "Message…").foregroundStyle(Color.vText3), axis: .vertical)
-                        .font(.appCalloutRegular)
+                        // Same size as the comment composers (player + listing),
+                        // so typing feels identical across chat and comments.
+                        .font(.appBody)
                         .foregroundStyle(.white)
                         .tint(Color.brand)
                         .focused($inputFocused)

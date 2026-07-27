@@ -12,6 +12,7 @@ public struct ElasticSlider<LeadingContent: View, TrailingContent: View>: View {
     private let leadingLabel: LeadingContent?
     private let trailingLabel: TrailingContent?
     @Environment(\.elasticSliderConfig) var config
+    @Environment(\.elasticSliderLoading) var isLoading
     @State private var lastStoredValue: CGFloat
     @State private var stretchingValue: CGFloat = 0
     @State private var viewSize: CGSize = .zero
@@ -136,7 +137,17 @@ private extension ElasticSlider {
                             .frame(width: fillWidth)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     )
+
+                // Indeterminate loading: a comet gliding along the track while
+                // the media buffers (see `.sliderLoading`). Mounted only while
+                // loading so the loop dies with the view.
+                if isLoading {
+                    TrackLoadingSweep(tint: isActive ? config.minimumTrackActiveColor : config.minimumTrackInactiveColor)
+                        .clipShape(Capsule())
+                        .transition(.opacity)
+                }
             }
+            .animation(.easeInOut(duration: 0.3), value: isLoading)
             .preference(key: SizePreferenceKey.self, value: size)
             .frame(
                 height: isActive
@@ -304,16 +315,56 @@ public extension ElasticSliderConfig {
     }
 }
 
+// MARK: Loading sweep
+
+/// The slider's indeterminate loading treatment: a soft trail rising into a
+/// bright head — a "comet" — sweeping the track left → right on a loop.
+/// Looping-animation rules: the loop lives in this child's own state, starts
+/// onAppear, and dies when the view unmounts (mount it only while loading).
+private struct TrackLoadingSweep: View {
+    let tint: Color
+    @State private var sweeping = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let band = max(44, width * 0.3)
+            LinearGradient(
+                stops: [
+                    .init(color: tint.opacity(0), location: 0),
+                    .init(color: tint.opacity(0.12), location: 0.6),
+                    .init(color: tint.opacity(0.7), location: 0.94),
+                    .init(color: tint.opacity(0), location: 1),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(width: band)
+            .offset(x: sweeping ? width : -band)
+            .animation(.linear(duration: 1.2).repeatForever(autoreverses: false), value: sweeping)
+        }
+        .allowsHitTesting(false)
+        .onAppear { sweeping = true }
+    }
+}
+
 // MARK: EnvironmentValues
 
 public extension View {
     func sliderStyle(_ config: ElasticSliderConfig) -> some View {
         environment(\.elasticSliderConfig, config)
     }
+
+    /// Shows the slider's indeterminate loading sweep along the track (e.g.
+    /// while the player buffers). Purely visual — the slider stays interactive.
+    func sliderLoading(_ loading: Bool) -> some View {
+        environment(\.elasticSliderLoading, loading)
+    }
 }
 
 extension EnvironmentValues {
     @Entry var elasticSliderConfig = ElasticSliderConfig()
+    @Entry var elasticSliderLoading = false
 }
 
 #Preview {

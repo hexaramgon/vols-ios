@@ -16,8 +16,13 @@ public extension ViewConst {
     /// Tighter horizontal edge padding for card/listing grids, so 2-column grids
     /// still fill a bit more of the screen than text content.
     static let gridPaddings: CGFloat = 8
-    /// Header action-icon glyph size (bell / search / messages / "…"), used app-wide.
+    /// Header action-icon glyph size (bell / search / messages / "…" in header
+    /// rows), used app-wide.
     static let headerIconSize: CGFloat = 24
+    /// THE "…" options-glyph size, app-wide — hero overlays, bar headers, and
+    /// row accessories all draw the ellipsis at this one size (larger than
+    /// `headerIconSize` so it holds its own next to the `backIconSize` chevron).
+    static let heroOverlayIconSize: CGFloat = 28
     /// Back-chevron glyph size in pushed-screen nav bars. NB: the shared
     /// BackButton draws a Lucide chevron, whose inner viewBox padding makes it
     /// read ~25% smaller than an SF symbol at the same point size — this value
