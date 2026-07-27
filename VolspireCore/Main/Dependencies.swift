@@ -21,6 +21,16 @@ class Dependencies: Observable {
     /// Held here so its subscriptions live for the app's lifetime.
     let listenAnalytics: ListenAnalyticsTracker
 
+    // Shared domain stores — the single source of truth for cross-screen server
+    // state. Injected via `.environment` in AppView; screens render from these
+    // and route mutations through them (see Stores/).
+    let libraryStore: LibraryStore
+    let workspaceStore: WorkspaceStore
+    let socialStore: SocialStore
+    let inboxStore: InboxStore
+    let listingsStore: ListingsStore
+    let feedStore: FeedStore
+
     init(
         supabaseService: SupabaseService,
         authManager: AuthManager,
@@ -37,6 +47,12 @@ class Dependencies: Observable {
         self.playerController = playerController
         self.analytics = analytics
         self.listenAnalytics = listenAnalytics
+        libraryStore = LibraryStore(service: supabaseService, auth: authManager)
+        workspaceStore = WorkspaceStore(service: supabaseService)
+        socialStore = SocialStore(service: supabaseService, auth: authManager)
+        inboxStore = InboxStore(service: supabaseService)
+        listingsStore = ListingsStore(service: supabaseService)
+        feedStore = FeedStore(service: supabaseService, storage: StorageService())
     }
 }
 
@@ -49,6 +65,12 @@ extension Dependencies {
         mediaPlayer.reset()
         playerController.resetForSignOut()
         Task { await mediaState.removeAll() }
+        libraryStore.resetForSignOut()
+        workspaceStore.resetForSignOut()
+        socialStore.resetForSignOut()
+        inboxStore.resetForSignOut()
+        listingsStore.resetForSignOut()
+        feedStore.resetForSignOut()
     }
 }
 

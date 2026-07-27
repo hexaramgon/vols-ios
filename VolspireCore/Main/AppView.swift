@@ -30,6 +30,12 @@ struct AppView: View {
                 case .authenticated:
                     OverlaidRootView()
                         .environment(dependencies.playerController)
+                        .environment(dependencies.libraryStore)
+                        .environment(dependencies.workspaceStore)
+                        .environment(dependencies.socialStore)
+                        .environment(dependencies.inboxStore)
+                        .environment(dependencies.listingsStore)
+                        .environment(dependencies.feedStore)
                 case .needsProfile:
                     // Signed in with no profile row — finish the account before
                     // the app opens (see AuthManager.AuthState.needsProfile).

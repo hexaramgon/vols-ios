@@ -480,4 +480,10 @@ enum PushInbox {
     OverlaidRootView()
         .environment(playerController)
         .environment(dependencies)
+        .environment(dependencies.libraryStore)
+        .environment(dependencies.workspaceStore)
+        .environment(dependencies.socialStore)
+        .environment(dependencies.inboxStore)
+        .environment(dependencies.listingsStore)
+        .environment(dependencies.feedStore)
 }
