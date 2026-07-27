@@ -78,6 +78,10 @@ struct ConversationScreen: View {
             vm.inbox = inboxStore
             vm.social = socialStore
             vm.otherUserId = conversation.otherUserId
+            // Restore a draft left behind last time this thread was open.
+            if vm.draft.isEmpty {
+                vm.draft = inboxStore.draft(for: conversation.convoId)
+            }
             viewModel = vm
             // Opening reads the thread — zero the list row immediately.
             inboxStore.conversationOpened(conversation.convoId)
@@ -98,6 +102,10 @@ struct ConversationScreen: View {
         .enableSwipeBack()
         .onAppear { conversationState.activeConversation = conversation }
         .onDisappear {
+            // Keep whatever was typed — restored on the next open of this thread.
+            if let viewModel {
+                inboxStore.setDraft(viewModel.draft, for: conversation.convoId)
+            }
             if conversationState.activeConversation == conversation {
                 conversationState.activeConversation = nil
             }

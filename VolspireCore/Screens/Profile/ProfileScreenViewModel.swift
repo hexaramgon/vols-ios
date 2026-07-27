@@ -81,7 +81,15 @@ final class ProfileScreenViewModel {
     var tags: [String] = []
     /// `collaborator` | `listener` — not user-editable, preserved on save.
     var accountType: String?
-    var followersCount: Int = 0
+    /// Server base + the shared optimistic delta, so a follow toggled anywhere
+    /// (this screen, Home's artist rows) moves the stat immediately — and a
+    /// fresh fetch (whose count includes settled toggles) resets the delta.
+    var followersCount: Int {
+        guard let id = profileUserId else { return baseFollowersCount }
+        return max(0, baseFollowersCount + (social?.followerDelta(id) ?? 0))
+    }
+
+    private var baseFollowersCount = 0
     var monthlyListenersCount: Int = 0
     var trackCount: Int = 0
     var tracks: [ProfileTrack] = []
@@ -125,7 +133,14 @@ final class ProfileScreenViewModel {
     }
 
     private var seededCollabStatus = "none"
-    var collabConvoId: String?
+    /// The pair's DM id — overlay first (an in-thread accept fills it live so
+    /// "Message" deep-links without a refetch), profile fetch as fallback.
+    var collabConvoId: String? {
+        guard let id = profileUserId else { return seededCollabConvoId }
+        return social?.collabConvoId(id, fallback: seededCollabConvoId) ?? seededCollabConvoId
+    }
+
+    private var seededCollabConvoId: String?
     /// Collab-request composer state (shown when status is `none`).
     var showCollabSheet = false
     var collabMessage = ""
@@ -211,19 +226,19 @@ final class ProfileScreenViewModel {
         location = profile.location ?? ""
         tags = profile.tags ?? []
         accountType = profile.accountType
-        followersCount = profile.followersCount ?? 0
+        baseFollowersCount = profile.followersCount ?? 0
         monthlyListenersCount = profile.monthlyListenersCount
         trackCount = profile.trackCount
         seededIsFollowing = profile.isFollowing ?? false
         isUnavailable = profile.isUnavailable ?? false
         viewerHasBlocked = profile.viewerHasBlocked ?? false
         seededCollabStatus = profile.collaboratorStatus ?? "none"
-        collabConvoId = profile.collabConvoId
+        seededCollabConvoId = profile.collabConvoId
         // Push the fresh per-user truth into the shared overlays (skipped for
         // ids with a toggle in flight).
         if let id = profileUserId {
             social?.reconcileFollow(userId: id, isFollowing: seededIsFollowing)
-            social?.setCollabStatus(seededCollabStatus, userId: id)
+            social?.setCollabStatus(seededCollabStatus, userId: id, convoId: profile.collabConvoId)
         }
         tracks = profile.tracks.map(profileTrack)
         apiServices = profile.services
@@ -512,8 +527,8 @@ final class ProfileScreenViewModel {
         do {
             try await supabaseService.removeCollaborator(userId: userId)
             seededCollabStatus = "none"
+            seededCollabConvoId = nil
             social?.setCollabStatus("none", userId: userId)
-            collabConvoId = nil
         } catch {
             debugLog("[ProfileVM] removeCollaborator failed: \(error)")
         }
@@ -522,13 +537,10 @@ final class ProfileScreenViewModel {
     func toggleFollow(userId: String) async {
         guard !isTogglingFollow, let social else { return }
         isTogglingFollow = true
-        // The store flips the shared overlay optimistically (and rolls back on
-        // failure); the follower-count nudge is display math and stays local.
-        let next = !isFollowing
-        followersCount = max(0, followersCount + (next ? 1 : -1))
-        if await social.toggleFollow(userId: userId, currentlyFollowing: isFollowing) == nil {
-            followersCount = max(0, followersCount + (next ? -1 : 1))
-        }
+        // The store flips the shared overlay AND the follower-count delta
+        // optimistically, rolling both back on failure — `followersCount`
+        // renders base + delta, so there's no local math to keep in sync.
+        await social.toggleFollow(userId: userId, currentlyFollowing: isFollowing)
         isTogglingFollow = false
     }
 

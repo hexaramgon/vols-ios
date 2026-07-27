@@ -53,6 +53,27 @@ struct ConversationItem: Identifiable, Hashable {
     var isArchivedRow: Bool { isDeclinedRequest || archived }
 }
 
+/// The inbox's folder buckets. Routes carry the KEY (not a row snapshot), so
+/// a pushed folder derives live rows from the store and never goes stale.
+enum MessageBucket: String, Hashable {
+    case requests, orders, inquiries, listings, direct, archived
+}
+
+extension [ConversationItem] {
+    /// THE bucket predicates — shared by the inbox list (over its search-
+    /// filtered rows) and pushed category folders (over the store's rows).
+    func bucket(_ bucket: MessageBucket) -> [ConversationItem] {
+        switch bucket {
+        case .requests: filter { $0.isPendingRequest && !$0.archived }
+        case .orders: filter { $0.isOrder && !$0.archived }
+        case .inquiries: filter { $0.isInquiry && !$0.archived }
+        case .listings: filter { $0.isListing && !$0.archived }
+        case .direct: filter { !$0.isPendingRequest && !$0.isOrder && !$0.isInquiry && !$0.isListing && !$0.isArchivedRow }
+        case .archived: filter { $0.isArchivedRow }
+        }
+    }
+}
+
 /// Single source of truth for the inbox: the conversation list and the app's
 /// unread counts (DMs + notifications). This is THE `get_unread_counts`
 /// pipeline — the tab dot, the bell dot, and the app-icon badge all derive
@@ -94,6 +115,7 @@ final class InboxStore {
         loadState = .idle
         unreadMessages = 0
         unreadNotifications = 0
+        draftsByConvo = [:]
     }
 
     // MARK: - Conversation list
@@ -182,6 +204,24 @@ final class InboxStore {
         guard let i = conversations.firstIndex(where: { $0.id == convoId }) else { return }
         conversations[i].requestStatus = status
     }
+
+    // MARK: - Drafts
+
+    /// Unsent composer text per conversation — survives closing the thread
+    /// (session-scoped; cleared on send and at sign-out).
+    private var draftsByConvo: [String: String] = [:]
+
+    func draft(for convoId: String) -> String {
+        draftsByConvo[key(convoId)] ?? ""
+    }
+
+    func setDraft(_ text: String, for convoId: String) {
+        let k = key(convoId)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        draftsByConvo[k] = trimmed.isEmpty ? nil : text
+    }
+
+    private func key(_ raw: String) -> String { raw.lowercased() }
 
     // MARK: - Row mapping (from `get_user_conversations`)
 

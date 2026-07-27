@@ -30,8 +30,18 @@ final class SocialStore {
     private var followingByUserId: [String: Bool] = [:]
     /// Per-user follow mutation lock (blocks double-taps, guards reconciles).
     private var followBusyIds: Set<String> = []
+    /// Optimistic follower-count nudges per user, applied on top of whatever
+    /// server count a screen fetched — so a follow toggled anywhere moves a
+    /// mounted profile's stat, not just its button. Zeroed when a fresh
+    /// per-user fetch arrives (its count already includes settled toggles —
+    /// `toggleFollow` invalidates the target's profile cache).
+    private var followerDeltas: [String: Int] = [:]
     /// Collaborator status overlay: "none" | "pending" | "accepted".
     private var collabStatusByUserId: [String: String] = [:]
+    /// The pair's DM conversation id, when known — set by the profile fetch
+    /// AND by an in-thread accept, so a mounted profile's "Message" button
+    /// can deep-link without a refetch.
+    private var collabConvoIdByUserId: [String: String] = [:]
 
     // MARK: Dependencies
 
@@ -52,7 +62,9 @@ final class SocialStore {
         myProfileLoadState = .idle
         followingByUserId = [:]
         followBusyIds = []
+        followerDeltas = [:]
         collabStatusByUserId = [:]
+        collabConvoIdByUserId = [:]
     }
 
     // MARK: - Own profile
@@ -104,10 +116,18 @@ final class SocialStore {
 
     /// Server truth from a PROFILE fetch (fresh, per-user, authoritative) —
     /// overwrites the overlay unless a toggle is in flight for that user.
+    /// The count delta is baked into the fetched number, so it resets here.
     func reconcileFollow(userId: String, isFollowing following: Bool) {
         let k = key(userId)
         guard !followBusyIds.contains(k) else { return }
         followingByUserId[k] = following
+        followerDeltas[k] = nil
+    }
+
+    /// Optimistic follower-count nudge for a user, rendered on top of a
+    /// screen's fetched count.
+    func followerDelta(_ userId: String) -> Int {
+        followerDeltas[key(userId)] ?? 0
     }
 
     /// THE follow mutation path (profile button + explore rows). Optimistic
@@ -121,6 +141,7 @@ final class SocialStore {
         followBusyIds.insert(k)
         let next = !currentlyFollowing
         followingByUserId[k] = next
+        nudgeFollowerDelta(k, by: next ? 1 : -1)
         AnalyticsService.shared?.log(
             next ? .userFollowed : .userUnfollowed,
             metadata: ["target_user_id": .string(userId)]
@@ -131,9 +152,15 @@ final class SocialStore {
             return next
         } catch {
             followingByUserId[k] = currentlyFollowing
+            nudgeFollowerDelta(k, by: next ? -1 : 1)
             debugLog("[SocialStore] toggleFollow failed: \(error)")
             return nil
         }
+    }
+
+    private func nudgeFollowerDelta(_ k: String, by amount: Int) {
+        let next = (followerDeltas[k] ?? 0) + amount
+        followerDeltas[k] = next == 0 ? nil : next
     }
 
     // MARK: - Collaborator overlay
@@ -146,8 +173,19 @@ final class SocialStore {
 
     /// Written by every collab transition: profile fetch (seed), request sent
     /// (pending), thread accept/decline (accepted/none), collaborator removed.
-    func setCollabStatus(_ status: String, userId: String) {
-        collabStatusByUserId[key(userId)] = status
+    /// Pass `convoId` when the caller knows the pair's DM (profile fetch, the
+    /// thread itself); "none" clears it (removal archives the DM).
+    func setCollabStatus(_ status: String, userId: String, convoId: String? = nil) {
+        let k = key(userId)
+        collabStatusByUserId[k] = status
+        if let convoId { collabConvoIdByUserId[k] = convoId }
+        if status == "none" { collabConvoIdByUserId[k] = nil }
+    }
+
+    /// The pair's DM conversation id (overlay first, caller's fetched value as
+    /// fallback) — drives a profile's "Message" deep-link.
+    func collabConvoId(_ userId: String, fallback: String? = nil) -> String? {
+        collabConvoIdByUserId[key(userId)] ?? fallback
     }
 
     private func key(_ raw: String) -> String { raw.lowercased() }

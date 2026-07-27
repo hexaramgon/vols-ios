@@ -129,10 +129,10 @@ struct MessagesScreen: View {
 
     @ViewBuilder
     private var mainInbox: some View {
-        categoryRow(.bell, "Message requests", viewModel.pendingRequests)
-        categoryRow(.shoppingCart, "Orders", viewModel.orders)
-        categoryRow(.briefcase, "Inquiries", viewModel.inquiries)
-        categoryRow(.handshake, "Listings", viewModel.listings)
+        categoryRow(.bell, "Message requests", .requests, viewModel.pendingRequests)
+        categoryRow(.shoppingCart, "Orders", .orders, viewModel.orders)
+        categoryRow(.briefcase, "Inquiries", .inquiries, viewModel.inquiries)
+        categoryRow(.handshake, "Listings", .listings, viewModel.listings)
         ForEach(viewModel.directConvos) { item in
             ConversationRow(item: item)
         }
@@ -142,12 +142,14 @@ struct MessagesScreen: View {
     /// A tappable "folder" row — pushes a `MessageCategoryScreen` via the Router,
     /// the same way Library/Marketplace push their detail pages.
     @ViewBuilder
-    private func categoryRow(_ icon: LucideIcon.Name, _ label: String, _ items: [ConversationItem]) -> some View {
+    private func categoryRow(_ icon: LucideIcon.Name, _ label: String, _ bucket: MessageBucket, _ items: [ConversationItem]) -> some View {
         if !items.isEmpty {
             let unread = items.reduce(0) { $0 + $1.unreadCount }
             Button {
                 searchFocused = false
-                router.navigateToMessageCategory(title: label, items: items)
+                // Push the bucket KEY — the folder derives live rows from the
+                // store, so acting inside it (or a poll) updates it in place.
+                router.navigateToMessageCategory(title: label, bucket: bucket)
             } label: {
                 HStack(spacing: 12) {
                     ZStack {

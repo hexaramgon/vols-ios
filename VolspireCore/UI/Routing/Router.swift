@@ -22,7 +22,7 @@ enum Route: Hashable, Equatable {
     case marketplaceService(ApiMarketplaceService)
     case collabListing(ApiListing)
     case conversation(ActiveConversation)
-    case messageCategory(title: String, items: [ConversationItem])
+    case messageCategory(title: String, bucket: MessageBucket)
 }
 
 @Observable
@@ -81,8 +81,8 @@ class Router {
         path.append(Route.conversation(conversation))
     }
 
-    func navigateToMessageCategory(title: String, items: [ConversationItem]) {
-        path.append(Route.messageCategory(title: title, items: items))
+    func navigateToMessageCategory(title: String, bucket: MessageBucket) {
+        path.append(Route.messageCategory(title: title, bucket: bucket))
     }
 
     func popToRoot() {

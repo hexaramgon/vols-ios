@@ -56,8 +56,8 @@ struct RoutedView: View {
             ListingDetailScreen(listing: listing)
         case let .conversation(convo):
             ConversationScreen(conversation: convo)
-        case let .messageCategory(title, items):
-            MessageCategoryScreen(title: title, items: items)
+        case let .messageCategory(title, bucket):
+            MessageCategoryScreen(title: title, bucket: bucket)
         }
     }
 }

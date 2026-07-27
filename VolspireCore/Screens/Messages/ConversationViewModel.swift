@@ -210,10 +210,12 @@ final class ConversationViewModel {
                                           attachmentType: nil, attachmentName: nil, pending: false)
             }
             inbox?.threadLatestChanged(convoId: convoId, preview: text, at: sentAt, fromMe: true)
+            inbox?.setDraft("", for: convoId)
         } catch {
             debugLog("[ConversationVM] send: \(error)")
             messages.removeAll { $0.id == tempId }
             draft = text   // restore the unsent text so it isn't lost
+            inbox?.setDraft(text, for: convoId)   // …even if the screen closes
             await handleCollabGateRejection(error)
         }
         isSending = false
@@ -447,10 +449,15 @@ final class ConversationViewModel {
                 try await service.rejectRequest(requestId: requestId)
             }
             // The Requests bucket and any mounted profile's collab badge
-            // re-derive from the shared stores.
+            // re-derive from the shared stores. This thread IS the pair's DM,
+            // so an accept also hands the profile its "Message" deep-link.
             inbox?.requestStatusChanged(convoId: convoId, status: accept ? "accepted" : "rejected")
             if let otherUserId {
-                social?.setCollabStatus(accept ? "accepted" : "none", userId: otherUserId)
+                social?.setCollabStatus(
+                    accept ? "accepted" : "none",
+                    userId: otherUserId,
+                    convoId: accept ? convoId : nil
+                )
             }
         } catch {
             debugLog("[ConversationVM] respondToRequest: \(error)")

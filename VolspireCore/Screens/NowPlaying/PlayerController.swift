@@ -56,19 +56,15 @@ final class PlayerController {
     var persistAudioEdits: Bool = false
     var showingEffectsSheet: Bool = false
     var trackDetail: ApiTrackDetail?
-    /// Like state for the current track (mirrors the web's track interactions).
-    /// Likes are player-only, so the controller still owns them.
-    var isLiked = false
     /// Saved state reads the shared LibraryStore — the single bookmark truth —
     /// so a save/unsave made on any list is reflected here instantly (and vice
     /// versa). Workspace files aren't tracks and are never "saved".
+    /// (Like state and the like/save display counts were removed with the like
+    /// button — nothing rendered them; the RPCs remain in SupabaseService.)
     var isSaved: Bool {
         guard currentFileId == nil, let id = state.currentMediaID?.value else { return false }
         return library?.isSaved(id) ?? false
     }
-
-    var likeCount = 0
-    var saveCount = 0
     /// Set this to trigger navigation to an artist's profile (collapses the player).
     var pendingProfileNavigation: String?
 
@@ -283,9 +279,6 @@ final class PlayerController {
     func resetForSignOut() {
         trackDetail = nil
         lastFetchedTrackId = nil
-        isLiked = false
-        likeCount = 0
-        saveCount = 0
         fileIdByMediaId = [:]
         fileArtistIdByMediaId = [:]
         currentFileId = nil
@@ -312,36 +305,14 @@ final class PlayerController {
         player?.applyEffects(effects)
     }
 
-    /// Likes/unlikes the current track, optimistically updating state + count.
-    func toggleLike() async {
-        guard let trackId = state.currentMediaID?.value else { return }
-        let next = !isLiked
-        isLiked = next
-        likeCount = max(0, likeCount + (next ? 1 : -1))
-        analytics?.log(next ? .trackLiked : .trackUnliked, trackId: trackId)
-        do {
-            if next { try await supabaseService.likeTrack(trackId: trackId) }
-            else { try await supabaseService.unlikeTrack(trackId: trackId) }
-        } catch {
-            isLiked = !next
-            likeCount = max(0, likeCount + (next ? -1 : 1))
-            debugLog("[PlayerController] toggleLike failed: \(error)")
-        }
-    }
-
     /// Saves/unsaves the current track through the shared LibraryStore (which
-    /// flips the bookmark optimistically and rolls back on failure). The local
-    /// count math stays here — the store owns membership, not display counts.
+    /// flips the bookmark optimistically and rolls back on failure).
     func toggleSave() async {
         guard currentFileId == nil, let trackId = state.currentMediaID?.value, let library else { return }
         let next = !isSaved
         Haptics.impact(.soft) // very subtle tap on save/unsave (matches Follow)
-        saveCount = max(0, saveCount + (next ? 1 : -1))
         analytics?.log(next ? .trackSaved : .trackUnsaved, trackId: trackId)
-        if await library.setSaved(next, trackId: trackId) == nil {
-            // In-flight duplicate or failed-and-rolled-back — undo the count nudge.
-            saveCount = max(0, saveCount + (next ? -1 : 1))
-        }
+        await library.setSaved(next, trackId: trackId)
     }
 }
 
@@ -473,7 +444,7 @@ private extension PlayerController {
     func fetchTrackDetailIfNeeded() {
         // A workspace file isn't a track — no track detail / like / save to fetch.
         if currentFileId != nil {
-            trackDetail = nil; isLiked = false; likeCount = 0; saveCount = 0
+            trackDetail = nil
             return
         }
         guard let trackId = state.currentMediaID?.value else { return }
@@ -490,9 +461,6 @@ private extension PlayerController {
         if lastFetchedTrackId?.caseInsensitiveCompare(trackId) != .orderedSame {
             lastFetchedTrackId = trackId
             trackDetail = nil
-            isLiked = false
-            likeCount = 0
-            saveCount = 0
             // New track starts at 1× unless "carry edits" is on.
             if !persistAudioEdits, audioEffects != .default {
                 applyEffects(.default)
@@ -506,15 +474,12 @@ private extension PlayerController {
                 // one, so a superseded fetch can't leave the strip stuck shimmering.
                 guard state.currentMediaID?.value.caseInsensitiveCompare(trackId) == .orderedSame else { return }
                 trackDetail = detail
-                likeCount = detail.likes ?? 0
-                saveCount = detail.saves ?? 0
             } catch {
                 debugLog("[PlayerController] getTrackMetadata failed: \(error)")
             }
-            // Save/like state — separate RPC, mirrors the web's get_track_interaction_status.
+            // Saved state — separate RPC, mirrors the web's get_track_interaction_status.
             if let status = try? await supabaseService.getTrackInteractionStatus(trackId: trackId) {
                 guard state.currentMediaID?.value.caseInsensitiveCompare(trackId) == .orderedSame else { return }
-                isLiked = status.isLiked
                 // Saved truth lives in the shared store; feed it the server's
                 // answer (it ignores ids with an optimistic write in flight).
                 library?.reconcileSaved(trackId: trackId, isSaved: status.isSaved)

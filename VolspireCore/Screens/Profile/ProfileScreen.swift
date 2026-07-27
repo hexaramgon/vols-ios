@@ -315,9 +315,12 @@ private extension ProfileScreen {
                 awaitsCompletion: true
             ) {
                 if await viewModel.hideTrack(trackId: track.id, hide: !track.isPrivate) {
-                    // Visibility feeds the home rails — refetch them in place
-                    // (a hidden track must stop being offered).
-                    await feedStore.trackEdited(track.id)
+                    // Visibility feeds the home rails AND the Library uploads
+                    // section — refetch both in place (a hidden track must
+                    // stop being offered).
+                    async let feedDone: Void = feedStore.trackEdited(track.id)
+                    async let libraryDone: Void = libraryStore.trackEdited(track.id)
+                    _ = await (feedDone, libraryDone)
                 }
             },
             .init(icon: .trash2, title: "Delete Track", isDestructive: true) {

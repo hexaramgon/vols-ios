@@ -30,18 +30,13 @@ final class MessagesScreenViewModel {
         }
     }
 
-    /// Pending collab requests — pinned at the top (web's "New message requests").
-    var pendingRequests: [ConversationItem] { filtered.filter { $0.isPendingRequest && !$0.archived } }
-    /// Purchase threads.
-    var orders: [ConversationItem] { filtered.filter { $0.isOrder && !$0.archived } }
-    /// Pre-purchase service chats.
-    var inquiries: [ConversationItem] { filtered.filter { $0.isInquiry && !$0.archived } }
-    /// Collab-board listing-response threads.
-    var listings: [ConversationItem] { filtered.filter { $0.isListing && !$0.archived } }
-    /// Everything else — DMs.
-    var directConvos: [ConversationItem] {
-        filtered.filter { !$0.isPendingRequest && !$0.isOrder && !$0.isInquiry && !$0.isListing && !$0.isArchivedRow }
-    }
+    /// Buckets over the search-filtered rows — predicates live on the shared
+    /// `bucket(_:)` helper so pushed folders classify identically.
+    var pendingRequests: [ConversationItem] { filtered.bucket(.requests) }
+    var orders: [ConversationItem] { filtered.bucket(.orders) }
+    var inquiries: [ConversationItem] { filtered.bucket(.inquiries) }
+    var listings: [ConversationItem] { filtered.bucket(.listings) }
+    var directConvos: [ConversationItem] { filtered.bucket(.direct) }
     /// Declined requests + archived threads (collapsed section).
-    var archivedConvos: [ConversationItem] { filtered.filter { $0.isArchivedRow } }
+    var archivedConvos: [ConversationItem] { filtered.bucket(.archived) }
 }
