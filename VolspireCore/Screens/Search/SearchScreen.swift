@@ -3,8 +3,10 @@
 //  Volspire
 //
 //  Full-catalog search results — tracks, artists, services and packs from the
-//  `search_all` RPC (the same backend the web app's search uses), grouped into
-//  sections over a themed search field.
+//  `search_all` RPC — laid out like the web's search page (search-view.tsx):
+//  a flat field, "N results for “q”", All / Tracks / Artists chips with
+//  counts, then (on All) labelled sections capped at 5 tracks / 4 artists
+//  with "See all N →", rows highlighting the matched text.
 //
 
 import DesignSystem
@@ -20,8 +22,20 @@ struct SearchScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(PlayerController.self) private var playerController
     @FocusState private var fieldFocused: Bool
+    @State private var tab: ResultsTab = .all
+
+    enum ResultsTab: Hashable { case all, tracks, artists, services, packs }
 
     var initialQuery: String = ""
+
+    /// Copy follows what search can actually return: packs and services are
+    /// dropped while `FeatureFlags.marketplace` is off, so promising them here
+    /// would advertise results the user can never get.
+    static var searchPrompt: String {
+        FeatureFlags.marketplace
+            ? "Search tracks, artists, services, packs…"
+            : "Search tracks, artists…"
+    }
 
     private var pad: CGFloat { ViewConst.screenPaddings }
 
@@ -35,7 +49,6 @@ struct SearchScreen: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.vBase.ignoresSafeArea())
-        .preferredColorScheme(.dark)
         .ignoresSafeArea(edges: .top)
         .navigationBarBackButtonHidden(true)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -56,107 +69,222 @@ private extension SearchScreen {
         HStack(spacing: 12) {
             BackButton(shadow: false)
 
-            HStack(spacing: 10) {
-                LucideIcon(.search, .md).foregroundStyle(Color.vText2)
-                TextField("", text: $viewModel.searchText, prompt: Text("Search tracks, artists, services, packs…").foregroundColor(Color.vText3))
-                    .font(.appBody)
-                    .foregroundStyle(.white)
-                    .tint(.white)
+            // The app's form field (web search page): borderless fill that
+            // brightens on focus.
+            HStack(spacing: 8) {
+                LucideIcon(.search, .md).foregroundStyle(Color.vText3)
+                TextField("", text: $viewModel.searchText, prompt: Text(Self.searchPrompt).foregroundColor(Color.vText3))
+                    .font(.appSubheadline)
+                    .foregroundStyle(Color.vText)
+                    .tint(Color.vText)
                     .focused($fieldFocused)
                     .submitLabel(.search)
                     .autocorrectionDisabled()
+                    .onSubmit { RecentSearches.shared.add(viewModel.searchText) }
                 if !viewModel.searchText.isEmpty {
                     Button { viewModel.searchText = "" } label: {
-                        LucideIcon(.circleX, .md).foregroundStyle(Color.vText3)
+                        LucideIcon(.x, .lg).foregroundStyle(Color.vText2)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
-            .background(Color.vSurface, in: Capsule())
-            .overlay(Capsule().strokeBorder(Color.vBorder, lineWidth: 1))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(fieldFocused ? Color.vFieldFocus : Color.vField,
+                        in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         }
         .padding(.horizontal, pad)
         .padding(.top, ViewConst.safeAreaInsets.top + 6)
         .padding(.bottom, 12)
+        .overlay(alignment: .bottom) { Rectangle().fill(Color.vDivider).frame(height: 1) }
     }
 }
 
 // MARK: - Results
 
 private extension SearchScreen {
+    private var query: String { viewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var totalResults: Int {
+        viewModel.tracks.count + viewModel.artists.count + viewModel.services.count + viewModel.packs.count
+    }
+
+    /// Per-query entrance for the rows (see `staggeredAppear`).
+    private var entranceKey: String { "search-\(query)-\(tab)" }
+
     @ViewBuilder
     var results: some View {
-        if viewModel.isLoading, !viewModel.hasResults {
-            resultsSkeleton
-        } else if viewModel.errorMessage != nil {
-            LoadErrorView { viewModel.retry() }
-        } else if !viewModel.hasResults {
-            let q = viewModel.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            EmptyStateView(
-                icon: .search,
-                title: q.isEmpty ? "Search Volspire" : "No results",
-                message: q.isEmpty ? "Find tracks, artists, services & packs." : "Nothing matched “\(q)”.",
-                centered: true
-            )
-        } else {
+        if query.isEmpty {
+            // Empty field: Recent searches + Trending (web search page).
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 24) {
-                    if !viewModel.tracks.isEmpty {
-                        section("Tracks") { ForEach(viewModel.tracks) { trackRow($0) } }
-                    }
-                    if !viewModel.artists.isEmpty {
-                        section("Artists") { ForEach(viewModel.artists) { artistRow($0) } }
-                    }
-                    if !viewModel.services.isEmpty {
-                        section("Services") { ForEach(viewModel.services) { serviceRow($0) } }
-                    }
-                    if !viewModel.packs.isEmpty {
-                        section("Packs") { ForEach(viewModel.packs) { packRow($0) } }
-                    }
+                SearchStartList { q in
+                    RecentSearches.shared.add(q)
+                    viewModel.searchText = q
+                    fieldFocused = false
                 }
-                .padding(.top, 4)
+                .padding(.vertical, 8)
                 .padding(.bottom, bottomInset)
             }
             .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
+        } else if viewModel.errorMessage != nil, !viewModel.hasResults {
+            LoadErrorView { viewModel.retry() }
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(resultCaption)
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
+                        .padding(.horizontal, pad)
+                        .padding(.top, 16)
+                        .padding(.bottom, 14)
+
+                    if viewModel.isLoading, !viewModel.hasResults {
+                        resultsSkeleton
+                    } else if !viewModel.hasResults {
+                        noResults
+                    } else {
+                        tabChips.padding(.bottom, 16)
+                        sections
+                    }
+                }
+                .padding(.bottom, bottomInset)
+                .loadingCrossfade(viewModel.hasResults)
+            }
+            .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: query) { _, _ in tab = .all }
         }
     }
 
-    func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title.uppercased())
-                .font(.appFont.sectionLabel).tracking(0.6)
-                .foregroundStyle(Color.vText3)
-                .padding(.horizontal, 14)
-                .padding(.bottom, 6)
-            content()
+    var resultCaption: String {
+        if viewModel.isLoading, !viewModel.hasResults { return "Searching…" }
+        if totalResults == 0 { return "No results for “\(query)”" }
+        return "\(totalResults) result\(totalResults == 1 ? "" : "s") for “\(query)”"
+    }
+
+    var tabChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                chip("All", .all, totalResults)
+                chip("Tracks", .tracks, viewModel.tracks.count)
+                chip("Artists", .artists, viewModel.artists.count)
+                if FeatureFlags.marketplace {
+                    chip("Services", .services, viewModel.services.count)
+                    chip("Packs", .packs, viewModel.packs.count)
+                }
+            }
+            .padding(.horizontal, pad)
         }
     }
 
-    /// Placeholder while the first results are fetched — two faux sections of
-    /// row bones, sweeping with the shared shimmer.
-    var resultsSkeleton: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                ForEach(0 ..< 2, id: \.self) { _ in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Capsule().fill(Color.white.opacity(0.06)).frame(width: 80, height: 12)
-                            .padding(.horizontal, 14).padding(.bottom, 8)
-                        SkeletonRows(
-                            count: 4,
-                            line1: CGSize(width: 150, height: 13),
-                            rowSpacing: 2,
-                            horizontalPadding: 14,
-                            shimmers: false
-                        )
+    func chip(_ label: String, _ id: ResultsTab, _ count: Int) -> some View {
+        FilterChip(count > 0 ? "\(label)  \(count)" : label, isOn: tab == id) {
+            withAnimation(.easeInOut(duration: 0.2)) { tab = id }
+        }
+    }
+
+    /// On All: each kind capped (5 tracks, 4 artists, 3 services, 4 packs)
+    /// under a small icon label with "See all N →"; a kind's own tab lists
+    /// everything with no label.
+    @ViewBuilder
+    var sections: some View {
+        let all = tab == .all
+        VStack(alignment: .leading, spacing: 28) {
+            if (all || tab == .tracks), !viewModel.tracks.isEmpty {
+                resultSection("Tracks", icon: .music2, count: viewModel.tracks.count, cap: all ? 5 : nil, seeAll: .tracks) {
+                    let shown = all ? Array(viewModel.tracks.prefix(5)) : viewModel.tracks
+                    ForEach(Array(shown.enumerated()), id: \.element.id) { i, t in
+                        trackRow(t).staggeredAppear(i, in: entranceKey)
                     }
                 }
             }
-            .padding(.top, 4)
+            if (all || tab == .artists), !viewModel.artists.isEmpty {
+                resultSection("Artists", icon: .users, count: viewModel.artists.count, cap: all ? 4 : nil, seeAll: .artists) {
+                    let shown = all ? Array(viewModel.artists.prefix(4)) : viewModel.artists
+                    ForEach(Array(shown.enumerated()), id: \.element.userId) { i, a in
+                        artistRow(a).staggeredAppear(i, in: entranceKey)
+                    }
+                }
+            }
+            if FeatureFlags.marketplace, (all || tab == .services), !viewModel.services.isEmpty {
+                resultSection("Services", icon: .briefcase, count: viewModel.services.count, cap: all ? 3 : nil, seeAll: .services) {
+                    ForEach(all ? Array(viewModel.services.prefix(3)) : viewModel.services) { serviceRow($0) }
+                }
+            }
+            if FeatureFlags.marketplace, (all || tab == .packs), !viewModel.packs.isEmpty {
+                resultSection("Packs", icon: .package, count: viewModel.packs.count, cap: all ? 4 : nil, seeAll: .packs) {
+                    ForEach(all ? Array(viewModel.packs.prefix(4)) : viewModel.packs) { packRow($0) }
+                }
+            }
         }
-        .scrollIndicators(.hidden)
-        .scrollDisabled(true)
+    }
+
+    func resultSection(_ title: String, icon: LucideIcon.Name, count: Int, cap: Int?, seeAll: ResultsTab,
+                       @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if cap != nil {
+                HStack(spacing: 6) {
+                    LucideIcon(icon, .xs)
+                    Text(title).font(.appLabel)
+                }
+                .foregroundStyle(Color.vText3)
+                .padding(.horizontal, pad)
+                .padding(.bottom, 4)
+            }
+            content()
+            if let cap, count > cap {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { tab = seeAll }
+                } label: {
+                    Text("See all \(count) \(title.lowercased()) →")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
+                        .padding(.horizontal, pad)
+                        .padding(.vertical, 8)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    var noResults: some View {
+        VStack(spacing: 8) {
+            LucideIcon(.search, .hero).foregroundStyle(Color.vText3)
+                .padding(.bottom, 8)
+            Text("No results found for “\(query)”")
+                .font(.appSubheadline)
+                .foregroundStyle(Color.vText3)
+                .multilineTextAlignment(.center)
+            Text("Try a different term or browse by genre")
+                .font(.appCaption)
+                .foregroundStyle(Color.vText4)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, pad)
+        .padding(.top, 64)
+    }
+
+    /// Bones in the result-row shape while the first results load.
+    var resultsSkeleton: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 8) {
+                ForEach([56.0, 80, 76], id: \.self) { w in
+                    Capsule().fill(Color.vSkeleton).frame(width: w, height: 34)
+                }
+            }
+            .padding(.horizontal, pad)
+            SkeletonRows(
+                count: 6,
+                thumb: .rounded(size: 40),
+                line1: CGSize(width: 150, height: 13),
+                thumbSpacing: 12,
+                horizontalPadding: pad,
+                verticalPadding: 10,
+                shimmers: false
+            )
+        }
         .shimmering()
     }
 }
@@ -164,30 +292,84 @@ private extension SearchScreen {
 // MARK: - Rows
 
 private extension SearchScreen {
+    /// Web TrackRow: cover, title + @artist (matches highlighted), ▷ N plays.
     func trackRow(_ track: ApiSearchTrack) -> some View {
-        TrackListRow(
-            artwork: viewModel.coverURL(for: track).map { .webImage($0) } ?? .album,
-            title: track.title,
-            subtitle: track.artist.map { "@\($0)" },
-            activity: viewModel.mediaActivity(MediaID(track.id)),
-            horizontalPadding: 14,
-            onTap: {
-                Task { await viewModel.play(track) }
+        let activity = viewModel.mediaActivity(MediaID(track.id))
+        return Button {
+            Task { await viewModel.play(track) }
+        } label: {
+            HStack(spacing: 12) {
+                ArtworkView(viewModel.coverURL(for: track).map { .webImage($0) } ?? .album, cornerRadius: Radius.tile)
+                    .frame(width: 40, height: 40)
+                    .coverShadow()
+                    .overlay {
+                        if let activity {
+                            ZStack {
+                                Color.vShade.opacity(0.45)
+                                MediaActivityIndicator(state: activity).foregroundStyle(Color.vOnColor)
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
+                        }
+                    }
+                VStack(alignment: .leading, spacing: 2) {
+                    SearchHighlight.text(track.title, query: query, base: activity != nil ? .vText : .vTextRow)
+                        .font(.appSubheadlineMedium)
+                        .lineLimit(1)
+                    if let artist = track.artist {
+                        SearchHighlight.text("@\(artist)", query: query, base: .vText3)
+                            .font(.appCaption)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                if let streams = track.streams {
+                    HStack(spacing: 3) {
+                        LucideIcon(.play, .xs)
+                        Text(streams.compactCount)
+                            .font(.appCaption)
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(Color.vText4)
+                }
             }
-        )
+            .padding(.horizontal, pad)
+            .padding(.vertical, 10)
+            .contentShape(.rect)
+        }
+        .buttonStyle(RowHighlightButtonStyle(cornerRadius: 0))
     }
 
+    /// Web ArtistRow: avatar, @username (highlighted), roles, "N/mo".
     func artistRow(_ artist: ApiExploreArtist) -> some View {
-        rowShell {
-            artistAvatar(artist.profileImageUrl, name: artist.username)
-            rowText(
-                title: "@\(artist.username ?? "unknown")",
-                subtitle: artist.monthlyListeners.map { "\($0.compactCount) monthly listeners" }
-            )
-            Spacer(minLength: 8)
-        } onTap: {
+        Button {
             router.navigateToProfile(userId: artist.userId)
+        } label: {
+            HStack(spacing: 12) {
+                AvatarView(urlString: artist.profileImageUrl, name: artist.username, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    SearchHighlight.text("@\(artist.username ?? "unknown")", query: query)
+                        .font(.appSubheadlineMedium)
+                        .lineLimit(1)
+                    if let tags = artist.tags, !tags.isEmpty {
+                        Text(tags.joined(separator: ", "))
+                            .font(.appCaption)
+                            .foregroundStyle(Color.vText3)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                if let listeners = artist.monthlyListeners {
+                    Text("\(listeners.compactCount)/mo")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText4)
+                        .monospacedDigit()
+                }
+            }
+            .padding(.horizontal, pad)
+            .padding(.vertical, 10)
+            .contentShape(.rect)
         }
+        .buttonStyle(RowHighlightButtonStyle(cornerRadius: 0))
     }
 
     func serviceRow(_ service: ApiMarketplaceService) -> some View {
@@ -215,15 +397,15 @@ private extension SearchScreen {
     /// Shared row chrome: padding, tap target, and a hairline separator.
     func rowShell(@ViewBuilder content: () -> some View, onTap: @escaping () -> Void) -> some View {
         HStack(spacing: 13) { content() }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
+            .padding(.horizontal, pad)
+            .padding(.vertical, 10)
             .contentShape(.rect)
             .onTapGesture(perform: onTap)
     }
 
     func rowText(title: String, subtitle: String?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
+            Text(title).font(.appFont.trackTitle).foregroundStyle(Color.vText).lineLimit(1)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle).font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
             }
@@ -242,18 +424,14 @@ private extension SearchScreen {
             }
         }
         .frame(width: 50, height: 50)
-        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
     }
 
-    func artistAvatar(_ url: String?, name: String?) -> some View {
-        AvatarView(urlString: url, name: name, size: 50)
-    }
 
     func priceTag(_ price: Double?) -> some View {
         Text(priceLabel(price))
             .font(.appFootnoteBold)
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.vText)
     }
 }
 

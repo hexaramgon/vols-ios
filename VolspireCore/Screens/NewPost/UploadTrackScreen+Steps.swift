@@ -80,10 +80,10 @@ extension UploadTrackScreen {
                     } label: {
                         Text("Back")
                             .font(.appHeadline)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.vControlLabel)
                             .frame(width: 92)
                             .frame(height: 54)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .background(Color.vControl, in: Capsule())
                     }
                     .buttonStyle(.plain)
                     .disabled(isUploading)
@@ -104,7 +104,7 @@ extension UploadTrackScreen {
                 } label: {
                     HStack(spacing: 8) {
                         if isUploading {
-                            ProgressView().tint(.white).controlSize(.small)
+                            ProgressView().tint(ctaForeground).controlSize(.small)
                         }
                         Text(step < 2 ? "Continue" : (isUploading ? "Uploading…" : "Publish Track"))
                             .font(.appHeadline)
@@ -117,7 +117,7 @@ extension UploadTrackScreen {
                             .fill(ctaFill)
                     }
                 }
-                .buttonStyle(AuthPress())
+                .buttonStyle(CardPress())
                 .disabled(!stepComplete || isUploading)
                 .animation(.easeInOut(duration: 0.2), value: stepComplete)
                 .animation(.easeInOut(duration: 0.2), value: isUploading)
@@ -126,15 +126,16 @@ extension UploadTrackScreen {
     }
 
     /// Disabled reads the same on every step (AuthCTA's dim treatment);
-    /// enabled is white/black while stepping and the gradient at publish.
+    /// enabled is the ink primary on every step, Publish included (accent is
+    /// reserved for send actions).
     private var ctaForeground: Color {
         if !stepComplete, !isUploading { return Color.vText3 }
-        return step < 2 ? .black : .white
+        return Color.vOnInverse
     }
 
     private var ctaFill: AnyShapeStyle {
-        if !stepComplete, !isUploading { return AnyShapeStyle(Color.white.opacity(0.06)) }
-        return step < 2 ? AnyShapeStyle(Color.white) : AnyShapeStyle(LinearGradient.sendAccent)
+        if !stepComplete, !isUploading { return AnyShapeStyle(Color.vControl) }
+        return AnyShapeStyle(Color.vInverse)
     }
 
 }

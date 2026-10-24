@@ -19,7 +19,9 @@ struct RegisterScreen: View {
     /// Which way the wizard was left. The chevron unwinds to wherever the
     /// wizard was opened from; the "Already have an account?" link means
     /// something more specific and should land on sign-in itself.
-    enum Exit { case back, signIn }
+    /// `existingAccount` lands on sign-in with that email filled in and a
+    /// "Welcome back" heading — the email already has an account.
+    enum Exit { case back, signIn, existingAccount(email: String) }
 
     @Environment(Dependencies.self) private var dependencies
 
@@ -33,11 +35,14 @@ struct RegisterScreen: View {
     /// as Edit Profile).
     @State private var locationCompleter = LocationCompleter()
     @FocusState private var locationFocused: Bool
+    @FocusState private var usernameFocused: Bool
 
     @State private var avatarItem: PhotosPickerItem?
     @State private var bannerItem: PhotosPickerItem?
     @State private var showAvatarPicker = false
     @State private var showBannerPicker = false
+    /// The picked banner, awaiting the 16:9 crop (shared with Edit Profile + web).
+    @State private var bannerCropTarget: CropTarget?
     /// Legal docs presented from the signup agreement checkbox.
     @State private var showTermsDoc = false
     @State private var showPrivacyDoc = false
@@ -64,6 +69,10 @@ struct RegisterScreen: View {
         .authSwipeBack(isEnabled: canSwipeBack, action: goBack)
         .sheet(isPresented: $showTermsDoc) { SettingsDocScreen(doc: .terms, inSheet: true) }
         .sheet(isPresented: $showPrivacyDoc) { SettingsDocScreen(doc: .privacy, inSheet: true) }
+        // Step 0 found an existing account for this email → Sign in, prefilled.
+        .onChange(of: viewModel.existingAccountEmail) { _, email in
+            if let email { leaveWizard(to: .existingAccount(email: email)) }
+        }
     }
 
     // MARK: - Top bar (back chevron)
@@ -87,7 +96,15 @@ struct RegisterScreen: View {
 
     /// Back steps the wizard; on the first step it returns to the landing.
     private var topBar: some View {
-        AuthWizardBackBar(canGoBack: canGoBack, disabled: viewModel.loading, onBack: goBack)
+        VStack(spacing: 0) {
+            AuthWizardBackBar(canGoBack: canGoBack, disabled: viewModel.loading, onBack: goBack)
+            // How far through sign-up you are (onboarding = chevron + slim
+            // line); full on the done step.
+            AuthProgressLine(progress: CGFloat(min(viewModel.step + 1, RegisterViewModel.totalSteps))
+                / CGFloat(RegisterViewModel.totalSteps))
+                .padding(.horizontal, 24)
+                .padding(.top, 2)
+        }
     }
 
     private func goBack() {
@@ -140,7 +157,6 @@ struct RegisterScreen: View {
         case 0, 1, 2:
             AuthCTA(
                 title: "Continue",
-                loadingTitle: "Creating account…",
                 isLoading: viewModel.loading,
                 isDisabled: !viewModel.canContinue
             ) {
@@ -149,7 +165,6 @@ struct RegisterScreen: View {
         case 3:
             AuthCTA(
                 title: "Verify",
-                loadingTitle: "Verifying…",
                 isLoading: viewModel.loading,
                 isDisabled: viewModel.otpCode.count != 6
             ) {
@@ -158,7 +173,6 @@ struct RegisterScreen: View {
         case 4:
             AuthCTA(
                 title: viewModel.finishButtonTitle,
-                loadingTitle: "Creating account…",
                 isLoading: viewModel.loading
             ) {
                 Task { await viewModel.finish() }
@@ -246,12 +260,12 @@ struct RegisterScreen: View {
                 withAnimation(.snappy(duration: 0.15)) { toggle() }
             } label: {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(checked ? Color.white : Color.white.opacity(0.06))
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(Color.white.opacity(checked ? 0 : 0.25), lineWidth: 1.5)
+                    RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
+                        .fill(checked ? Color.vInverse : Color.ink(0.06))
+                    RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
+                        .strokeBorder(Color.ink(checked ? 0 : 0.25), lineWidth: 1.5)
                     if checked {
-                        LucideIcon(.check, .sm).foregroundStyle(.black)
+                        LucideIcon(.check, .sm).foregroundStyle(Color.vOnInverse)
                     }
                 }
                 .frame(width: 22, height: 22)
@@ -262,7 +276,7 @@ struct RegisterScreen: View {
 
             Text(text)
                 .fixedSize(horizontal: false, vertical: true)
-                .tint(.white)
+                .tint(Color.vText)
             Spacer(minLength: 0)
         }
     }
@@ -315,22 +329,22 @@ struct RegisterScreen: View {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(viewModel.passwordChecks, id: \.label) { rule in
                     HStack(spacing: 9) {
-                        ZStack {
-                            Circle().fill(rule.ok ? Color.green.opacity(0.15) : Color.white.opacity(0.08))
-                            LucideIcon(.check, .xs)
-                                .foregroundStyle(rule.ok ? Color.green : Color.vText3)
-                        }
-                        .frame(width: 17, height: 17)
+                        // The app's pop mark (same as the playlist / workspace
+                        // pickers): a soft dot until the rule passes.
+                        PopMark(isOn: rule.ok, rest: .dot, size: 17)
                         Text(rule.label)
                             .font(.appFootnote)
                             .foregroundStyle(rule.ok ? Color.vText2 : Color.vText3)
+                            .animation(.popMark, value: rule.ok)
                     }
                 }
 
                 if !viewModel.confirmPassword.isEmpty, !viewModel.passwordsMatch {
                     AuthPasswordMismatchLabel()
+                        .transition(.opacity.combined(with: .offset(y: -4)))
                 }
             }
+            .animation(.popMark, value: !viewModel.confirmPassword.isEmpty && !viewModel.passwordsMatch)
             .padding(.leading, 4)
         }
     }
@@ -354,45 +368,69 @@ struct RegisterScreen: View {
                             prompt: Text("Username").foregroundStyle(Color.vText3)
                         )
                         .font(.appBody)
-                        .foregroundStyle(.white)
-                        .tint(.white)
+                        .foregroundStyle(Color.vText)
+                        .tint(Color.vText)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .focused($usernameFocused)
 
-                        switch viewModel.usernameStatus {
-                        case .checking:
-                            ProgressView().controlSize(.small).tint(Color.vText3)
-                        case .available:
-                            LucideIcon(.circleCheck, .md).foregroundStyle(Color.green)
-                        case .taken:
-                            LucideIcon(.circleX, .md).foregroundStyle(Color.vError)
-                        case .idle:
-                            EmptyView()
+                        // Available / taken pop in like the pickers' check;
+                        // the spinner shows while it's checking.
+                        ZStack {
+                            if viewModel.usernameStatus == .checking {
+                                ProgressView().controlSize(.small).tint(Color.vText3)
+                            }
+                            PopMark(isOn: viewModel.usernameStatus == .available, rest: .none, size: 20)
+                            PopMark(isOn: viewModel.usernameStatus == .taken, mark: .cross, rest: .none,
+                                    tint: Color.vError, size: 20)
                         }
+                        .frame(width: 22, height: 22)
                     }
                     .padding(.horizontal, 16)
                     .frame(height: 54)
+                    .authFieldFocus(usernameFocused)
                 }
 
-                if viewModel.usernameStatus == .taken {
-                    Text("That username is already taken.")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vError)
-                        .padding(.leading, 4)
-                } else if viewModel.usernameStatus == .available {
-                    Text("Username is available.")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.green)
-                        .padding(.leading, 4)
+                Group {
+                    if viewModel.usernameStatus == .taken {
+                        Text("That username is already taken.")
+                            .font(.appFootnote)
+                            .foregroundStyle(Color.vError)
+                            .padding(.leading, 4)
+                            .transition(.opacity.combined(with: .offset(y: -4)))
+                    } else if viewModel.usernameStatus == .available {
+                        Text("Username is available.")
+                            .font(.appFootnote)
+                            .foregroundStyle(Color.vSuccessText)
+                            .padding(.leading, 4)
+                            .transition(.opacity.combined(with: .offset(y: -4)))
+                    }
                 }
+                .animation(.popMark, value: viewModel.usernameStatus)
             }
 
             locationField(viewModel)
 
+            // Collab-map opt-in (web register step 2). Off by default; applied
+            // with `set_open_to_collab` once the profile row exists.
+            Toggle(isOn: Binding(get: { viewModel.openToCollab }, set: { viewModel.openToCollab = $0 })) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Open to collaboration?")
+                        .font(.appCalloutSemibold)
+                        .foregroundStyle(Color.vText)
+                    Text("Your city and your music will be shown on the Collab map so other artists can find you. You can change this any time in Settings.")
+                        .font(.appFootnote)
+                        .foregroundStyle(Color.vText3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .toggleStyle(.ink)
+
             VStack(alignment: .leading, spacing: 10) {
                 Text("Your roles")
                     .font(.appCalloutSemibold)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                 Text("Optional — helps people find your work. Pick up to \(ProfileRoles.max).")
                     .font(.appFootnote)
                     .foregroundStyle(Color.vText3)
@@ -417,20 +455,20 @@ struct RegisterScreen: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Location")
                 .font(.appCalloutSemibold)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
 
             AuthFieldGroup {
                 HStack(spacing: 12) {
                     LucideIcon(.mapPin, .md)
-                        .foregroundStyle(locationFocused ? .white : Color.vText3)
+                        .foregroundStyle(locationFocused ? Color.vText : Color.vText3)
                     TextField(
                         "",
                         text: Binding(get: { viewModel.location }, set: { viewModel.location = $0 }),
                         prompt: Text("City, Country (optional)").foregroundStyle(Color.vText3)
                     )
                     .font(.appBody)
-                    .foregroundStyle(.white)
-                    .tint(.white)
+                    .foregroundStyle(Color.vText)
+                    .tint(Color.vText)
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
                     .focused($locationFocused)
@@ -440,6 +478,7 @@ struct RegisterScreen: View {
                 }
                 .padding(.horizontal, 16)
                 .frame(height: 54)
+                .authFieldFocus(locationFocused)
 
                 if locationFocused, !locationCompleter.suggestions.isEmpty {
                     ForEach(locationCompleter.suggestions, id: \.self) { suggestion in
@@ -454,7 +493,7 @@ struct RegisterScreen: View {
                                     .foregroundStyle(Color.vText3)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(suggestion.title)
-                                        .font(.appCallout).foregroundStyle(.white).lineLimit(1)
+                                        .font(.appCallout).foregroundStyle(Color.vText).lineLimit(1)
                                     if !suggestion.subtitle.isEmpty {
                                         Text(suggestion.subtitle)
                                             .font(.appFootnote).foregroundStyle(Color.vText3).lineLimit(1)
@@ -490,7 +529,7 @@ struct RegisterScreen: View {
     @ViewBuilder
     private func verifyStep(_ viewModel: RegisterViewModel) -> some View {
         VStack(spacing: 24) {
-            Text("We sent a 6-digit code to \(Text(viewModel.email).foregroundStyle(.white)).")
+            Text("We sent a 6-digit code to \(Text(viewModel.email).foregroundStyle(Color.vText)).")
                 .foregroundStyle(Color.vText2)
                 .font(.appCalloutRegular)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -514,7 +553,7 @@ struct RegisterScreen: View {
                 Button {
                     viewModel.resetToStart()
                 } label: {
-                    Text("Wrong email? \(Text("Start over").foregroundStyle(.white))")
+                    Text("Wrong email? \(Text("Start over").foregroundStyle(Color.vText))")
                         .foregroundStyle(Color.vText3)
                         .font(.appSubheadline)
                         .frame(maxWidth: .infinity)
@@ -542,7 +581,7 @@ struct RegisterScreen: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Profile photo")
                     .font(.appCalloutSemibold)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
 
                 Button {
                     showAvatarPicker = true
@@ -553,68 +592,58 @@ struct RegisterScreen: View {
                                 .resizable()
                                 .scaledToFill()
                         } else {
-                            Color.white.opacity(0.05)
+                            // Borderless field fill, like the rest of the app's
+                            // pickers (no dashed "create" outline).
+                            Color.vField
                             LucideIcon(.camera, .lg)
                                 .foregroundStyle(Color.vText3)
                         }
                     }
                     .frame(width: 104, height: 104)
                     .clipShape(Circle())
-                    .overlay {
-                        if viewModel.avatarImage == nil {
-                            Circle().strokeBorder(
-                                Color.white.opacity(0.16),
-                                style: StrokeStyle(lineWidth: 1.2, dash: [6, 5])
-                            )
-                        }
-                    }
                     .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Banner")
-                    .font(.appCalloutSemibold)
-                    .foregroundStyle(.white)
+            // Banners are parked (FeatureFlags.profileBanners).
+            if FeatureFlags.profileBanners {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Banner")
+                        .font(.appCalloutSemibold)
+                        .foregroundStyle(Color.vText)
 
-                Button {
-                    showBannerPicker = true
-                } label: {
-                    ZStack {
-                        if let image = viewModel.bannerImage {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            Color.white.opacity(0.05)
-                            VStack(spacing: 6) {
-                                LucideIcon(.image, .lg)
-                                    .foregroundStyle(Color.vText3)
-                                Text("Tap to upload")
-                                    .font(.appFootnote)
-                                    .foregroundStyle(Color.vText3)
+                    Button {
+                        showBannerPicker = true
+                    } label: {
+                        ZStack {
+                            if let image = viewModel.bannerImage {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                Color.vField
+                                VStack(spacing: 6) {
+                                    LucideIcon(.image, .lg)
+                                        .foregroundStyle(Color.vText3)
+                                    Text("Tap to upload")
+                                        .font(.appFootnote)
+                                        .foregroundStyle(Color.vText3)
+                                }
                             }
                         }
+                        .aspectRatio(ProfileLayout.bannerCropAspect, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+                        .contentShape(.rect)
                     }
-                    .aspectRatio(3, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay {
-                        if viewModel.bannerImage == nil {
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .strokeBorder(
-                                    Color.white.opacity(0.16),
-                                    style: StrokeStyle(lineWidth: 1.2, dash: [6, 5])
-                                )
-                        }
-                    }
-                    .contentShape(.rect)
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
 
-            Text("Both are optional — you can add or change them any time from your profile.")
+            Text(FeatureFlags.profileBanners
+                 ? "Both are optional — you can add or change them any time from your profile."
+                 : "It's optional — you can add or change it any time from your profile.")
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText3)
         }
@@ -624,7 +653,24 @@ struct RegisterScreen: View {
             loadImage(item) { viewModel.avatarImage = $0 }
         }
         .onChange(of: bannerItem) { _, item in
-            loadImage(item) { viewModel.bannerImage = $0 }
+            // Crop it like Edit Profile does, rather than uploading the raw photo.
+            loadImage(item) { bannerCropTarget = CropTarget(image: $0.normalizedUp()) }
+        }
+        .fullScreenCover(item: $bannerCropTarget) { target in
+            ImageCropperView(
+                image: target.image,
+                onCrop: { data in
+                    viewModel.bannerImage = UIImage(data: data)
+                    bannerCropTarget = nil
+                },
+                onCancel: { bannerCropTarget = nil },
+                aspectRatio: ProfileLayout.bannerCropAspect,
+                // 2400×1350: tall enough for the iPhone hero's height fill
+                // (~1130px at 3x) without upscaling.
+                outputSize: ProfileLayout.bannerOutputSize,
+                allowsFitMode: false,
+                guides: ProfileLayout.bannerGuides
+            )
         }
     }
 
@@ -645,13 +691,13 @@ struct RegisterScreen: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("An account already exists for \(viewModel.email).")
                 .font(.appCalloutRegular)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
             HStack(spacing: 4) {
                 Button {
-                    leaveWizard(to: .signIn)
+                    leaveWizard(to: .existingAccount(email: viewModel.email.trimmingCharacters(in: .whitespaces)))
                 } label: {
                     Text("Sign in instead")
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
                         .fontWeight(.medium)
                         .underline()
                 }
@@ -662,7 +708,7 @@ struct RegisterScreen: View {
                     viewModel.resetToStart()
                 } label: {
                     Text("use a different email")
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
                         .fontWeight(.medium)
                         .underline()
                 }
@@ -672,7 +718,7 @@ struct RegisterScreen: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.vCard, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 }
 
@@ -688,6 +734,5 @@ struct RegisterScreen: View {
             onExit: { _ in }
         )
     }
-    .preferredColorScheme(.dark)
     .environment(dependencies)
 }

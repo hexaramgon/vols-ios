@@ -2,49 +2,41 @@
 //  HomeScreen.swift
 //  Volspire
 //
-//  "Explore" tab — a clean, modern take on the web app's neutral language:
-//  a full-bleed cover hero with dark scrims, flat pill filters, and a single
-//  unified card style across every rail and grid. Optimised for scroll:
-//  sections load concurrently, the header only tracks a rarely-flipping
-//  collapse flag (not per-frame offsets), and there's no GPU mesh or
-//  per-cover colour extraction.
+//  "Explore" tab — the web revamp's home (explore-view.tsx), phone layout:
+//  a sticky 53pt band (canvas @ 0.7 + blur, bottom hairline) holding the
+//  X-style underline tabs and a search circle, over three tab columns:
+//
+//    Collab      Popular Today, Nearby (artist map), Listings preview,
+//                Spotlight — the landing tab
+//    Listings    the collab board as post cards, category chips
+//    My Network  workspace activity + releases from people you follow
+//
+//  Tabs switch instantly (no crossfade) and each keeps its own scroll
+//  position; re-tapping the active tab scrolls it to the top.
 //
 
-import Combine
 import DesignSystem
 import Kingfisher
 import MediaLibrary
 import Services
 import SwiftUI
 
-enum ExploreTab: Hashable {
-    case all, collab, following, workspace, artists
-}
+enum ExploreTab: String, CaseIterable, Hashable {
+    case collab, listings, network, marketplace
 
-/// The collab tab's feed toggle: the public board vs. the user's saved listings.
-enum CollabListingFilter { case recent, saved }
-
-/// Sub-categories of the All tab — a second, smaller pill row under the main
-/// one. Raw values match the rail titles so "See all" maps straight to a pill.
-enum AllSection: String, CaseIterable, Hashable {
-    case everything = "All"
-    case popular = "Popular"
-    case demos = "Short Tracks"
-    case samples = "Snippets"
-    case tracks = "All Tracks"
-
-    /// Pill label ("All Tracks" reads as just "Tracks" in the row).
-    var label: String { self == .tracks ? "Tracks" : rawValue }
-
-    /// Row icon in the filter overlay.
-    var icon: LucideIcon.Name {
+    var label: String {
         switch self {
-        case .everything: .zap
-        case .popular: .flame
-        case .demos: .micVocal
-        case .samples: .fileAudio
-        case .tracks: .music
+        case .collab: "Collab"
+        case .listings: "Listings"
+        case .network: "My Network"
+        case .marketplace: "Marketplace"
         }
+    }
+
+    /// Marketplace shows only while monetization is on (or its DEBUG design
+    /// preview — `FeatureFlags.marketplaceSurfaces`).
+    static var visible: [ExploreTab] {
+        allCases.filter { $0 != .marketplace || FeatureFlags.marketplaceSurfaces }
     }
 }
 
@@ -57,92 +49,72 @@ struct HomeScreen: View {
     @Environment(ListingsStore.self) var listingsStore
     @Environment(FeedStore.self) var feedStore
     @State var viewModel = HomeScreenViewModel()
-    @State var selectedTab: ExploreTab = .all
-    /// True only while Home is the visible root tab. RootTabView keeps hidden tabs
-    /// mounted, so the hero auto-advance must pause when Home isn't actually showing.
-    /// Not `private`: the guard that reads it lives in the `HomeScreen+Feed` extension.
-    @Environment(\.isActiveRootTab) var isActiveRootTab
-    /// Which content filter is applied to the All feed (.everything = none).
-    @State var allSection: AllSection = .everything
-    /// The filter bottom sheet (opened by the header's sliders pill).
-    @State var showFilterSheet = false
-    /// Which collaborator's activity is expanded in the Workspace tab's
-    /// Recent Activity rail (nil = all collapsed).
-    @State var expandedActivityActor: String? = nil
-    /// Category filter on the Collab tab's listings (nil = all categories).
-    @State var collabCategory: String? = nil
-    /// Recent (public board) vs. Saved listings, toggled from the section header.
-    @State var collabFilter: CollabListingFilter = .recent
-    /// Measured so the collab filter sheet detents to exactly fit its tiles.
-    @State var collabFilterSheetHeight: CGFloat = 480
+
+    @State var selectedTab: ExploreTab = .collab
+    /// Tabs opened this session — kept mounted so each keeps its scroll.
+    @State var visitedTabs: Set<ExploreTab> = [.collab]
+    /// Bumped to scroll a tab back to its top (re-tap / Home tab re-tap).
+    @State var scrollTopTicks: [ExploreTab: Int] = [:]
+    /// Measured height of the floating header band so content can clear it.
+    @State var headerHeight: CGFloat = 53
+
+    // Search
     @State var searchText = ""
     @State var showSearchOverlay = false
-    @State var featuredIndex = 0
-    /// Scroll-driven header chrome (brand-row collapse). Held in a dedicated
-    /// @Observable so scroll-driven updates only re-render the header bar —
-    /// NOT the whole HomeScreen body (the hero + every rail). That isolation
-    /// is what keeps scrolling smooth.
-    @State var headerState = ExploreHeaderState()
-    /// Flips true once the real "All" content is on screen, driving the
-    /// staggered fade-up reveal of the hero and each section.
-    @State var contentAppeared = false
-    /// Measured height of the floating header so content can clear it.
-    @State var headerHeight: CGFloat = 112
     @FocusState var isSearchFocused: Bool
 
-    /// Drives the featured carousel's auto-advance. Held in @State so it survives
-    /// re-renders (a fresh `let` publisher would resubscribe and reset every frame).
-    @State var autoScrollTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    // Collab tab
+    @State var selectedRoles: Set<String> = []
+    @State var popularExpanded = false
+    @State var nearbyCity: String?
+    @State var nearbyShowAll = false
+    @State var spotlightIndex = 0
+    @State var pitchTarget: PitchTarget?
 
-    let gridColumns = [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)]
+    // Listings tab
+    /// Listings tab category filter — any number; empty = all.
+    @State var listingFilter: Set<String> = []
+
+    // Marketplace tab
+    @State var market = MarketplaceModel()
+    /// Beats / Packs / Services — any number; empty = all.
+    @State var marketFilter: Set<String> = []
+    @State var showSellSheet = false
+
+
     var pad: CGFloat { ViewConst.screenPaddings }
 
-    /// Bottom inset so the last rows clear the tab bar + (when present) the
-    /// mini-player docked above it — same formula as Library / Search /
-    /// Messages so every scrolling tab bottoms out consistently.
+    /// Bottom inset so the last rows clear the tab bar + the mini-player.
     var bottomInset: CGFloat { playerController.contentBottomInset }
 
     var body: some View {
-        // The header floats on top (z-overlay) so it can sit transparently over
-        // the hero and frost in as the content scrolls beneath it.
         ZStack(alignment: .top) {
-            tabContent
-                // Tapping the Home tab button resets the feed to the top from
-                // anywhere: popToRoot bumps the tick, and the identity swap
-                // remounts the content at scroll position zero.
-                .id(router.rootResetTick)
-            ExploreHeaderBar(
-                state: headerState,
-                selectedTab: $selectedTab,
-                allSection: $allSection,
-                collabCategory: $collabCategory,
+            ZStack {
+                ForEach(ExploreTab.visible.filter { visitedTabs.contains($0) }, id: \.self) { tab in
+                    tabRoot(tab)
+                        .opacity(selectedTab == tab ? 1 : 0)
+                        .allowsHitTesting(selectedTab == tab)
+                }
+            }
+            ExploreHeaderBand(
+                selectedTab: selectedTab,
                 headerHeight: $headerHeight,
-                collabFilter: collabFilter,
-                onSelectCollabFilter: selectCollabFilter,
-                onBell: { router.navigateToNotifications() },
-                onSearch: {
-                    withAnimation(.easeOut(duration: 0.22)) { showSearchOverlay = true }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { isSearchFocused = true }
-                },
-                onFilters: { showFilterSheet = true }
+                onSelect: selectTab,
+                onSearch: openSearch
             )
         }
-        // Pull-to-refresh feedback: the system spinner anchors at the scroll's
-        // very top — hidden behind the fixed header — so float the shared chip
-        // just below it while a pull runs.
         .refreshChip(viewModel.isPullRefreshing, topInset: headerHeight + 10)
         .overlay {
             if showSearchOverlay {
                 searchOverlay
-                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                    .transition(.opacity)
             }
         }
-        .sheet(isPresented: $showFilterSheet) {
-            // The sliders icon filters whatever the current tab shows.
-            if selectedTab == .collab { collabFilterSheet } else { filterSheet }
+        .sheet(item: $pitchTarget) { target in
+            PitchSheetHost(target: target)
         }
-        .sheet(isPresented: $viewModel.showCreateFolder) { createFolderSheet }
-        .gradientBackground()
+        .background(Color.vBase.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             viewModel.player = dependencies.mediaPlayer
             viewModel.feed = feedStore
@@ -151,99 +123,216 @@ struct HomeScreen: View {
             viewModel.listingsStore = listingsStore
             await viewModel.loadInitial()
         }
-        // Block/unblock + own-post healing runs inside FeedStore/ListingsStore
-        // (they subscribe to the notifications themselves) — no view wiring.
+        // Tapping the Home tab button while on Home: back to the top of the
+        // current tab with search closed.
         .onChange(of: router.rootResetTick) { _, _ in
-            // Tapping the Home tab lands fully reset: back on the default All
-            // page with filters cleared and search closed — not just scrolled
-            // to the top (the id-swap on tabContent handles the scroll).
-            selectedTab = .all
-            allSection = .everything
-            collabCategory = nil
-            collabFilter = .recent
             isSearchFocused = false
             if showSearchOverlay {
-                withAnimation(.easeOut(duration: 0.22)) { showSearchOverlay = false }
+                withAnimation(.easeOut(duration: 0.2)) { showSearchOverlay = false }
             }
-            // Un-fold the brand row along with the scroll reset.
-            unfoldHeaderInstantly()
+            scrollTopTicks[selectedTab, default: 0] += 1
         }
-        .onChange(of: allSection) { _, _ in
-            // Filter applied/cleared mid-scroll: the content swaps to a fresh
-            // scroll view at the top, so the folded-header state from the old
-            // scroll must not survive (it left a collapsed header over a
-            // top-of-page feed).
-            unfoldHeaderInstantly()
+    }
+
+    /// Quick crossfade (content) + sliding underline (header); re-tapping the
+    /// active tab scrolls it to the top. Opacity only — no movement on the
+    /// tab roots (hit-testing rules).
+    func selectTab(_ tab: ExploreTab) {
+        if tab == selectedTab {
+            scrollTopTicks[tab, default: 0] += 1
+            return
         }
-        .onChange(of: selectedTab) { _, tab in
-            unfoldHeaderInstantly()
-            Task {
-                switch tab {
-                case .collab: await listingsStore.loadListingsIfNeeded()
-                case .workspace: await workspaceStore.loadFoldersIfNeeded()
-                case .following: await feedStore.loadFollowingIfNeeded()
-                case .artists: await feedStore.loadArtistsIfNeeded()
-                default: break
-                }
+        visitedTabs.insert(tab)
+        withAnimation(.smooth(duration: 0.3)) { selectedTab = tab }
+        Task {
+            switch tab {
+            case .listings: await listingsStore.loadListingsIfNeeded()
+            case .network:
+                async let feed: Void = feedStore.loadFollowingIfNeeded()
+                async let folders: Void = workspaceStore.loadFoldersIfNeeded()
+                _ = await (feed, folders)
+            case .marketplace: await market.loadIfNeeded(dependencies.supabaseService)
+            case .collab: break
             }
         }
     }
 
-    /// Restores the brand row WITHOUT animating it. Every caller here also swaps
-    /// the content to a fresh, top-of-page scroll view, and the bar owns a 0.32s
-    /// animation on `collapsed` — letting that run slid the newly-mounted content
-    /// down as the header grew under it, which read as the old tab scrolling away.
-    func unfoldHeaderInstantly() {
-        var instant = Transaction()
-        instant.disablesAnimations = true
-        withTransaction(instant) {
-            headerState.collapsed = false
-            headerState.accumulated = 0
-        }
+    func openSearch() {
+        withAnimation(.easeOut(duration: 0.18)) { showSearchOverlay = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { isSearchFocused = true }
     }
 
     @ViewBuilder
-    private var tabContent: some View {
-        switch selectedTab {
-        case .all where allSection != .everything:
-            // A sub-category pill (Popular / Demos / …) — the section as a full
-            // grid, in the same format as the Following tab. Keyed by section:
-            // without the id, SwiftUI diffs one section's grid into the next
-            // mid-animation (cards sliding/morphing — the glitch); a keyed swap
-            // crossfades cleanly instead.
-            tracksTab(tracks: tracks(for: allSection), loaded: !showExploreSkeleton,
-                      emptyTitle: "Nothing here yet", emptyMessage: "Check back soon",
-                      heading: allSection.rawValue,
-                      refresh: { await viewModel.refresh() })
-                .id(allSection)
-                .transition(.opacity)
-        case .all:
-            // Crossfade the skeleton out as the real content fades+rises in.
-            ZStack {
-                if showExploreSkeleton {
-                    ExploreSkeleton(topInset: headerHeight)
-                        .transition(.opacity)
-                } else if isExploreError && exploreHasNoContent {
-                    // No network / load failed and nothing to show — offline state
-                    // (we no longer fall back to placeholder "seed" tracks).
-                    exploreErrorState
-                        .transition(.opacity)
-                } else {
-                    allContent
+    private func tabRoot(_ tab: ExploreTab) -> some View {
+        switch tab {
+        // Each tab's first-visit modal fires while that tab is showing.
+        case .collab: collabTab.introModal(.collab, active: selectedTab == .collab)
+        case .listings: listingsTab.introModal(.listings, active: selectedTab == .listings)
+        case .network: networkTab.introModal(.network, active: selectedTab == .network)
+        case .marketplace: marketplaceTab.introModal(.marketplace, active: selectedTab == .marketplace)
+        }
+    }
+
+    /// One tab's scroll column: its own scroll view (so it keeps its own
+    /// position), content padded 16/16/24 under the band, scroll-to-top on
+    /// the tab's tick, pull to refresh.
+    func tabScroll<Content: View>(
+        _ tab: ExploreTab,
+        horizontalPadding: CGFloat = 16,
+        refresh: @escaping () async -> Void,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let body = content()
+        return ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(height: 0).id("top")
+                    body
+                }
+                .padding(.horizontal, horizontalPadding)
+                .padding(.top, headerHeight + 16)
+                .padding(.bottom, bottomInset + 24)
+            }
+            .scrollIndicators(.hidden)
+            .refreshable { await refresh() }
+            .onChange(of: scrollTopTicks[tab]) { _, _ in
+                withAnimation(.smooth(duration: 0.35)) { proxy.scrollTo("top", anchor: .top) }
+            }
+        }
+    }
+
+
+}
+
+// MARK: - Header band
+
+/// The sticky band: underline tabs (scrollable) + search icon. Active tab =
+/// ink bold with a 48×4 ink bar on the hairline that slides between tabs;
+/// inactive = medium @ text3. Canvas @ 0.7 over a blur, kept mounted.
+struct ExploreHeaderBand: View {
+    let selectedTab: ExploreTab
+    @Binding var headerHeight: CGFloat
+    let onSelect: (ExploreTab) -> Void
+    let onSearch: () -> Void
+
+    @Namespace private var underline
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(ExploreTab.visible, id: \.self) { tab in
+                        tabButton(tab)
+                    }
                 }
             }
-            .animation(.easeInOut(duration: 0.35), value: showExploreSkeleton)
-        case .collab:
-            collabFeed
-        case .workspace:
-            workspaceTab
-        case .following:
-            tracksTab(tracks: feedStore.followingTracks, loaded: feedStore.followingLoaded,
-                      emptyTitle: "Nothing here yet", emptyMessage: "Follow artists to see their tracks",
-                      refresh: { await viewModel.refreshFollowing() })
-        case .artists:
-            artistsTab
+            // Bare glyph at the shared header-icon size (no circle).
+            HeaderIconButton(icon: .search, action: onSearch)
+                .accessibilityLabel("Search")
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 16)
+        .background {
+            ZStack(alignment: .bottom) {
+                Rectangle().fill(.ultraThinMaterial)
+                Color.vBase.opacity(0.7)
+                Rectangle().fill(Color.vDivider).frame(height: 1)
+            }
+            .ignoresSafeArea(edges: .top)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
+    }
+
+    private func tabButton(_ tab: ExploreTab) -> some View {
+        let active = tab == selectedTab
+        return Button { onSelect(tab) } label: {
+            Text(tab.label)
+                .font(active ? .appSubheadlineBold : .appSubheadlineMedium)
+                .foregroundStyle(active ? Color.vText : Color.vText3)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+                .overlay(alignment: .bottom) {
+                    if active {
+                        Capsule().fill(Color.vInverse).frame(width: 48, height: 4)
+                            .matchedGeometryEffect(id: "underline", in: underline)
+                    }
+                }
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Playback
+
+extension HomeScreen {
+    /// The id of the track currently loaded in the player (playing or paused).
+    var currentTrackID: String? { playerController.state.currentMediaID?.value }
+    var isPlaying: Bool { playerController.state.isPlaying }
+
+    func isActive(_ track: HomeTrack) -> Bool { track.id == currentTrackID }
+
+    /// Start the track (queueing its list), or toggle if it's already loaded.
+    func handleTap(_ track: HomeTrack, in queue: [HomeTrack]) {
+        if isActive(track) {
+            playerController.onPlayPause()
+        } else {
+            Task { await viewModel.playTrack(track, in: queue) }
+        }
+    }
+
+    /// Card tap: plays (or resumes) but never pauses.
+    func select(_ track: HomeTrack, in queue: [HomeTrack]) {
+        if isActive(track) {
+            if !isPlaying { playerController.onPlayPause() }
+        } else {
+            Task { await viewModel.playTrack(track, in: queue) }
+        }
+    }
+
+    /// A Collab pitch (send_collab_request) to `artist`.
+    func pitch(_ artist: ExploreArtistItem) {
+        pitchTarget = PitchTarget(id: artist.id, username: artist.username, avatarURL: artist.avatarURL)
+    }
+}
+
+// MARK: - Collab request host
+
+/// Hosts the profile's CollabRequestSheet for a Home pitch: a light view
+/// model seeded with the target's name/avatar (the sheet only needs those,
+/// plus the follow/collab overlay it writes back to SocialStore).
+private struct PitchSheetHost: View {
+    let target: PitchTarget
+    @Environment(Dependencies.self) private var dependencies
+    @Environment(SocialStore.self) private var socialStore
+    @State private var viewModel = ProfileScreenViewModel()
+
+    var body: some View {
+        CollabRequestSheet(
+            viewModel: viewModel,
+            userId: target.id,
+            username: target.username,
+            currentUserId: dependencies.authManager.currentUserId ?? ""
+        )
+        .onAppear {
+            viewModel.username = target.username
+            viewModel.profileImageURL = target.avatarURL
+            viewModel.social = socialStore
         }
     }
 }
 
+#Preview {
+    @Previewable @State var dependencies = Dependencies.stub
+    @Previewable @State var playerController = PlayerController.stub
+
+    HomeScreen()
+        .withRouter()
+        .environment(dependencies)
+        .environment(playerController)
+        .environment(dependencies.workspaceStore)
+        .environment(dependencies.socialStore)
+        .environment(dependencies.listingsStore)
+        .environment(dependencies.feedStore)
+        .environment(dependencies.libraryStore)
+}

@@ -26,6 +26,15 @@ enum NotificationPref: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// The rows Settings actually shows. `purchases` is hidden while
+    /// monetization is off (FeatureFlags.marketplace) — nothing in the app can
+    /// be bought, so a toggle for sale alerts advertises a feature that isn't
+    /// there. The pref itself is still round-tripped to the server, so a user's
+    /// choice survives until the marketplace ships.
+    static var visibleCases: [NotificationPref] {
+        allCases.filter { FeatureFlags.marketplace || $0 != .purchases }
+    }
+
     var title: String {
         switch self {
         case .newFollowers: "New followers"
@@ -59,6 +68,8 @@ enum NotificationPref: String, CaseIterable, Identifiable {
 final class SettingsViewModel {
     private(set) var prefs: [String: Bool] = [:]
     private(set) var prefsLoaded = false
+    /// Set when a toggle failed to save (and was rolled back).
+    private(set) var saveError: String?
 
     private let service: SupabaseService
 
@@ -88,10 +99,12 @@ final class SettingsViewModel {
     func toggle(_ pref: NotificationPref, to value: Bool) async {
         let previous = prefs[pref.rawValue] ?? true
         prefs[pref.rawValue] = value
+        saveError = nil
         do {
             prefs = Self.dictionary(from: try await service.updateNotificationPreference(key: pref.rawValue, value: value))
         } catch {
             prefs[pref.rawValue] = previous
+            saveError = "Could not save. Try again."
             debugLog("[SettingsVM] Failed to update notification pref: \(error)")
         }
     }

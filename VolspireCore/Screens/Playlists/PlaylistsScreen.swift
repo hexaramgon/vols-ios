@@ -45,7 +45,6 @@ struct PlaylistsScreen: View {
         .scrollIndicators(.hidden)
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in scrollY = y }
         .background(Color.vBase.ignoresSafeArea())
-        .preferredColorScheme(.dark)
         .ignoresSafeArea(edges: .top)
         .navigationBarBackButtonHidden(true)
         .toolbarBackground(.hidden, for: .navigationBar)
@@ -55,12 +54,12 @@ struct PlaylistsScreen: View {
             ToolbarItem(placement: .principal) {
                 Text("Playlists")
                     .font(.appHeadline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .opacity(titleBarOpacity)
             }
         }
         .enableSwipeBack()
-        .floatingAction(owner: "playlists", systemImage: "plus") { viewModel.showCreate = true }
+        .floatingAction(owner: "playlists", icon: .plus) { viewModel.showCreate = true }
         .refreshable { await libraryStore.refreshPlaylists() }
         .task {
             viewModel.library = libraryStore
@@ -110,14 +109,12 @@ private extension PlaylistsScreen {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Playlists")
                     .font(.appTitleXL)
-                    .foregroundStyle(.white)
-                    .heroTextShadow()
+                    .foregroundStyle(Color.vText)
                 // Always in the layout (just faded in) so its line is reserved —
                 // gating it on load made the hero reflow + shift up when it appeared.
                 Text(countText)
                     .font(.appFootnoteMedium)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .heroTextShadow()
+                    .foregroundStyle(Color.vText2)
                     .opacity(isLoading ? 0 : 1)
             }
             .padding(.horizontal, ViewConst.screenPaddings)

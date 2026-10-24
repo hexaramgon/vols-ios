@@ -46,8 +46,25 @@ final class FolderContentsViewModel {
     let folderId: String
     var folderName: String
     var folderDescription = ""
-    private var folderRole: String?
+    private(set) var folderCreatedAt: String?
+    /// "owner" | "editor" | "viewer" — nil until known.
+    private(set) var folderRole: String?
     var isOwner: Bool { folderRole == "owner" }
+    /// Owners and editors can upload (and remove tracks).
+    var canUpload: Bool { folderRole == "owner" || folderRole == "editor" }
+    /// The hero's role line ("Your folder" / "Shared with you · …").
+    var roleLine: String? {
+        switch folderRole {
+        case "owner": "Your folder"
+        case "editor": "Shared with you · You can edit"
+        case "viewer": "Shared with you · View only"
+        default: nil
+        }
+    }
+
+    /// The content filter chips (only non-empty kinds show).
+    enum Filter: String, CaseIterable { case all, tracks, audio, other }
+    var filter: Filter = .all
 
     /// Rename / delete menu state.
     var showOptions = false
@@ -97,10 +114,70 @@ final class FolderContentsViewModel {
     /// so the rename sheet pre-fills and the menu can gate on ownership.
     func loadFolderMeta() async {
         await workspace?.loadFoldersIfNeeded()
-        guard let folder = workspace?.folder(folderId) else { return }
-        folderName = folder.name
-        folderDescription = folder.description ?? ""
-        folderRole = folder.role
+        if let folder = workspace?.folder(folderId) {
+            folderName = folder.name
+            folderDescription = folder.description ?? ""
+            folderCreatedAt = folder.createdAt
+            folderRole = folder.role
+        } else {
+            folderRole = try? await supabaseService.getFolderRole(folderId: folderId)
+        }
+        // Members feed the hero's avatar stack + "N members".
+        if members.isEmpty { await loadMembers() }
+    }
+
+    // MARK: - Sections
+
+    var trackFiles: [ApiFolderFile] { files.filter { $0.type == "track" } }
+    var plainFiles: [ApiFolderFile] { files.filter { $0.type != "track" } }
+    var audioFiles: [ApiFolderFile] { plainFiles.filter(isAudio) }
+    var otherFiles: [ApiFolderFile] { plainFiles.filter { !isAudio($0) } }
+
+    /// Chips to show: All plus every non-empty kind.
+    var visibleFilters: [Filter] {
+        Filter.allCases.filter { f in
+            switch f {
+            case .all: true
+            case .tracks: !trackFiles.isEmpty
+            case .audio: !audioFiles.isEmpty
+            case .other: !otherFiles.isEmpty
+            }
+        }
+    }
+
+    var showsTracks: Bool { (filter == .all || filter == .tracks) && !trackFiles.isEmpty }
+
+    var shownFiles: [ApiFolderFile] {
+        switch filter {
+        case .all: plainFiles
+        case .audio: audioFiles
+        case .other: otherFiles
+        case .tracks: []
+        }
+    }
+
+    func isAudio(_ file: ApiFolderFile) -> Bool {
+        if file.fileType?.lowercased().hasPrefix("audio/") == true { return true }
+        let ext = (file.name as NSString).pathExtension.lowercased()
+        return ["mp3", "wav", "aiff", "aif", "flac", "ogg", "aac", "m4a"].contains(ext)
+    }
+
+    /// Folder owner or the file's uploader can delete a file.
+    func canDelete(_ file: ApiFolderFile) -> Bool {
+        if isOwner { return true }
+        guard let uid = supabaseService.currentUserId else { return false }
+        return file.ownerId.caseInsensitiveCompare(uid) == .orderedSame
+    }
+
+    /// Removes a track reference from the folder (the track itself is untouched).
+    func removeTrack(_ file: ApiFolderFile) async {
+        guard let workspace, let trackId = file.trackId else { return }
+        do {
+            try await workspace.removeTrack(trackId: trackId, folderId: folderId)
+        } catch {
+            debugLog("[FolderContentsVM] Failed to remove track: \(error)")
+            showActionError("Couldn't remove the track. Please try again.")
+        }
     }
 
     func startEditing() {
@@ -312,29 +389,25 @@ final class FolderContentsViewModel {
 
     // MARK: - Display Helpers
 
-    func icon(for file: ApiFolderFile) -> String {
-        guard let type = file.fileType?.lowercased() else { return "doc" }
-        switch type {
-        case let t where t.contains("audio"):
-            return "waveform"
-        case let t where t.contains("image"), let t where t.contains("png"), let t where t.contains("jpg"), let t where t.contains("jpeg"):
-            return "photo"
-        case let t where t.contains("video"), let t where t.contains("mp4"):
-            return "film"
-        case let t where t.contains("pdf"):
-            return "doc.text"
-        case let t where t.contains("zip"), let t where t.contains("archive"):
-            return "archivebox"
-        default:
-            return "doc"
-        }
+    /// The type glyph for a non-audio file tile (web `categoryMeta`).
+    func icon(for file: ApiFolderFile) -> LucideIcon.Name {
+        let type = file.fileType?.lowercased() ?? ""
+        let ext = (file.name as NSString).pathExtension.lowercased()
+        if isAudio(file) { return .music }
+        if type.hasPrefix("video/") || ["mp4", "mov", "webm", "avi", "mkv"].contains(ext) { return .video }
+        if type.hasPrefix("image/") || ["jpg", "jpeg", "png", "gif", "webp", "svg", "heic"].contains(ext) { return .image }
+        if ["pdf", "doc", "docx", "txt", "md"].contains(ext) || type.contains("pdf") { return .fileText }
+        return .file
     }
 
-    /// Neutral, monochrome tint so file icons match the app's black/white theme
-    /// (was per-type purple/green/red). Track references render their real cover
-    /// instead of an icon, so colour isn't needed to tell content apart.
-    func iconColor(for file: ApiFolderFile) -> Color {
-        .white.opacity(0.85)
+    /// "MP3 · 3:12 · 4.2 MB" — the extension (as data), duration, size.
+    func fileCaption(_ file: ApiFolderFile) -> String {
+        var parts: [String] = []
+        let ext = (file.name as NSString).pathExtension
+        if !ext.isEmpty { parts.append(ext.uppercased()) }
+        if let duration = formattedDuration(for: file) { parts.append(duration) }
+        if let size = formattedSize(for: file) { parts.append(size) }
+        return parts.joined(separator: " · ")
     }
 
     func formattedSize(for file: ApiFolderFile) -> String? {

@@ -12,6 +12,7 @@ import Foundation
 import Observation
 import Services
 import SharedUtilities
+import SwiftUI
 
 @MainActor
 @Observable
@@ -32,6 +33,13 @@ final class ListingDetailViewModel {
     var isPostingComment = false
     var isTogglingStatus = false
     var commentText = ""
+    /// The inline reply field's draft (under `replyingTo`'s row).
+    var replyText = ""
+    /// Set when `get_listing` says the listing is gone (deleted / private).
+    private(set) var notFound = false
+    /// User-facing reason the last comment post failed (shown in an ErrorBanner
+    /// above the composer); cleared on the next attempt.
+    var commentError: String?
     /// The top-level comment the composer is replying to (nil = a new thread).
     var replyingTo: ApiListingComment?
 
@@ -65,7 +73,8 @@ final class ListingDetailViewModel {
         async let commentsDone: Void = loadComments()
         async let responsesDone: Void = loadResponsesIfAuthor()
 
-        if let updated = try? await fresh {
+        do {
+            let updated = try await fresh
             listing = updated
             isSaved = updated.viewerHasSaved ?? isSaved
             status = updated.status ?? status
@@ -73,6 +82,10 @@ final class ListingDetailViewModel {
             existingConvoId = updated.viewerConvoId
             // Fresh detail truth → sync any board/saved copies' status+counts.
             listings?.applyFresh(updated)
+        } catch {
+            // Only a confirmed miss flips to "not found" — a network blip
+            // keeps showing the copy we navigated in with.
+            if error.serverRawDetail.contains("not_found") || error is DecodingError { notFound = true }
         }
         _ = await (commentsDone, responsesDone)
     }
@@ -91,20 +104,25 @@ final class ListingDetailViewModel {
         responsesLoaded = true
     }
 
-    func toggleStatus() async {
-        guard !isTogglingStatus else { return }
+    /// Returns true when the server took the change (the screen confirms it).
+    @discardableResult
+    func toggleStatus() async -> Bool {
+        guard !isTogglingStatus else { return false }
         isTogglingStatus = true
         let next = isClosed ? "open" : "closed"
-        let previous = status
-        status = next
         do {
             try await service.updateListingStatus(listingId: listing.listingId, status: next)
+            // Applied only once it's real (the confirm sheet shows progress),
+            // animated so the page eases into its new state.
+            withAnimation(.smooth(duration: 0.35)) { status = next }
             listings?.setStatus(listingId: listing.listingId, status: next)
+            isTogglingStatus = false
+            return true
         } catch {
-            status = previous
             debugLog("[ListingDetailVM] toggleStatus failed: \(error)")
+            isTogglingStatus = false
+            return false
         }
-        isTogglingStatus = false
     }
 
     /// Deletes the listing. Returns true on success (the screen then dismisses).
@@ -156,11 +174,13 @@ final class ListingDetailViewModel {
             listings?.listingResponded(listing.listingId)
             return (convoId, nil)
         } catch {
-            return (nil, respondError(error))
+            return (nil, Self.respondError(error))
         }
     }
 
-    private func respondError(_ error: Error) -> String {
+    /// User-facing copy for a failed `respond_to_listing` (also used by the
+    /// listing cards' in-place respond sheet).
+    static func respondError(_ error: Error) -> String {
         let msg = error.serverRawDetail
         if msg.contains("cannot_respond_to_own_listing") { return "You can't respond to your own listing." }
         if msg.contains("listing_closed") { return "This listing is closed." }
@@ -171,21 +191,39 @@ final class ListingDetailViewModel {
 
     // MARK: - Comments
 
-    /// Sets the composer to reply to a thread. Replying from a reply row still
-    /// targets its top-level parent (one level of nesting).
-    func startReply(to comment: ApiListingComment) {
-        if comment.parentId == nil {
-            replyingTo = comment
+    /// Opens (or closes, when already open) the inline reply field under a
+    /// top-level comment (one level of nesting).
+    func toggleReply(to comment: ApiListingComment) {
+        guard comment.parentId == nil else { return }
+        if replyingTo?.commentId == comment.commentId {
+            replyingTo = nil
         } else {
-            replyingTo = comments.first { $0.commentId == comment.parentId } ?? comment
+            replyingTo = comment
+            replyText = ""
+        }
+        commentError = nil
+    }
+
+    /// Posts the top-level composer's text.
+    func postComment() async {
+        if await post(commentText, parentId: nil) { commentText = "" }
+    }
+
+    /// Posts the inline reply under `replyingTo`.
+    func postReply() async {
+        guard let parentId = replyingTo?.commentId else { return }
+        if await post(replyText, parentId: parentId) {
+            replyText = ""
+            replyingTo = nil
         }
     }
 
-    func postComment() async {
-        let trimmed = commentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isPostingComment else { return }
+    private func post(_ text: String, parentId: String?) async -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isPostingComment else { return false }
         isPostingComment = true
-        let parentId = replyingTo?.commentId
+        defer { isPostingComment = false }
+        commentError = nil
         do {
             let comment = try await service.postListingComment(
                 listingId: listing.listingId, content: trimmed, parentId: parentId
@@ -196,15 +234,31 @@ final class ListingDetailViewModel {
             } else {
                 comments.insert(comment, at: 0)
             }
-            commentText = ""
-            replyingTo = nil
             listings?.commentDelta(listing.listingId, 1)
+            bumpCommentCount(1)
             AnalyticsService.shared?.log(.commentPosted, metadata: ["kind": "listing", "listing_id": .string(listing.listingId)])
+            return true
         } catch {
             debugLog("[ListingDetailVM] postComment failed: \(error)")
-            await loadComments()
+            commentError = commentErrorMessage(error)
+            return false
         }
-        isPostingComment = false
+    }
+
+    /// Keeps the footer's comment stat in step with local inserts/deletes.
+    private func bumpCommentCount(_ delta: Int) {
+        listing.commentCount = max(0, (listing.commentCount ?? 0) + delta)
+    }
+
+    /// The reasons `post_listing_comment` raises, in words (mirrors the web's
+    /// useListingComments). The draft stays in the composer so it can be retried.
+    private func commentErrorMessage(_ error: Error) -> String {
+        let msg = error.serverRawDetail
+        if msg.contains("not_authenticated") { return "Sign in again and retry." }
+        if msg.contains("comment_required") { return "Write something first." }
+        if msg.contains("comment_too_long") { return "Keep it under 1,000 characters." }
+        if msg.contains("listing_not_found") { return "This listing is closed or no longer available." }
+        return "Couldn't post your comment. Try again."
     }
 
     func deleteComment(_ comment: ApiListingComment) async {
@@ -222,6 +276,7 @@ final class ListingDetailViewModel {
         do {
             try await service.deleteListingComment(commentId: comment.commentId)
             listings?.commentDelta(listing.listingId, -removedCount)
+            bumpCommentCount(-removedCount)
         } catch {
             comments = snapshot
             debugLog("[ListingDetailVM] deleteComment failed: \(error)")
@@ -232,6 +287,15 @@ final class ListingDetailViewModel {
         guard let uid = currentUserId else { return false }
         return comment.user.userId.caseInsensitiveCompare(uid) == .orderedSame
     }
+
+    /// Commenters delete their own; the listing author can delete any
+    /// (`delete_listing_comment` allows both).
+    func canDeleteComment(_ comment: ApiListingComment) -> Bool {
+        isAuthor || isOwnComment(comment)
+    }
+
+    /// The web link shared from the footer's Share button.
+    var shareURL: String { "https://volspire.com/listing/\(listing.listingId)" }
 
     // MARK: - Clip playback
 

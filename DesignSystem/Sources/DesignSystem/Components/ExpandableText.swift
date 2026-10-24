@@ -27,8 +27,8 @@ public struct ExpandableText: View {
         _ text: String,
         lineLimit: Int = 5,
         font: Font = .appCalloutRegular,
-        textColor: Color = .white.opacity(0.9),
-        moreColor: Color = .white.opacity(0.5),
+        textColor: Color = .vText2,
+        moreColor: Color = .vText3,
         moreFont: Font = .appFootnoteMedium
     ) {
         self.text = text

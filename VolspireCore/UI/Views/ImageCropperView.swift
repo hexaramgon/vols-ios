@@ -25,6 +25,14 @@ struct CropTarget: Identifiable {
     let image: UIImage
 }
 
+/// A "what this platform shows" band drawn inside the crop frame: the
+/// centred region of `aspect` (width ÷ height) that a display filling that
+/// shape keeps (e.g. banners: iPhone vs desktop).
+struct CropGuide: Hashable {
+    let label: String
+    let aspect: CGFloat
+}
+
 struct ImageCropperView: View {
     /// Source image — pass `someImage.normalizedUp()` so pixel coords match display.
     let image: UIImage
@@ -42,6 +50,8 @@ struct ImageCropperView: View {
     /// Dim outside an inscribed circle (avatar crops) so the preview shows
     /// exactly what the round profile picture will contain.
     var showsCircularMask = false
+    /// Centred safe-area bands to draw in the frame (see `CropGuide`).
+    var guides: [CropGuide] = []
 
     /// Pixel size of the exported canvas, sized so its longer edge is `outputSize`.
     private var outputCanvas: CGSize {
@@ -57,6 +67,8 @@ struct ImageCropperView: View {
 
     @State private var mode: Mode
     @State private var cropper = ScrollCropper()
+    /// True while a finger is dragging / pinching — shows the thirds grid.
+    @State private var adjusting = false
     /// The rendered blur-fill image — generated once so the preview is exactly
     /// what gets uploaded (WYSIWYG), and reused for Done.
     @State private var fitImage: UIImage?
@@ -68,7 +80,8 @@ struct ImageCropperView: View {
         aspectRatio: CGFloat = 1,
         outputSize: CGFloat = 1024,
         allowsFitMode: Bool = true,
-        showsCircularMask: Bool = false
+        showsCircularMask: Bool = false,
+        guides: [CropGuide] = []
     ) {
         self.image = image
         self.onCrop = onCrop
@@ -77,6 +90,7 @@ struct ImageCropperView: View {
         self.outputSize = outputSize
         self.allowsFitMode = allowsFitMode
         self.showsCircularMask = showsCircularMask
+        self.guides = guides
         // Crop-only starts (and stays) in crop — no onAppear flip, no re-mount.
         _mode = State(initialValue: allowsFitMode ? .fit : .crop)
     }
@@ -90,9 +104,15 @@ struct ImageCropperView: View {
             header
 
             GeometryReader { geo in
-                // Largest box of the target aspect ratio that fits the space.
-                let boxW = min(geo.size.width, geo.size.height * aspectRatio)
+                // Largest box of the target aspect ratio that fits the space,
+                // with a margin so the image can show (dimmed) around it.
+                let margin: CGFloat = mode == .crop ? 20 : 0
+                let boxW = min(geo.size.width - margin * 2, (geo.size.height - margin * 2) * aspectRatio)
                 let boxH = boxW / aspectRatio
+                let box = CGRect(
+                    x: (geo.size.width - boxW) / 2, y: (geo.size.height - boxH) / 2,
+                    width: boxW, height: boxH
+                )
                 Group {
                     switch mode {
                     case .fit:
@@ -111,27 +131,28 @@ struct ImageCropperView: View {
                                 .frame(width: boxW, height: boxH)
                         }
                     case .crop:
-                        ZoomableImageScrollView(image: image, cropper: cropper)
-                            .frame(width: boxW, height: boxH)
-                            .overlay {
-                                if showsCircularMask {
-                                    // Dim everything outside the inscribed circle —
-                                    // the round-avatar preview.
-                                    CircleCutoutMask()
-                                        .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
-                                        .allowsHitTesting(false)
-                                    Circle()
-                                        .strokeBorder(Color.white.opacity(0.7), lineWidth: 1)
-                                        .allowsHitTesting(false)
-                                } else {
-                                    Rectangle()
-                                        .strokeBorder(Color.white.opacity(0.5), lineWidth: 1)
-                                        .allowsHitTesting(false)
-                                }
-                            }
+                        // The photo fills the whole area and pans/zooms behind
+                        // the frame (Photos / Instagram style); what's outside
+                        // the frame stays visible, dimmed.
+                        ZoomableImageScrollView(
+                            image: image,
+                            cropper: cropper,
+                            box: box,
+                            onAdjusting: { on in withAnimation(.easeOut(duration: 0.2)) { adjusting = on } }
+                        )
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .overlay { cropChrome(box: box) }
                     }
                 }
                 .frame(width: geo.size.width, height: geo.size.height) // centre the box
+            }
+
+            if mode == .crop {
+                Text("Pinch to zoom · Drag to move")
+                    .font(.appFootnote)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .padding(.top, 10)
+                    .padding(.bottom, allowsFitMode ? 4 : 12)
             }
 
             if allowsFitMode {
@@ -150,7 +171,7 @@ struct ImageCropperView: View {
         // whole layout ends up double-padded (header pushed down, box floating
         // between giant black gaps).
         .ignoresSafeArea()
-        .preferredColorScheme(.dark)
+        .alwaysDark()
         // Render the blur-fill once so the Fit preview matches the exported bytes
         // exactly. Off the main thread: the Gaussian blur on a full-size photo is
         // slow enough to freeze the cover presentation (the header and Fit/Crop
@@ -197,6 +218,56 @@ struct ImageCropperView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 12)
+    }
+
+    /// Over the crop: the area outside the frame dimmed (a circle cut-out for
+    /// avatars), the frame's hairline, and a rule-of-thirds grid while
+    /// adjusting. Never takes touches — the scroll view below does.
+    private func cropChrome(box: CGRect) -> some View {
+        ZStack {
+            CropCutoutMask(box: box, circular: showsCircularMask)
+                .fill(Color.black.opacity(0.6), style: FillStyle(eoFill: true))
+            Group {
+                if showsCircularMask {
+                    Circle().strokeBorder(Color.white.opacity(0.8), lineWidth: 1)
+                } else {
+                    Rectangle().strokeBorder(Color.white.opacity(0.8), lineWidth: 1)
+                }
+            }
+            .frame(width: box.width, height: box.height)
+            .position(x: box.midX, y: box.midY)
+            ThirdsGrid()
+                .stroke(Color.white.opacity(0.35), lineWidth: 0.5)
+                .frame(width: box.width, height: box.height)
+                .position(x: box.midX, y: box.midY)
+                .opacity(adjusting ? 1 : 0)
+            ForEach(guides, id: \.self) { guide in
+                guideBand(guide, in: box)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// One guide: a dashed outline of the centred band `guide.aspect` keeps,
+    /// with its name in the corner.
+    private func guideBand(_ guide: CropGuide, in box: CGRect) -> some View {
+        let boxAspect = box.width / box.height
+        let size = guide.aspect < boxAspect
+            ? CGSize(width: box.height * guide.aspect, height: box.height)
+            : CGSize(width: box.width, height: box.width / guide.aspect)
+        return Rectangle()
+            .strokeBorder(Color.white.opacity(0.55), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            .overlay(alignment: .topLeading) {
+                Text(guide.label)
+                    .font(.appCaption2Medium)
+                    .foregroundStyle(.white.opacity(0.8))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .padding(4)
+            }
+            .frame(width: size.width, height: size.height)
+            .position(x: box.midX, y: box.midY)
     }
 
     /// Capsule segmented toggle matching the app's pill controls.
@@ -260,20 +331,36 @@ struct ImageCropperView: View {
     }
 }
 
-/// Full-rect path with an inscribed circle removed (even-odd fill) — dims the
-/// corners of an avatar crop so the round preview is obvious.
-private struct CircleCutoutMask: Shape {
+/// The whole area with the crop frame removed (even-odd fill) — a rectangle,
+/// or the frame's inscribed circle for avatars.
+private struct CropCutoutMask: Shape {
+    let box: CGRect
+    let circular: Bool
+
     func path(in rect: CGRect) -> Path {
         var path = Path()
         path.addRect(rect)
-        let side = min(rect.width, rect.height)
-        path.addEllipse(in: CGRect(
-            x: rect.midX - side / 2,
-            y: rect.midY - side / 2,
-            width: side,
-            height: side
-        ))
+        if circular {
+            let side = min(box.width, box.height)
+            path.addEllipse(in: CGRect(x: box.midX - side / 2, y: box.midY - side / 2, width: side, height: side))
+        } else {
+            path.addRect(box)
+        }
         return path
+    }
+}
+
+/// Rule-of-thirds lines inside a rect.
+private struct ThirdsGrid: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        for i in 1 ... 2 {
+            let x = rect.minX + rect.width * CGFloat(i) / 3
+            let y = rect.minY + rect.height * CGFloat(i) / 3
+            p.move(to: CGPoint(x: x, y: rect.minY)); p.addLine(to: CGPoint(x: x, y: rect.maxY))
+            p.move(to: CGPoint(x: rect.minX, y: y)); p.addLine(to: CGPoint(x: rect.maxX, y: y))
+        }
+        return p
     }
 }
 
@@ -344,6 +431,11 @@ private final class CropScrollView: UIScrollView {
 private struct ZoomableImageScrollView: UIViewRepresentable {
     let image: UIImage
     let cropper: ScrollCropper
+    /// The crop frame within the scroll view's bounds; the space around it is
+    /// content inset, so the image can pan under the dimmed margins while the
+    /// frame stays fully covered.
+    let box: CGRect
+    let onAdjusting: (Bool) -> Void
 
     func makeUIView(context: Context) -> CropScrollView {
         let scrollView = CropScrollView()
@@ -355,6 +447,8 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         scrollView.clipsToBounds = true
         scrollView.backgroundColor = .black
         scrollView.contentInsetAdjustmentBehavior = .never
+        scrollView.alwaysBounceVertical = true
+        scrollView.alwaysBounceHorizontal = true
 
         let imageView = UIImageView(image: image)
         imageView.contentMode = .scaleToFill
@@ -372,40 +466,69 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
     }
 
     func updateUIView(_ scrollView: CropScrollView, context: Context) {
+        context.coordinator.onAdjusting = onAdjusting
+        context.coordinator.box = box
         context.coordinator.setupIfNeeded(scrollView)
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator {
+        let c = Coordinator()
+        c.box = box
+        c.onAdjusting = onAdjusting
+        return c
+    }
 
     final class Coordinator: NSObject, UIScrollViewDelegate {
         weak var imageView: UIImageView?
+        var box: CGRect = .zero
+        var onAdjusting: (Bool) -> Void = { _ in }
         private var didSetup = false
 
         /// Sized once the scroll view has real bounds: fit the image to fill the
         /// (possibly non-square) crop box (min zoom), cap max zoom, and centre it.
         func setupIfNeeded(_ scrollView: UIScrollView) {
-            guard !didSetup, let imageView, scrollView.bounds.width > 1, scrollView.bounds.height > 1 else { return }
+            guard !didSetup, let imageView, scrollView.bounds.width > 1, scrollView.bounds.height > 1,
+                  box.width > 1, box.height > 1 else { return }
             let imageSize = imageView.image?.size ?? .zero
             guard imageSize.width > 0, imageSize.height > 0 else { return }
             didSetup = true
 
+            // The margins around the frame are inset, so the image's edges can
+            // reach the frame's edges but never come inside it.
+            let bounds = scrollView.bounds.size
+            scrollView.contentInset = UIEdgeInsets(
+                top: box.minY, left: box.minX,
+                bottom: bounds.height - box.maxY, right: bounds.width - box.maxX
+            )
+
             imageView.frame = CGRect(origin: .zero, size: imageSize)
             scrollView.contentSize = imageSize
 
-            let box = scrollView.bounds.size
             let minScale = max(box.width / imageSize.width, box.height / imageSize.height)
             scrollView.minimumZoomScale = minScale
             scrollView.maximumZoomScale = minScale * 5
             scrollView.zoomScale = minScale
 
+            // Centre the image on the frame.
             let scaled = CGSize(width: imageSize.width * minScale, height: imageSize.height * minScale)
             scrollView.contentOffset = CGPoint(
-                x: max(0, (scaled.width - box.width) / 2),
-                y: max(0, (scaled.height - box.height) / 2)
+                x: (scaled.width - box.width) / 2 - box.minX,
+                y: (scaled.height - box.height) / 2 - box.minY
             )
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        // The thirds grid shows while a finger is on it.
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) { onAdjusting(true) }
+        func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { onAdjusting(true) }
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { onAdjusting(false) }
+        }
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { onAdjusting(false) }
+        func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+            onAdjusting(false)
+        }
     }
 }
 
@@ -418,17 +541,22 @@ final class ScrollCropper {
     weak var scrollView: UIScrollView?
     var image: UIImage?
 
-    /// Crops the currently-visible box to JPEG, downscaled so its longer edge is at
+    /// Crops the frame's current contents to JPEG, downscaled so its longer edge is at
     /// most `maxPixel` (preserving the box's aspect). Assumes `image` is scale-1 /
     /// orientation-up.
     func cropJPEG(maxPixel: CGFloat) -> Data? {
         guard let scrollView, let image, let cg = image.cgImage, scrollView.zoomScale > 0 else { return nil }
         let zoom = scrollView.zoomScale
-        let box = scrollView.bounds.size
+        // The frame is the bounds minus the content inset (see setup).
+        let inset = scrollView.contentInset
+        let box = CGSize(
+            width: scrollView.bounds.width - inset.left - inset.right,
+            height: scrollView.bounds.height - inset.top - inset.bottom
+        )
 
         var rect = CGRect(
-            x: scrollView.contentOffset.x / zoom,
-            y: scrollView.contentOffset.y / zoom,
+            x: (scrollView.contentOffset.x + inset.left) / zoom,
+            y: (scrollView.contentOffset.y + inset.top) / zoom,
             width: box.width / zoom,
             height: box.height / zoom
         )

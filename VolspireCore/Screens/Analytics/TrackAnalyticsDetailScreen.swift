@@ -2,114 +2,182 @@
 //  TrackAnalyticsDetailScreen.swift
 //  Volspire
 //
-//  A single track's performance — opened from the analytics "Top tracks" list.
-//  Renders the already-loaded analytics item, so no extra fetch is needed.
+//  The selected track's numbers, under the "Your tracks" list on the
+//  analytics page (the web's phone layout stacks list above detail). In
+//  order, 40pt apart: the track, "This week", four stat tiles, plays over the
+//  last 30 days, where people listen (heatmap), how people found it.
 //
 
 import DesignSystem
 import SwiftUI
 
-struct TrackAnalyticsDetailScreen: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(PlayerController.self) private var playerController
+struct TrackAnalyticsDetail: View {
     let track: TrackAnalyticsItem
-
-    private var bottomInset: CGFloat { playerController.contentBottomInset }
-
-    private var series: [Int] { track.dailyPlaysSeries }
-    private var trend: Int { AnalyticsViewModel.weekTrend(from: series) }
+    let viewModel: AnalyticsViewModel
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 40) {
             header
-            ScrollView {
-                VStack(spacing: 14) {
-                    statsGrid
-                    chartCard
-                    if !track.sortedSources.isEmpty {
-                        AnalyticsSourcesCard(
-                            subtitle: "How listeners reached this track",
-                            sources: Array(track.sortedSources.prefix(6)),
-                            totalPlays: track.sources.values.reduce(0, +)
-                        )
-                    }
+            thisWeekCard
+            statTiles
+            playsChart
+            listeningChart
+            AnalyticsBlock(title: "How people found it") {
+                if track.sortedSources.isEmpty {
+                    AnalyticsEmptyNote(text: "No source data yet.")
+                } else {
+                    AnalyticsSourceBars(sources: track.sortedSources)
                 }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 4)
-                .padding(.bottom, bottomInset)
             }
-            .scrollIndicators(.hidden)
         }
-        .ignoresSafeArea(edges: .top)
-        .background(Color.vBase.ignoresSafeArea())
-        .preferredColorScheme(.dark)
-        .navigationBarBackButtonHidden(true)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .enableSwipeBack()
+        .task(id: track.id) { await viewModel.loadHeatmap(trackId: track.id) }
     }
 }
 
-// MARK: - Header
+// MARK: - Track + this week
 
-private extension TrackAnalyticsDetailScreen {
+private extension TrackAnalyticsDetail {
     var header: some View {
-        HStack(spacing: 12) {
-            BackButton(shadow: false)
+        HStack(spacing: 16) {
+            ArtworkView(.placeholder(track.coverURL, name: track.title), cornerRadius: Radius.tile)
+                .frame(width: 64, height: 64)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(track.title)
+                    .font(.appTitle3).foregroundStyle(Color.vText).lineLimit(1)
+                Text(headerCaption)
+                    .font(.appCaptionCompact).foregroundStyle(Color.vText3).lineLimit(1)
+            }
+        }
+    }
 
-            ArtworkView(.placeholder(track.coverURL, name: track.title), cornerRadius: 8)
-                .frame(width: 40, height: 40)
+    /// "Genre · Uploaded Oct 3, 2026" — empty parts dropped.
+    var headerCaption: String {
+        var parts: [String] = []
+        if let genre = track.genre, !genre.isEmpty { parts.append(genre) }
+        if let date = track.createdAt {
+            parts.append("Uploaded \(date.formatted(.dateTime.month(.abbreviated).day().year()))")
+        }
+        return parts.joined(separator: " · ")
+    }
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(track.title).font(.appHeadline).foregroundStyle(.white).lineLimit(1)
-                if let genre = track.genre, !genre.isEmpty {
-                    Text(genre).font(.appCaption).foregroundStyle(Color.vText3).lineLimit(1)
-                }
+    var thisWeekCard: some View {
+        let delta = track.weekDelta
+        return HStack(alignment: .bottom, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("This week").font(.appCaptionCompact).foregroundStyle(Color.vText3)
+                let count = Text(track.thisWeek.compactCount).font(.appLargeTitle).foregroundStyle(Color.vText)
+                let unit = Text(track.thisWeek == 1 ? "play" : "plays").font(.appSubheadline).foregroundStyle(Color.vText3)
+                Text("\(count) \(unit)").monospacedDigit()
+                Text("\(track.lastWeek.compactCount) the week before")
+                    .font(.appCaptionCompact).foregroundStyle(Color.vText3)
             }
             Spacer(minLength: 0)
-        }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.top, ViewConst.safeAreaInsets.top + 8)
-        .padding(.bottom, 16)
-    }
-}
-
-// MARK: - Stats
-
-private extension TrackAnalyticsDetailScreen {
-    var statsGrid: some View {
-        // Lucide icons matching the dashboard's tiles (.repeat is the closest
-        // bundled glyph to the old bidirectional-arrows SF symbol for seeks).
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-            AnalyticsStatTile(value: track.streams.compactCount, label: "Streams", icon: .playFill)
-            AnalyticsStatTile(value: track.uniqueListeners.compactCount, label: "Unique listeners", icon: .users)
-            AnalyticsStatTile(value: time(Int(track.avgListenTime)), label: "Avg. listen", icon: .clock)
-            AnalyticsStatTile(value: String(format: "%.1f", track.avgSeekCount), label: "Avg. seeks", icon: .repeat)
-        }
-    }
-}
-
-// MARK: - Chart
-
-private extension TrackAnalyticsDetailScreen {
-    var chartCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                AnalyticsSectionLabel("Plays · last 30 days")
-                Spacer()
-                AnalyticsTrendPill(trend: trend)
+            if delta != 0 {
+                let up = delta > 0
+                HStack(spacing: 6) {
+                    LucideIcon(up ? .trendingUp : .trendingDown, .md)
+                    Text("\(up ? "+" : "")\(delta)% vs last week")
+                        .font(.appSubheadlineSemibold).monospacedDigit()
+                }
+                .foregroundStyle(up ? Color.vSuccessText : Color.vError)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background((up ? Color.vSuccess : Color.vDestructive).opacity(0.10), in: Capsule())
             }
-            // No scrub binding → static chart (no drag gesture).
-            ScrubbableTrendChart(values: series).frame(height: 90)
-            AnalyticsChartFooter(days: 30)
         }
-        .padding(18)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
+        .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+    }
+
+    var statTiles: some View {
+        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            GridRow {
+                AnalyticsStatTile(icon: .headphones, label: "Streams",
+                                  value: track.streams.compactCount, sub: "Every play, replays included")
+                AnalyticsStatTile(icon: .users, label: "Listeners",
+                                  value: track.uniqueListeners.compactCount, sub: "Different people")
+            }
+            GridRow {
+                AnalyticsStatTile(icon: .clock, label: "Avg listen",
+                                  value: track.avgListenTime.durationLabel, sub: "Before stopping or skipping")
+                AnalyticsStatTile(icon: .skipForward, label: "Avg seeks",
+                                  value: "\(Int(track.avgSeekCount.rounded()))", sub: "Scrubs per listen")
+            }
+        }
     }
 }
 
-// MARK: - Helpers
+// MARK: - Charts
 
-private extension TrackAnalyticsDetailScreen {
-    func time(_ seconds: Int) -> String { seconds.durationLabel }
+private extension TrackAnalyticsDetail {
+    /// "Oct 3" for the point `daysAgo` days before today.
+    func dateLabel(daysAgo: Int) -> String {
+        let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date()) ?? Date()
+        return date.formatted(.dateTime.month(.abbreviated).day())
+    }
+
+    var playsChart: some View {
+        let days = track.dailyPlaysSeries
+        let total = days.reduce(0, +)
+        return AnalyticsBlock(title: "Plays, last 30 days", aside: "\(total.compactCount) total") {
+            AnalyticsLineChart(
+                values: days.map(Double.init),
+                xLabels: (dateLabel(daysAgo: days.count - 1), dateLabel(daysAgo: days.count - 1 - 15), "Today"),
+                readout: { i in
+                    let plays = days[i]
+                    return (i == days.count - 1 ? "Today" : dateLabel(daysAgo: days.count - 1 - i),
+                            "\(plays.compactCount) \(plays == 1 ? "play" : "plays")")
+                }
+            )
+        }
+    }
+
+    @ViewBuilder
+    var listeningChart: some View {
+        let heatmap = viewModel.heatmaps[track.id]
+        let buckets = heatmap.map(Self.buckets) ?? []
+        let duration = heatmap?.count ?? 0
+        let peakSec = heatmap.flatMap { h in h.indices.max(by: { h[$0] < h[$1] }) } ?? 0
+        AnalyticsBlock(
+            title: "Where people listen",
+            aside: buckets.isEmpty ? nil : "Most played at \(peakSec.durationLabel)"
+        ) {
+            if heatmap == nil {
+                // In flight (or failed) — a bone, never the "no data" claim.
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(Color.vSkeleton)
+                    .frame(height: 140)
+                    .shimmering()
+            } else if buckets.isEmpty {
+                AnalyticsEmptyNote(text: "No listening data yet.")
+            } else {
+                let secAt = { (i: Int) -> Int in
+                    Int(((buckets.count <= 1 ? 0 : Double(i) / Double(buckets.count - 1)) * Double(duration)).rounded())
+                }
+                AnalyticsLineChart(
+                    values: buckets,
+                    xLabels: ("0:00", Int((Double(duration) / 2).rounded()).durationLabel, duration.durationLabel),
+                    readout: { i in
+                        let listens = Int(buckets[i].rounded())
+                        return (secAt(i).durationLabel, "\(listens) \(listens == 1 ? "listen" : "listens")")
+                    }
+                )
+            }
+        }
+    }
+
+    /// Averages per-second counts into at most 120 buckets so long tracks
+    /// stay readable (the web's ListeningChart roll-up).
+    static func buckets(_ heatmap: [Int]) -> [Double] {
+        let n = min(heatmap.count, 120)
+        guard n > 0 else { return [] }
+        let size = Double(heatmap.count) / Double(n)
+        return (0 ..< n).map { i in
+            let lo = Int((Double(i) * size).rounded(.down))
+            let hi = min(Int((Double(i + 1) * size).rounded(.down)), heatmap.count)
+            let slice = heatmap[lo ..< max(hi, lo)]
+            return Double(slice.reduce(0, +)) / Double(max(slice.count, 1))
+        }
+    }
 }

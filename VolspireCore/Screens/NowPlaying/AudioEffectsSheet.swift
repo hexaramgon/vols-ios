@@ -2,8 +2,9 @@
 //  AudioEffectsSheet.swift
 //  Volspire
 //
-//  Playback-speed control with a preserve-pitch toggle. Styled to sit with the
-//  rest of the player: frosted panel, Geist type, white accents, soft cards.
+//  Playback-speed control with a preserve-pitch toggle. Same flow as ever
+//  (read-out, slider, toggles, reset), drawn with the app's pieces: ink
+//  tokens, the Settings group card + rows + ink switch, the capsule button.
 //
 
 import DesignSystem
@@ -32,9 +33,8 @@ struct AudioEffectsSheet: View {
         .padding(.top, 30)
         .padding(.bottom, 18)
         .frame(maxWidth: .infinity)
-        .foregroundStyle(.white)
-        // Darker frosted panel to match the web's modal background.
-        .sheetBackground(dragIndicator: false)
+        // Stays dark like the rest of the player.
+        .sheetBackground(dragIndicator: false, alwaysDark: true)
     }
 }
 
@@ -47,12 +47,10 @@ private extension AudioEffectsSheet {
             Text(String(format: "%.2f×", speedValue))
                 .font(.appDisplayLarge)
                 .monospacedDigit()
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
             Text("Playback speed")
-                .font(.appCaption2Medium)
-                .tracking(1.4)
-                .textCase(.uppercase)
-                .foregroundStyle(.white.opacity(0.4))
+                .font(.appCallout)
+                .foregroundStyle(Color.vText3)
         }
     }
 
@@ -86,55 +84,52 @@ private extension AudioEffectsSheet {
                 Text("1×")
                     .position(x: geo.size.width * onePos, y: geo.size.height / 2)
             }
-            .frame(height: 14)
-            .font(.appCaption2)
-            .foregroundStyle(.white.opacity(0.35))
+            .frame(height: 18)
+            .font(.appFootnote)
+            .monospacedDigit()
+            .foregroundStyle(Color.vText3)
         }
     }
 
-    /// Both toggle rows grouped in one card with a hairline between them.
+    /// Both toggle rows straight on the sheet — no card, no divider, just
+    /// the ink switch.
     var togglesCard: some View {
         VStack(spacing: 0) {
-            toggleRow(
+            SettingsRow(
                 title: "Preserve pitch",
-                subtitle: controller.audioEffects.preservePitch
+                caption: controller.audioEffects.preservePitch
                     ? "Speed changes tempo only"
                     : "Speed changes pitch too",
-                isOn: controller.audioEffects.preservePitch,
-                action: { setPreservePitch($0) }
-            )
+                titleFont: .appBodyMedium,
+                captionFont: .appFootnote
+            ) {
+                inkToggle(Binding(get: { controller.audioEffects.preservePitch }, set: { setPreservePitch($0) }))
+            }
 
-            Divider()
-                .overlay(Color.white.opacity(0.08))
-                .padding(.leading, 16)
-
-            toggleRow(
+            SettingsRow(
                 title: "Carry to next track",
-                subtitle: controller.persistAudioEdits
+                caption: controller.persistAudioEdits
                     ? "Settings apply to every track"
                     : "Settings reset on track change",
-                isOn: controller.persistAudioEdits,
-                action: { controller.persistAudioEdits = $0 }
-            )
+                titleFont: .appBodyMedium,
+                captionFont: .appFootnote
+            ) {
+                inkToggle(Binding(get: { controller.persistAudioEdits }, set: { controller.persistAudioEdits = $0 }))
+            }
         }
-        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // The rows keep their own 16pt inset; with no card around them, pull
+        // them out so the text lines up with the slider's edges.
+        .padding(.horizontal, -16)
     }
 
-    func toggleRow(title: String, subtitle: String, isOn: Bool, action: @escaping (Bool) -> Void) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.appCallout)
-                    .foregroundStyle(.white)
-                Text(subtitle)
-                    .font(.appCaption)
-                    .foregroundStyle(.white.opacity(0.45))
-            }
-            Spacer(minLength: 0)
-            fxToggle(isOn: isOn, action: action)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+    func inkToggle(_ isOn: Binding<Bool>) -> some View {
+        Toggle("", isOn: isOn)
+            .labelsHidden()
+            .toggleStyle(.ink)
+            // A size up from the stock 44×24 switch, to match this sheet's
+            // larger type (scaled, so layout reserves the bigger footprint).
+            .scaleEffect(1.25)
+            .frame(width: 55, height: 30)
     }
 
     var resetButton: some View {
@@ -142,31 +137,9 @@ private extension AudioEffectsSheet {
             localSpeed = nil
             controller.applyEffects(.default)
         } label: {
-            Text("Reset")
-                .font(.appSubheadlineMedium)
-                .foregroundStyle(.white.opacity(0.7))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 13)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            CapsuleButtonLabel(title: "Reset", style: .secondary, expands: true)
         }
         .buttonStyle(.plain)
-    }
-
-    /// Soft switch matching the player's white accent: ON = white / dark knob.
-    func fxToggle(isOn: Bool, action: @escaping (Bool) -> Void) -> some View {
-        Button { action(!isOn) } label: {
-            ZStack(alignment: isOn ? .trailing : .leading) {
-                Capsule()
-                    .fill(isOn ? Color.white : Color.white.opacity(0.22))
-                    .frame(width: 44, height: 26)
-                Circle()
-                    .fill(isOn ? Color.black : Color.white.opacity(0.85))
-                    .frame(width: 18, height: 18)
-                    .padding(4)
-            }
-        }
-        .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.18), value: isOn)
     }
 }
 

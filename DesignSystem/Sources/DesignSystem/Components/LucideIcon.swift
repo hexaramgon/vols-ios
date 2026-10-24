@@ -101,6 +101,37 @@ public struct LucideIcon: View {
         case reply = "lucide-reply"
         case flag = "lucide-flag"
         case ban = "lucide-ban"
+        case palette = "lucide-palette"
+        case monitor = "lucide-monitor"
+        case sun = "lucide-sun"
+        case moon = "lucide-moon"
+        case userPlus = "lucide-user-plus"
+        // Home / Explore (collab, listings, map, insight rail)
+        case megaphone = "lucide-megaphone"
+        case store = "lucide-store"
+        case send = "lucide-send"
+        case headphones = "lucide-headphones"
+        case folderOpen = "lucide-folder-open"
+        case calendarDays = "lucide-calendar-days"
+        case music2 = "lucide-music-2"
+        // Track analytics / Now Playing
+        case trendingUp = "lucide-trending-up"
+        case trendingDown = "lucide-trending-down"
+        case chartColumn = "lucide-chart-column"
+        // Workspace / listings (bucket 3)
+        case pencil = "lucide-pencil"
+        case lockOpen = "lucide-lock-open"
+        case messageSquare = "lucide-message-square"
+        case fileText = "lucide-file-text"
+        // Settings / Messages / Profile (bucket 4)
+        case userX = "lucide-user-x"
+        case info = "lucide-info"
+        case keyRound = "lucide-key-round"
+        case lifeBuoy = "lucide-life-buoy"
+        case shield = "lucide-shield"
+        case externalLink = "lucide-external-link"
+        case gitMerge = "lucide-git-merge"
+        case paperclip = "lucide-paperclip"
     }
 
     private let name: Name

@@ -11,22 +11,68 @@ import Observation
 import Services
 import SharedUtilities
 
-/// A recency bucket (Today / This Week / Earlier) for the grouped feed.
+/// A recency bucket ("New" / "Today" / … / "Older") for the grouped feed.
 struct NotificationGroup: Identifiable {
     let id: String
     let title: String
     let items: [ApiNotification]
 }
 
+/// The filter-chip vocabulary (web `NOTIF_CATEGORIES`).
+enum NotificationCategory: String, CaseIterable, Identifiable {
+    case follows, likes, comments, collabs, workspace, sales, uploads
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .follows: "Follows"
+        case .likes: "Likes"
+        case .comments: "Comments"
+        case .collabs: "Collabs"
+        case .workspace: "Workspace"
+        case .sales: "Sales"
+        case .uploads: "Uploads"
+        }
+    }
+
+    /// Chips shown — "Sales" only exists with the marketplace.
+    static var visible: [NotificationCategory] {
+        allCases.filter { FeatureFlags.marketplace || $0 != .sales }
+    }
+
+    /// The web's action → category map.
+    static func of(_ action: String?) -> NotificationCategory? {
+        switch action {
+        case "followed": .follows
+        case "liked", "saved", "shared": .likes
+        case "commented", "commented on file": .comments
+        case "requested collaboration", "accepted collaboration", "credited", "listing_response": .collabs
+        case "shared folder", "added to folder", "uploaded file": .workspace
+        case "purchased": .sales
+        case "uploaded": .uploads
+        default: nil
+        }
+    }
+}
+
 @Observable @MainActor
 final class NotificationsScreenViewModel {
     var notifications: [ApiNotification] = []
     var loadingState: LoadState = .idle
+    /// Active filter chip; nil = All.
+    var filter: NotificationCategory?
 
     /// Ids that were unread when the screen opened. The UI highlights against
     /// this snapshot so the unread treatment survives `markAllRead` (which flips
     /// `is_read` server-side) — matching the web's open-time snapshot.
     var unreadSnapshot: Set<String> = []
+
+    /// Inline collab-request answers, by notification id ("accepted" /
+    /// "declined"), and the ones in flight.
+    private(set) var collabResults: [String: String] = [:]
+    private(set) var respondingIds: Set<String> = []
+    var respondError: String?
 
     private let supabaseService: SupabaseService
 
@@ -36,28 +82,72 @@ final class NotificationsScreenViewModel {
 
     var unreadCount: Int { notifications.filter { !($0.isRead ?? false) }.count }
 
-    /// Notifications bucketed by recency for the grouped feed.
+    /// Notifications passing the active chip.
+    var filtered: [ApiNotification] {
+        guard let filter else { return notifications }
+        return notifications.filter { NotificationCategory.of($0.action) == filter }
+    }
+
+    /// The filtered feed bucketed: the open-time unread snapshot as "New",
+    /// then by recency.
     var groups: [NotificationGroup] {
         let cal = Calendar.current
         let now = Date()
-        var today: [ApiNotification] = []
-        var week: [ApiNotification] = []
-        var earlier: [ApiNotification] = []
-        for n in notifications {
-            let date = MessageTime.parse(n.createdAt) ?? now
-            if cal.isDateInToday(date) {
-                today.append(n)
-            } else if let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day, days < 7 {
-                week.append(n)
+        let order = ["New", "Today", "Yesterday", "This week", "This month", "Older"]
+        var buckets: [String: [ApiNotification]] = [:]
+        for n in filtered {
+            let title: String
+            if unreadSnapshot.contains(n.id) {
+                title = "New"
             } else {
-                earlier.append(n)
+                let date = MessageTime.parse(n.createdAt) ?? now
+                let days = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day ?? 0
+                switch days {
+                case ..<1: title = "Today"
+                case 1: title = "Yesterday"
+                case ..<7: title = "This week"
+                case ..<30: title = "This month"
+                default: title = "Older"
+                }
             }
+            buckets[title, default: []].append(n)
         }
-        var result: [NotificationGroup] = []
-        if !today.isEmpty { result.append(NotificationGroup(id: "today", title: "Today", items: today)) }
-        if !week.isEmpty { result.append(NotificationGroup(id: "week", title: "This Week", items: week)) }
-        if !earlier.isEmpty { result.append(NotificationGroup(id: "earlier", title: "Earlier", items: earlier)) }
-        return result
+        return order.compactMap { title in
+            buckets[title].map { NotificationGroup(id: title, title: title, items: $0) }
+        }
+    }
+
+    /// A collab request still awaiting an answer from this row.
+    func isPendingCollabRequest(_ n: ApiNotification) -> Bool {
+        n.action == "requested collaboration" && n.contextType == "collaborator"
+            && n.contextId != nil && collabResults[n.id] == nil
+    }
+
+    func collabResult(_ n: ApiNotification) -> String? { collabResults[n.id] }
+    func isResponding(_ n: ApiNotification) -> Bool { respondingIds.contains(n.id) }
+
+    /// Accepts / declines a collab request inline (`respond_to_collaborator`).
+    /// Returns true on success so the caller can update the shared overlays.
+    func respond(to n: ApiNotification, accept: Bool) async -> Bool {
+        guard let relationshipId = n.contextId, !respondingIds.contains(n.id) else { return false }
+        respondingIds.insert(n.id)
+        respondError = nil
+        defer { respondingIds.remove(n.id) }
+        do {
+            try await supabaseService.respondToCollaborator(relationshipId: relationshipId, accept: accept)
+            collabResults[n.id] = accept ? "accepted" : "declined"
+            return true
+        } catch {
+            debugLog("[NotificationsVM] respond: \(error)")
+            // Already answered elsewhere (web / the thread) — reflect it
+            // rather than leaving dead buttons.
+            if error.serverRawDetail.contains("no longer pending") {
+                collabResults[n.id] = "answered"
+            } else {
+                respondError = "Couldn't respond to the request. Try again."
+            }
+            return false
+        }
     }
 
     func load() async {
@@ -83,6 +173,10 @@ final class NotificationsScreenViewModel {
     func markAllRead() async {
         guard !unreadSnapshot.isEmpty else { return }
         try? await supabaseService.markNotificationsRead()
+        // Re-prime the coalesced unread-counts cache with post-mark truth, so
+        // a passive refresh inside the 5s window can't resurrect the bell dot
+        // the screen just optimistically cleared.
+        _ = try? await supabaseService.getUnreadCounts(force: true)
     }
 
     /// "just now" / "5m" / "3h" / "2d" / date — mirrors the web's notification timeAgo.

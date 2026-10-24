@@ -2,9 +2,10 @@
 //  AuthComponents.swift
 //  Volspire
 //
-//  Auth UI kit, v2 — flat dark canvas, grouped input cards (iOS-style rows
-//  divided by hairlines, placeholder-only), send-accent gradient CTA, flat
-//  provider buttons, and a segmented 6-digit code field.
+//  Auth UI kit, v4 — flat canvas, grouped input cards on the app's field
+//  chrome (iOS-style rows divided by hairlines, placeholder-only), the app's
+//  own PrimaryButton / SecondaryButton + CardPress, provider buttons, a
+//  segmented 6-digit code field, and the register wizard's progress line.
 //
 
 import AuthenticationServices
@@ -22,27 +23,35 @@ struct AuthCanvas: View {
     }
 }
 
-// MARK: - Press feedback
-
-struct AuthPress: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .opacity(configuration.isPressed ? 0.85 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-}
-
 // MARK: - Grouped input card
 
 /// One rounded card holding input rows separated by hairlines — like a
-/// grouped iOS form, not individual labeled boxes.
+/// grouped iOS form, not individual labeled boxes. The app's field chrome:
+/// `vField`, brightening to `vFieldFocus` while any row inside is focused
+/// (rows report it with `authFieldFocus`), at the card radius.
 struct AuthFieldGroup<Content: View>: View {
     @ViewBuilder var content: Content
+    @State private var focused = false
 
     var body: some View {
         VStack(spacing: 0) { content }
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(focused ? Color.vFieldFocus : Color.vField,
+                        in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .onPreferenceChange(AuthFieldFocusKey.self) { focused = $0 }
+            .animation(.easeInOut(duration: 0.15), value: focused)
+    }
+}
+
+/// Whether any row inside an `AuthFieldGroup` has focus.
+struct AuthFieldFocusKey: PreferenceKey {
+    static let defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
+}
+
+extension View {
+    /// Tells the enclosing `AuthFieldGroup` this row is focused.
+    func authFieldFocus(_ focused: Bool) -> some View {
+        preference(key: AuthFieldFocusKey.self, value: focused)
     }
 }
 
@@ -50,7 +59,7 @@ struct AuthFieldGroup<Content: View>: View {
 struct AuthRowDivider: View {
     var body: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.06))
+            .fill(Color.ink(0.06))
             .frame(height: 0.5)
             .padding(.leading, 50)
     }
@@ -70,15 +79,15 @@ struct AuthRow: View {
     var body: some View {
         HStack(spacing: 12) {
             LucideIcon(icon, .md)
-                .foregroundStyle(focused ? .white : Color.vText3)
+                .foregroundStyle(focused ? Color.vText : Color.vText3)
             TextField(
                 "",
                 text: $text,
                 prompt: Text(placeholder).foregroundStyle(Color.vText3)
             )
             .font(.appBody)
-            .foregroundStyle(.white)
-            .tint(.white)
+            .foregroundStyle(Color.vText)
+            .tint(Color.vText)
             .keyboardType(keyboard)
             .textContentType(contentType)
             .textInputAutocapitalization(autocapitalize ? .sentences : .never)
@@ -88,6 +97,7 @@ struct AuthRow: View {
         .padding(.horizontal, 16)
         .frame(height: 54)
         .animation(.easeInOut(duration: 0.15), value: focused)
+        .authFieldFocus(focused)
     }
 }
 
@@ -96,6 +106,8 @@ struct AuthSecureRow: View {
     let placeholder: String
     @Binding var text: String
     var contentType: UITextContentType = .password
+    /// Put the cursor here on appear (sign-in with the email already filled).
+    var autoFocus = false
 
     @State private var revealed = false
     @FocusState private var focused: Bool
@@ -103,7 +115,7 @@ struct AuthSecureRow: View {
     var body: some View {
         HStack(spacing: 12) {
             LucideIcon(.lock, .md)
-                .foregroundStyle(focused ? .white : Color.vText3)
+                .foregroundStyle(focused ? Color.vText : Color.vText3)
             Group {
                 if revealed {
                     TextField("", text: $text, prompt: Text(placeholder).foregroundStyle(Color.vText3))
@@ -112,8 +124,8 @@ struct AuthSecureRow: View {
                 }
             }
             .font(.appBody)
-            .foregroundStyle(.white)
-            .tint(.white)
+            .foregroundStyle(Color.vText)
+            .tint(Color.vText)
             .textContentType(contentType)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
@@ -122,7 +134,7 @@ struct AuthSecureRow: View {
             Button {
                 revealed.toggle()
             } label: {
-                LucideIcon(revealed ? .eyeOff : .eye, .md)
+                LucideIcon(revealed ? .eyeOff : .eye, .lg)
                     .foregroundStyle(Color.vText3)
                     .frame(width: 32, height: 32)
                     .contentShape(.rect)
@@ -133,68 +145,29 @@ struct AuthSecureRow: View {
         .padding(.trailing, 10)
         .frame(height: 54)
         .animation(.easeInOut(duration: 0.15), value: focused)
+        .authFieldFocus(focused)
+        .task {
+            guard autoFocus else { return }
+            // After the push settles — focusing mid-transition is dropped.
+            try? await Task.sleep(for: .milliseconds(450))
+            focused = true
+        }
     }
 }
 
-// MARK: - Primary CTA (send-accent gradient, the app's action color)
+// MARK: - Primary CTA (ink — the web's `variant="primary"` AuthCTA)
 
+/// The auth pages' primary action — the app's own `PrimaryButton` (full
+/// size), so it can't drift from the rest of the app. Loading = its spinner.
 struct AuthCTA: View {
     let title: String
-    var loadingTitle: String = "…"
     var isLoading = false
     var isDisabled = false
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                if isLoading {
-                    ProgressView().tint(.white).controlSize(.small)
-                }
-                Text(isLoading ? loadingTitle : title)
-                    .font(.appHeadline)
-            }
-            .foregroundStyle(isDisabled && !isLoading ? Color.vText3 : .white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 54)
-            .background {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(
-                        isDisabled && !isLoading
-                            ? AnyShapeStyle(Color.white.opacity(0.06))
-                            : AnyShapeStyle(LinearGradient.sendAccent)
-                    )
-            }
-        }
-        .buttonStyle(AuthPress())
-        .disabled(isDisabled || isLoading)
-        .animation(.easeInOut(duration: 0.2), value: isDisabled)
-    }
-}
-
-// MARK: - Secondary CTA (the quieter half of a button pair)
-
-/// The muted counterpart to `AuthCTA`: identical 54pt height and 16pt radius,
-/// filled like the provider cards instead of the gradient. Paired on the
-/// welcome screen, so the two read as one set separated by weight, not size —
-/// hence `appHeadline` here rather than the providers' `appBodyMedium`.
-struct AuthSecondaryCTA: View {
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.appHeadline)
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .frame(height: 54)
-                .background(
-                    Color.white.opacity(0.05),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                )
-        }
-        .buttonStyle(AuthPress())
+        PrimaryButton(title, busy: isLoading, enabled: !isDisabled, action: action)
+            .buttonStyle(CardPress())
     }
 }
 
@@ -220,12 +193,13 @@ struct AppleAuthButton: View {
                 Text(label)
                     .font(.appBodyMedium)
             }
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.vText)
             .frame(maxWidth: .infinity)
-            .frame(height: 54)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .frame(height: 52)
+            .background(Color.vControl, in: Capsule())
+            .contentShape(Capsule())
         }
-        .buttonStyle(AuthPress())
+        .buttonStyle(CardPress())
     }
 }
 
@@ -244,13 +218,14 @@ struct GoogleAuthButton: View {
                     .frame(width: 17, height: 17)
                 Text(isLoading ? "Signing in…" : label)
                     .font(.appBodyMedium)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 54)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .frame(height: 52)
+            .background(Color.vControl, in: Capsule())
+            .contentShape(Capsule())
         }
-        .buttonStyle(AuthPress())
+        .buttonStyle(CardPress())
         .disabled(isLoading)
     }
 }
@@ -268,12 +243,14 @@ final class AppleSignInCoordinator: NSObject {
         self.onCredential = onCredential
         self.onError = onError
         let request = ASAuthorizationAppleIDProvider().createRequest()
-        // Email only — the app never uses the name (sign-in forwards just the
-        // identity token to Supabase, and profiles are username-based), so
-        // don't ask for it: the consent sheet drops the name row entirely.
-        // Keep .email — Supabase needs the email claim in the ID token to
-        // create/link the auth user.
-        request.requestedScopes = [.email]
+        // Both scopes are load-bearing. `.email` gives Supabase the email claim
+        // in the ID token to create/link the auth user; `.fullName` is what the
+        // profile step seeds its username from, so a first-time Apple sign-in
+        // never has to re-type a name Apple already supplied (App Store
+        // guideline 4 — Sign in with Apple design requirements). Apple returns
+        // the name ONLY on the first authorization, so it's captured there and
+        // stashed on `AuthManager` rather than re-requested later.
+        request.requestedScopes = [.fullName, .email]
         let controller = ASAuthorizationController(authorizationRequests: [request])
         controller.delegate = self
         controller.presentationContextProvider = self
@@ -339,7 +316,7 @@ struct AuthWizardBackBar: View {
             if canGoBack {
                 Button(action: onBack) {
                     LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
                         .frame(width: 44, height: 44)
                         .contentShape(.rect)
                 }
@@ -351,6 +328,28 @@ struct AuthWizardBackBar: View {
         .frame(height: 44)
         .padding(.horizontal, 12)
         .padding(.top, 8)
+    }
+}
+
+/// The register wizard's slim progress line under the back bar: how far
+/// through the steps you are, the fill gliding as you advance.
+struct AuthProgressLine: View {
+    /// 0…1.
+    let progress: CGFloat
+
+    var body: some View {
+        GeometryReader { geo in
+            Capsule().fill(Color.ink(0.08))
+                .overlay(alignment: .leading) {
+                    Capsule().fill(Color.vInverse)
+                        .frame(width: max(6, geo.size.width * min(1, max(0, progress))))
+                }
+        }
+        .frame(height: 3)
+        .animation(.smooth(duration: 0.35), value: progress)
+        .accessibilityElement()
+        .accessibilityLabel("Step progress")
+        .accessibilityValue("\(Int((progress * 100).rounded())) percent")
     }
 }
 
@@ -445,13 +444,16 @@ struct AuthStepPage<Content: View, Footer: View>: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(title)
                     .font(.appTitleXXL)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .padding(.top, 12)
 
-                Text(subtitle)
-                    .font(.appCalloutRegular)
-                    .foregroundStyle(Color.vText2)
-                    .padding(.top, 6)
+                // Empty = a title-only page (sign-in's plain "Welcome back").
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.appCalloutRegular)
+                        .foregroundStyle(Color.vText2)
+                        .padding(.top, 6)
+                }
 
                 content
                     .padding(.top, 28)
@@ -509,7 +511,7 @@ struct AuthBottomLink: View {
                 Text(prompt)
                     .foregroundStyle(Color.vText3)
                 Text(action)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .fontWeight(.semibold)
             }
             .font(.appCalloutRegular)
@@ -546,12 +548,12 @@ struct AuthCodeField: View {
                 Text(index < digits.count ? String(digits[index]) : " ")
                     .font(.appTitle2)
                     .monospacedDigit()
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .frame(maxWidth: .infinity)
                     .frame(height: 58)
                     .background(
-                        Color.white.opacity(active ? 0.12 : 0.05),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        active ? Color.vFieldFocus : Color.vField,
+                        in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                     )
             }
         }
@@ -606,9 +608,9 @@ struct AuthResendButton: View {
                         LucideIcon(.check, .xs)
                         Text("New code sent — check your inbox")
                     }
-                    .foregroundStyle(Color.green)
+                    .foregroundStyle(Color.vSuccessText)
                 case .idle:
-                    Text("Didn't get a code? \(Text("Resend").foregroundStyle(.white).underline())")
+                    Text("Didn't get a code? \(Text("Resend").foregroundStyle(Color.vText).underline())")
                         .foregroundStyle(Color.vText3)
                 }
             }

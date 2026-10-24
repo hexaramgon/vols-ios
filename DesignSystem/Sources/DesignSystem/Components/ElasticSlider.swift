@@ -54,7 +54,9 @@ public struct ElasticSlider<LeadingContent: View, TrailingContent: View>: View {
             }
         }
         .animation(.smooth(duration: 0.3, extraBounce: 0.3), value: isActive)
-        .sensoryFeedback(.increase, trigger: isValueExtreme) { config.defaultSensoryFeedback && $1 }
+        // Only while the user drags it: a programmatic jump (a new track's
+        // progress resetting to 0) hitting an end must not buzz the phone.
+        .sensoryFeedback(.increase, trigger: isValueExtreme) { config.defaultSensoryFeedback && isActive && $1 }
     }
 }
 
@@ -307,9 +309,11 @@ public extension ElasticSliderConfig {
     static var inlineScrub: Self {
         Self(
             maxStretch: 0,
-            minimumTrackActiveColor: .white,
-            minimumTrackInactiveColor: .white,
-            maximumTrackColor: .white.opacity(0.18),
+            // Ink, not fixed white: inline scrubbers sit on themed surfaces
+            // (chat, upload) as well as the dark-pinned player.
+            minimumTrackActiveColor: .vText,
+            minimumTrackInactiveColor: .vText,
+            maximumTrackColor: .ink(0.18),
             defaultSensoryFeedback: false
         )
     }

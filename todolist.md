@@ -309,3 +309,61 @@ cleanly and the attempts to fix it got fussy. The count itself is available at
       `trackDetail` briefly goes nil). The removed code used a `displayedComments` @State
       updated via `.onChange` for exactly this — restore that pattern.
 - [ ] There was also a `commentCountLabel` helper (999 / 1.2K / 3.4M formatting) worth reusing.
+
+## Perf round — findings from the 2026-08-19 Android codebase review
+
+A three-way review of the Android port (rendering / network / memory) turned up issues that
+exist in BOTH codebases, since the port mirrored this repo's architecture. Android's copies
+are FIXED (see volspire-android); the items below are what's still open here and the two
+cross-platform stragglers. Overlaps with the older perf-backlog memory note are marked.
+
+### Cross-platform / server
+
+- [ ] **DM poll since-cursor**: `get_convo_messages` has no "after" param, so BOTH apps'
+      4-second conversation polls refetch the full 50-row page every tick (~900 page-fetches
+      per hour per open thread). Add `p_after_message_id` (default NULL = current behavior)
+      via migration, then have each client pass its newest id and merge deltas; back off the
+      interval after N empty ticks. Server change is backward-compatible.
+- [ ] **Android: profile screen → LazyColumn** (lives in volspire-android, tracked here so it
+      isn't lost): the profile is a non-lazy Column that composes an artist's entire track
+      list (80 rows, 80 image loads) before first paint. Restructure needs care around the
+      hero stretch + collapsed-title fade. iOS has the same shape (ScrollView + full content)
+      but tolerates it better — worth measuring here too on a long profile.
+
+### iOS-applicable (verified against this repo, not just assumed from the port)
+
+- [x] **Dominant-colour extraction cost per skip** (DONE 2026-08-19) — `PlayerController.swift:500` uses
+      `.dominantColorFrequencies(with: .high)` (100k-pixel histogram) on the full-size cover.
+      Android fix: decode a ~96px thumb for extraction and drop to `.fair` — colours are
+      indistinguishable, ~20MB of per-skip transient allocation disappears.
+- [x] **APICache is unbounded** (DONE 2026-08-19 — access-order LRU, 256 entries) — `APICache.swift` holds raw JSON + decoded values in plain
+      dictionaries evicted only on sign-out; keys embed ids, so long browsing sessions retain
+      every profile/folder/listing payload twice. Android fix: access-order LRU capped at
+      ~256 entries, decoded twin evicted with its raw entry.
+- [x] **Signed-URL memoization** (DONE 2026-08-19 — static actor memo, cleared on sign-out) — `StorageService` signs private-bucket files one HTTP call
+      per file with no memo, so reopening a folder re-signs the whole list even on an RPC
+      cache hit. Android fix: path → (url, expiry-minus-5min) memo, cleared on sign-out.
+- [x] **Uncached hot RPCs** (DONE 2026-08-19 — all five cached + invalidations) — `get_pack`, `get_service_detail`, `get_user_playlists`,
+      `get_playlists_for_track`, `get_user_listings` all `performRpc` while their siblings
+      are cached; the Add-to-Playlist sheet refetches two of them on every open. Android fix:
+      short/medium-TTL `cachedRpc` + invalidation from every playlist mutation and from
+      `invalidateProfile` (listings).
+- [x] **Unread-counts burst** (DONE 2026-08-19 — 5s coalesce + force after mark-read) — `get_unread_counts` fires from several surfaces within the
+      same navigation beat with no coalescing. Android fix: 5s coalesced window with a
+      `force` bypass used after mark-read (so dots can't go stale).
+- [x] **Hero carousel timer** (DONE 2026-08-19 — publisher cancelled off-tab/background) (already in perf-backlog memory) — `HomeScreen.swift:95`
+      Timer.publish(5s).autoconnect() runs for the app's lifetime; stop it when Home is
+      hidden/backgrounded rather than gating only the scroll action.
+- [~] **Serial round-trips** (PARTIAL 2026-08-19: conversation-open tail + track-change pair parallelized; analytics / folder-meta / members / inbox-refresh pairs still unaudited on iOS) (already in perf-backlog memory) — Android parallelized six
+      waterfalls: conversation open (messages → mark-read → unread → listing-id → listing),
+      inbox refresh + unread, track-change metadata + interaction status, analytics pair,
+      folder files + meta, members + collaborators. Audit the same sites here; on Android
+      the conversation open alone dropped ~4 serial RTTs.
+Also done 2026-08-19 (from the old perf-backlog quick wins): DateComponentsFormatter
+cached per style (TimingIndicator — was 2 fresh formatters per 10Hz tick), and
+MediaCollectionScreen ForEach keyed by `\.element.id` instead of `\.offset`
+(the wrong-artwork-after-delete glitch).
+
+- [ ] NOT needed on iOS: visited-tab gating (already implemented here — the port had dropped
+      it), player-controller dispose (iOS keeps one in Dependencies; the Android leak was
+      per-Activity recreation), APICache decode-memo (present here already).

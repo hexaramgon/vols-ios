@@ -18,18 +18,17 @@ struct ProfileDashboardCard: View {
             AnalyticsScreen()
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: "chart.line.uptrend.xyaxis")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
+                LucideIcon(.chartLine, .md)
+                    .foregroundStyle(Color.vText)
                     .frame(width: 34, height: 34)
-                    .background(.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 9))
+                    .background(Color.vControlActive, in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Artist Dashboard")
                         .font(.appSubheadlineSemibold)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
                     Text(subtitle)
-                        .font(.appCaption)
+                        .font(.appCaptionCompact)
                         .foregroundStyle(Color.vText2)
                 }
 
@@ -39,12 +38,11 @@ struct ProfileDashboardCard: View {
                 if viewModel.loaded, viewModel.playsLast30 > 0, viewModel.weekTrend != 0 {
                     trendPill
                 }
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
+                LucideIcon(.chevronRight, .sm)
                     .foregroundStyle(Color.vText2)
             }
             .padding(11)
-            .background(Color.vCard, in: RoundedRectangle(cornerRadius: 13))
+            .background(Color.vCard, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         }
         .buttonStyle(.plain)
         .task { await viewModel.load() }
@@ -61,10 +59,9 @@ struct ProfileDashboardCard: View {
         let up = viewModel.weekTrend >= 0
         let tint = up ? Color.green : Color.red
         return HStack(spacing: 2) {
-            Image(systemName: up ? "arrow.up.right" : "arrow.down.right")
-                .font(.system(size: 9, weight: .bold))
+            LucideIcon(up ? .trendingUp : .trendingDown, .xs)
             Text("\(abs(viewModel.weekTrend))%")
-                .font(.appLabel)
+                .font(.appLabelCompact)
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 7)

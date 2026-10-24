@@ -2,11 +2,13 @@
 //  PrimaryButton.swift
 //  Volspire
 //
-//  The app's primary CTA — a white capsule with a black label. Exactly two
+//  The app's primary CTA — an ink capsule with a paper label (white/black in
+//  dark, inverted in light: `Color.vInverse` / `Color.vOnInverse`). Exactly two
 //  sizes: `.full` (52pt, the bottom CTA of forms and sheets) and `.inline`
 //  (42pt, CTAs sitting inside page content). Busy swaps the label for a
-//  spinner; disabled dims the whole capsule to 30% — the one disabled
-//  treatment (never swap the fill color per-site).
+//  spinner; disabled swaps to a quiet `vControl` capsule with a `vText4`
+//  label at full opacity (a 30% ink capsule read as nothing on light) — the
+//  one disabled treatment, shared with `SecondaryButton` (never per-site).
 //
 
 import SwiftUI
@@ -32,7 +34,7 @@ public struct PrimaryButton: View {
     /// - Parameters:
     ///   - expands: false renders a hugging capsule instead of full width.
     ///   - busy: shows a spinner in place of the label and blocks taps.
-    ///   - enabled: false blocks taps and dims the capsule to 30%.
+    ///   - enabled: false blocks taps and shows the disabled capsule.
     public init(
         _ title: String,
         size: Size = .full,
@@ -53,21 +55,20 @@ public struct PrimaryButton: View {
         Button(action: action) {
             Group {
                 if busy {
-                    ProgressView().tint(.black)
+                    ProgressView().tint(Color.vOnInverse)
                 } else {
                     Text(title).font(size.font)
                 }
             }
-            .foregroundStyle(.black)
+            .foregroundStyle(enabled ? Color.vOnInverse : Color.vText4)
             .frame(maxWidth: expands ? .infinity : nil)
             .frame(height: size.height)
             .padding(.horizontal, expands ? 0 : 32)
-            .background(.white, in: Capsule())
+            .background(enabled ? Color.vInverse : Color.vControl, in: Capsule())
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(!enabled || busy)
-        .opacity(enabled ? 1 : 0.3)
         .animation(.easeInOut(duration: 0.18), value: enabled)
     }
 }
@@ -81,5 +82,5 @@ public struct PrimaryButton: View {
         PrimaryButton("Submit report", enabled: false) {}
     }
     .padding()
-    .background(Color.black)
+    .background(Color.vBase)
 }

@@ -17,12 +17,20 @@ enum ProfileLayout {
     @MainActor
     static var heroHeight: CGFloat { max(UIScreen.size.height * 0.54, 380) }
 
-    /// Canonical banner crop aspect (width ÷ height) — the hero's banner band
-    /// (screen width over `heroHeight × 0.82` incl. top inset) works out to
-    /// ≈0.92 on every modern iPhone, so a FIXED value keeps the stored crop
-    /// identical no matter which device it was made on; displays aspect-fill
-    /// the ≤1% remainder. (The web crops its wider band from the middle.)
-    static let bannerCropAspect: CGFloat = 0.92
+    /// Canonical banner crop aspect (width ÷ height), SHARED WITH THE WEB:
+    /// 16:9 — the middle ground between the iPhone hero's tall band and the
+    /// desktop web hero's wide strip. Each display aspect-fills its own shape
+    /// from the centre; the cropper's guides (`bannerGuides`) show both.
+    static let bannerCropAspect: CGFloat = 16.0 / 9.0
+    /// Exported banner width (px) — 2400×1350, so the iPhone hero (which fills
+    /// by HEIGHT, ~1130px at 3x) never has to upscale it.
+    static let bannerOutputSize: CGFloat = 2400
+    /// What each platform's profile hero shows of a banner (width ÷ height):
+    /// the iPhone hero band (≈0.92) and the desktop web hero (≈2.5:1).
+    static let bannerGuides: [CropGuide] = [
+        CropGuide(label: "iPhone", aspect: 0.92),
+        CropGuide(label: "Desktop", aspect: 2.5),
+    ]
     /// Two-column grid used by the Services + Packs tabs.
     static var grid: [GridItem] {
         [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
@@ -65,21 +73,16 @@ extension Double {
 
 // MARK: - Empty state
 
+/// A profile tab's empty state — the shared `EmptyStateView` puck, padded
+/// for the tab area. Every tab uses the same shape: icon + a short "No … yet"
+/// title, no subtitle.
 struct ProfileEmptyState: View {
     let icon: LucideIcon.Name
     let title: String
-    var subtitle: String? = nil
 
     var body: some View {
-        VStack(spacing: 10) {
-            LucideIcon(icon, .xxl).foregroundStyle(Color.vText3.opacity(0.7))
-            Text(title).font(.appSubheadline).foregroundStyle(Color.vText2)
-            if let subtitle {
-                Text(subtitle).font(.appCaption).foregroundStyle(Color.vText3)
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 72)
+        EmptyStateView(icon: icon, title: title)
+            .padding(.vertical, 56)
     }
 }
 

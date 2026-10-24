@@ -98,6 +98,9 @@ final class ProfileScreenViewModel {
     var services: [ProfileService] = []
     /// Collab-board listings authored by this profile (`get_user_listings`).
     var listings: [ApiListing] = []
+    /// Flip only once a response lands, so empty states never show early.
+    private(set) var listingsLoaded = false
+    private(set) var creditedLoaded = false
     /// Raw API rows kept so the merged "Market" tab can build marketplace nav objects.
     var apiPacks: [ApiUserPack] = []
     var apiServices: [ApiUserService] = []
@@ -168,14 +171,6 @@ final class ProfileScreenViewModel {
     var editingTrackDetail: ApiTrackDetail? = nil
     var showDeleteTrackConfirm = false
     var pendingDeleteTrackId: String? = nil
-
-    var latestRelease: ProfileTrack? {
-        tracks.first
-    }
-
-    var curatedTracks: [ProfileTrack] {
-        Array(tracks.dropFirst())
-    }
 
     var playerState: MediaPlayerState = .paused(media: .none)
     var cancellables = Set<AnyCancellable>()
@@ -263,7 +258,7 @@ final class ProfileScreenViewModel {
     /// Prefetch every tab's cover art so switching tabs shows already-cached images
     /// that slide in with the page instead of popping in mid-transition.
     func prefetchTabCovers() {
-        let urls = curatedTracks.compactMap(\.coverURL)
+        let urls = tracks.compactMap(\.coverURL)
             + creditedTracks.compactMap(\.coverURL)
             + packs.compactMap(\.coverURL)
             + services.compactMap(\.coverURL)
@@ -288,6 +283,7 @@ final class ProfileScreenViewModel {
                     unavailableReason: row.unavailableReason
                 )
             }
+            creditedLoaded = true
         } catch {
             debugLog("[ProfileVM] Failed to load credited tracks: \(error)")
         }
@@ -297,6 +293,7 @@ final class ProfileScreenViewModel {
     func loadUserListings(userId: String) async {
         do {
             listings = try await supabaseService.getUserListings(userId: userId)
+            listingsLoaded = true
         } catch {
             debugLog("[ProfileVM] Failed to load listings: \(error)")
         }
@@ -348,8 +345,9 @@ final class ProfileScreenViewModel {
     /// tint the hero — mirrors `MediaMeta.colors` / the expanded player's theming.
     func loadHeroColors() async {
         guard let source = bannerImageURL ?? profileImageURL else { return }
+        // .fair, not .high — feeds a blurred hero tint; see MediaMeta.colors.
         let extracted = await source.image?
-            .dominantColorFrequencies(with: .high)?
+            .dominantColorFrequencies(with: .fair)?
             .map { Color(uiColor: $0.color) }
         if let extracted, !extracted.isEmpty {
             heroColors = extracted
@@ -604,6 +602,14 @@ final class ProfileScreenViewModel {
     /// Saves the whole profile in one `update_user` call. Because the RPC writes
     /// every field as-passed (no COALESCE except account_type), we send the
     /// current image URLs + preserved account type so nothing gets wiped.
+    /// Whether a handle is free, or nil when the check itself failed (offline) —
+    /// callers treat nil as "don't know", never as "taken", so a flaky network
+    /// can't block a legitimate rename. Keeps `supabaseService` private, matching
+    /// how the edit screen reaches everything else.
+    func isUsernameAvailable(_ username: String) async -> Bool? {
+        try? await supabaseService.checkUsernameAvailable(username)
+    }
+
     func saveProfile(userId: String, username: String, bio: String, location: String, tags: [String]) async -> Bool {
         do {
             let result = try await supabaseService.updateUserProfile(
@@ -627,7 +633,18 @@ final class ProfileScreenViewModel {
             await social?.refreshMyProfile()
             return true
         } catch {
-            profileUpdateError = error.localizedDescription
+            // `update_user` fails the `users_username_key` unique index when the
+            // handle is taken. The shared mapper only knows to say "That already
+            // exists", which doesn't tell the user WHICH field or what to do —
+            // so name it here. Everything else keeps the mapped copy.
+            let raw = ((error as? SupabaseError)?.rawDetail ?? "\(error)").lowercased()
+            if raw.contains("users_username_key") || raw.contains("username already taken")
+                || ((raw.contains("duplicate") || raw.contains("unique constraint")) && raw.contains("username"))
+            {
+                profileUpdateError = "That username is already taken — try another."
+            } else {
+                profileUpdateError = error.localizedDescription
+            }
             debugLog("[ProfileVM] Failed to save profile: \(error)")
             return false
         }

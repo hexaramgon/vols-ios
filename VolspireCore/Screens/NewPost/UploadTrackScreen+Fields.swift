@@ -80,6 +80,12 @@ extension UploadTrackScreen {
                     )
                 }
                 .buttonStyle(.plain)
+                if let error = viewModel.audioFileError {
+                    Text(error)
+                        .font(.appFootnote)
+                        .foregroundStyle(Color.vError)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         } else {
             if let data = viewModel.videoData {
@@ -127,7 +133,7 @@ extension UploadTrackScreen {
                     .font(.appCallout)
                     .foregroundStyle(Color.vText2)
                 ProgressView(value: viewModel.videoProcessingProgress)
-                    .tint(.white)
+                    .tint(Color.vText)
                     .frame(maxWidth: 160)
                 if viewModel.videoProcessingProgress > 0 {
                     Text("\(Int(viewModel.videoProcessingProgress * 100))%")
@@ -140,12 +146,8 @@ extension UploadTrackScreen {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 36)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white.opacity(0.02))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(Color.vField)
         )
     }
 

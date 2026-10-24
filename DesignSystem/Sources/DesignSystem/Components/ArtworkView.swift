@@ -15,17 +15,45 @@ public struct ArtworkView: View {
     /// When true, video keeps its native aspect ratio centered within the square
     /// (letterboxed) instead of cropping to fill.
     var videoAspectFit: Bool
+    /// When true, a remote cover still downloading shows a shimmering
+    /// placeholder instead of the plain background (the Now Playing cover,
+    /// where skipping quickly outruns the downloads).
+    var loadingPlaceholder: Bool
 
     /// The view's measured side length (points, quantized) used to downsample
     /// remote covers to their display size instead of decoding them full-res —
     /// the difference between ~1.5MB and ~35MB of memory per cover.
-    @State private var measuredSide: CGFloat = 0
+    @State private var measuredSide: CGFloat
 
-    public init(_ artwork: Artwork, cornerRadius: CGFloat = 8, background: Color = Color(.palette.artworkBackground), videoAspectFit: Bool = false) {
+    /// `side`: the display size when the caller already knows it — the very
+    /// first frame then asks the cache for the right downsampled copy (no
+    /// placeholder flash when a cover another view already loaded remounts).
+    public init(_ artwork: Artwork, cornerRadius: CGFloat = 8, background: Color = Color(.palette.artworkBackground), videoAspectFit: Bool = false, loadingPlaceholder: Bool = false, side: CGFloat? = nil) {
         self.artwork = artwork
         self.cornerRadius = cornerRadius
         self.background = background
         self.videoAspectFit = videoAspectFit
+        self.loadingPlaceholder = loadingPlaceholder
+        _measuredSide = State(initialValue: side.map(Self.stepped) ?? 0)
+    }
+
+    /// Warms the cache with exactly the downsampled copy an ArtworkView of
+    /// `side` will ask for, so it shows on its first frame. (Prefetching only
+    /// the original left the view to downsample it itself — a loading-tile
+    /// blink before the cover popped in.)
+    public static func prefetch(_ urls: [URL], side: CGFloat) {
+        guard !urls.isEmpty else { return }
+        let px = min(stepped(side) * UIScreen.displayScale, 1400)
+        ImagePrefetcher(
+            urls: urls,
+            options: [.processor(DownsamplingImageProcessor(size: CGSize(width: px, height: px))), .cacheOriginalImage]
+        ).start()
+    }
+
+    /// Quantized to 80pt steps so the downsample target (and its cache key)
+    /// stays stable across minor layout changes — no repeated re-decoding.
+    private static func stepped(_ side: CGFloat) -> CGFloat {
+        max(80, (side / 80).rounded(.up) * 80)
     }
 
     public var body: some View {
@@ -43,6 +71,15 @@ public struct ArtworkView: View {
                 // While the cover is in flight, the ZStack's solid `background`
                 // shows through — a plain colour placeholder, no icon.
                 KFImage.url(url)
+                    .placeholder {
+                        if loadingPlaceholder {
+                            ZStack {
+                                Color.white.opacity(0.12)
+                                placeholderIcon.opacity(0.5)
+                            }
+                            .shimmering()
+                        }
+                    }
                     .setProcessor(DownsamplingImageProcessor(size: CGSize(width: targetPx, height: targetPx)))
                     // Keep the original cached too, so a prefetched (un-processed)
                     // cover is reused here and downsampled from disk — no second
@@ -89,9 +126,7 @@ public struct ArtworkView: View {
         .onGeometryChange(for: CGFloat.self) { proxy in
             max(proxy.size.width, proxy.size.height)
         } action: { side in
-            // Quantize to 80pt steps so the downsample target (and its cache key)
-            // stays stable across minor layout changes — no repeated re-decoding.
-            let stepped = max(80, (side / 80).rounded(.up) * 80)
+            let stepped = Self.stepped(side)
             if abs(stepped - measuredSide) > 1 { measuredSide = stepped }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
@@ -122,7 +157,7 @@ public struct ArtworkView: View {
     /// full-screen now-playing cover never decodes more than it can display.
     private var targetPx: CGFloat {
         let side = measuredSide > 0 ? measuredSide : 200
-        return min(side * UIScreen.main.scale, 1400)
+        return min(side * UIScreen.displayScale, 1400)
     }
 
     /// A video rendered at its native aspect ratio — no square cover background/border.

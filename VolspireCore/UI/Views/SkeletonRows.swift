@@ -15,7 +15,7 @@ import SwiftUI
 
 struct SkeletonRows: View {
     enum Thumb {
-        case rounded(size: CGFloat, radius: CGFloat = 9)
+        case rounded(size: CGFloat, radius: CGFloat = Radius.tile)
         case circle(size: CGFloat)
     }
 
@@ -33,12 +33,11 @@ struct SkeletonRows: View {
     var rowSpacing: CGFloat = 0
     var horizontalPadding: CGFloat = ViewConst.screenPaddings
     var verticalPadding: CGFloat = 9
-    var boneOpacity: Double = 0.06
     /// Pass false when an enclosing skeleton applies one shimmer sweep across
     /// these rows plus its own extra bones.
     var shimmers: Bool = true
 
-    private var bone: Color { Color.white.opacity(boneOpacity) }
+    private var bone: Color { Color.vSkeleton }
 
     var body: some View {
         VStack(spacing: rowSpacing) {
@@ -106,9 +105,8 @@ struct SkeletonRows: View {
             line1: CGSize(width: 210, height: 13),
             line2: CGSize(width: 120, height: 11),
             trailing: CGSize(width: 30, height: 10),
-            rowAlignment: .top,
-            boneOpacity: 0.08
+            rowAlignment: .top
         )
     }
-    .background(Color.black)
+    .background(Color.vBase)
 }

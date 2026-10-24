@@ -21,7 +21,7 @@ public extension KFImage {
     /// built-in transition scales the image in — fade those with a plain `.opacity`
     /// at the call site instead so nothing stretches.
     func downsampled(to side: CGFloat, fade: TimeInterval = 0.25) -> KFImage {
-        let px = max(1, side) * UIScreen.main.scale
+        let px = max(1, side) * UIScreen.displayScale
         let base = setProcessor(DownsamplingImageProcessor(size: CGSize(width: px, height: px)))
             .cacheOriginalImage()
         // fade <= 0 must mean NO transition at all — `.fade(duration: 0)` still

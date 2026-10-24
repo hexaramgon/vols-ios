@@ -15,6 +15,8 @@ import DesignSystem
 import SwiftUI
 
 struct MessageCategoryScreen: View {
+    /// This page instance's list entrance (see `staggeredAppear`).
+    @State private var entranceKey = "messageCategory-\(UUID().uuidString)"
     let title: String
     let bucket: MessageBucket
     @Environment(\.dismiss) private var dismiss
@@ -27,15 +29,17 @@ struct MessageCategoryScreen: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 2) {
+            LazyVStack(spacing: 0) {
                 if items.isEmpty {
-                    EmptyStateView(icon: .messageCircle, title: "Nothing here")
+                    InboxEmptyState(title: "Nothing here yet", message: nil, compact: true)
                         .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.6)
                 } else {
-                    ForEach(items) { ConversationRow(item: $0) }
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        ConversationRow(item: item)
+                            .staggeredAppear(index, in: entranceKey)
+                    }
                 }
             }
-            .padding(.top, 8)
             .padding(.bottom, bottomInset)
             .animation(.easeInOut(duration: 0.25), value: items)
         }

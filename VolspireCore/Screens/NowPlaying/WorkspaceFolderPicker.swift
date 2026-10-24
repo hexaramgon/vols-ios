@@ -80,7 +80,8 @@ private struct FolderPickerSheet: View {
             SheetHeader(
                 icon: isToggle ? .folder : .folderPlus,
                 title: "Add to Workspace",
-                subtitle: isToggle ? "Pick a folder for this track" : "Pick a folder for this file"
+                subtitle: isToggle ? "Pick a folder for this track" : "Pick a folder for this file",
+                divider: false
             ) { dismiss() }
             content
             if let errorText {
@@ -92,7 +93,7 @@ private struct FolderPickerSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .foregroundStyle(.white)
         // Darker frosted panel to match the web's modal background.
-        .sheetBackground()
+        .sheetBackground(alwaysDark: true)
         .presentationDetents([.medium, .large])
         .task { await load() }
     }
@@ -139,10 +140,10 @@ private struct FolderPickerSheet: View {
         let added = addedFolderIds.contains(folder.folderId)
         return Button { tap(folder) } label: {
             HStack(spacing: 12) {
-                LucideIcon(.folder, .lg)
-                    .foregroundStyle(.white.opacity(0.85))
+                // The folder's own art (its name mesh + monogram), as in Workspace.
+                FolderArt(id: folder.folderId, name: folder.name, size: .sm)
+                    .scaleEffect(1.2)
                     .frame(width: 48, height: 48)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(folder.name)
@@ -159,11 +160,12 @@ private struct FolderPickerSheet: View {
 
                 Spacer(minLength: 8)
 
-                if busyFolderId == folder.folderId {
+                if !isToggle, busyFolderId == folder.folderId {
+                    // Copying a file in is a real upload — show it working.
                     ProgressView().tint(.white).controlSize(.small)
                 } else {
-                    LucideIcon(added ? .circleCheck : .plus, .lg)
-                        .foregroundStyle(added ? Color.green : Color.vText3)
+                    // Same animated check as Add to playlist.
+                    AddedCheck(isOn: added)
                 }
             }
             .padding(.horizontal, 8)
@@ -175,8 +177,9 @@ private struct FolderPickerSheet: View {
         // doesn't dim on every tap. (Concurrent taps are still blocked by the
         // `guard busyFolderId == nil` in `tap`.) Copy mode also freezes rows
         // already added — a one-shot copy can't be undone from here.
-        .disabled(busyFolderId == folder.folderId || (!isToggle && added))
-        .animation(.smooth(duration: 0.2), value: added)
+        // Copy mode freezes rows already added — a one-shot copy can't be
+        // undone from here. (Toggle mode stays live; `tap` ignores repeats.)
+        .disabled(!isToggle && (busyFolderId == folder.folderId || added))
     }
 
     // MARK: Loading
@@ -208,23 +211,31 @@ private struct FolderPickerSheet: View {
         if !isToggle, added { return } // one-shot: already copied
         busyFolderId = id
         errorText = nil
+        // Track membership is optimistic: the check animates on the tap and
+        // rolls back if the write fails.
+        if isToggle {
+            if added { addedFolderIds.remove(id); Haptics.selection() } else { addedFolderIds.insert(id); Haptics.success() }
+        }
         Task {
             defer { busyFolderId = nil }
             do {
                 if isToggle, added {
                     try await remove(from: id)
-                    withAnimation(.smooth(duration: 0.2)) { _ = addedFolderIds.remove(id) }
                 } else {
                     try await add(into: id)
-                    withAnimation(.smooth(duration: 0.2)) { _ = addedFolderIds.insert(id) }
                     if !isToggle {
-                        Haptics.impact(.soft)
+                        addedFolderIds.insert(id)
+                        busyFolderId = nil // swap the spinner for the check
+                        Haptics.success()
                         // Leave the check visible for a beat, then close.
                         try? await Task.sleep(for: .milliseconds(600))
                         dismiss()
                     }
                 }
             } catch {
+                if isToggle {
+                    if added { addedFolderIds.insert(id) } else { addedFolderIds.remove(id) }
+                }
                 errorText = failureMessage(for: error)
                 debugLog("[FolderPickerSheet] \(isToggle ? "toggle" : "add") failed: \(error)")
             }

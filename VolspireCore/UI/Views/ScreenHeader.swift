@@ -35,7 +35,8 @@ struct ScreenHeader<Trailing: View, Expansion: View>: View {
             HStack(alignment: .center) {
                 Text(title)
                     .font(.appLargeTitle)
-                    .foregroundStyle(.white)
+                    .tracking(-0.4)
+                    .foregroundStyle(Color.vText)
                 Spacer(minLength: 0)
                 HStack(spacing: 10) { trailing }
             }

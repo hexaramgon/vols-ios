@@ -50,6 +50,9 @@ extension EnvironmentValues {
 struct RootTabView: View {
     @State private var showNewPost = false
     @State private var selectedPostType: String?
+    /// Picked in the New post sheet; presented once that sheet has dismissed
+    /// (a full-screen cover can't present from a dismissing sheet).
+    @State private var pendingPostType: String?
     @State private var selectedTab: TabBarItem = .home
     @State private var profileAvatarImage: Image?
     @State private var visitedTabs: Set<TabBarItem> = [.home]
@@ -61,14 +64,14 @@ struct RootTabView: View {
     // driven into whichever tab is currently active.
     @State private var homeRouter = Router()
     @State private var libraryRouter = Router()
-    @State private var inboxRouter = Router()
+    @State private var workspaceRouter = Router()
     @State private var profileRouter = Router()
 
     private func router(for tab: TabBarItem) -> Router {
         switch tab {
         case .home, .newPost: homeRouter
         case .library: libraryRouter
-        case .inbox: inboxRouter
+        case .workspace: workspaceRouter
         case .profile: profileRouter
         }
     }
@@ -78,14 +81,14 @@ struct RootTabView: View {
         switch tab {
         case .home: "home"
         case .library: "library"
-        case .inbox: "inbox"
+        case .workspace: "workspace"
         case .profile: "profile"
         case .newPost: "new_post"
         }
     }
 
     /// Tabs that show a screen (everything except the New Post "+" which opens a sheet).
-    private let contentTabs: [TabBarItem] = [.home, .library, .inbox, .profile]
+    private let contentTabs: [TabBarItem] = [.home, .library, .workspace, .profile]
     @Environment(ConversationState.self) var conversationState
     @Environment(Dependencies.self) var dependencies
     @Environment(PlayerController.self) private var playerController
@@ -105,11 +108,11 @@ struct RootTabView: View {
     }
 
     init() {
-        // The app chrome tone — keep in sync with `Color.appBar` (0.07). A plain
-        // UIColor literal: bridging SwiftUI Color→UIColor during scene init is
-        // the kind of thing we don't want anywhere near the boot path.
+        // The app chrome tone — `UIColor.vBar`, the themed UIKit mirror of
+        // `Color.vBar` (a plain dynamic UIColor: no SwiftUI Color→UIColor
+        // bridging on the boot path).
         // (The bottom bar is now a custom SwiftUI view, so no UITabBar appearance here.)
-        let barColor = UIColor(white: 0.07, alpha: 1)
+        let barColor = UIColor.vBar
 
         let navBarAppearance = UINavigationBarAppearance()
         navBarAppearance.configureWithOpaqueBackground()
@@ -170,9 +173,16 @@ struct RootTabView: View {
                     .animation(.easeInOut(duration: 0.25), value: conversationState.composerActive)
                     .allowsHitTesting(!hideTabBar)
             }
-            .sheet(isPresented: $showNewPost) {
-                NewPostView { postType in
-                    selectedPostType = postType
+            // New post: the app's standard option sheet (header + icon rows).
+            .sheet(isPresented: $showNewPost, onDismiss: {
+                if let type = pendingPostType {
+                    pendingPostType = nil
+                    selectedPostType = type
+                }
+            }) {
+                NewPostSheet { type in
+                    pendingPostType = type
+                    showNewPost = false
                 }
             }
             .fullScreenCover(item: Binding(
@@ -211,6 +221,11 @@ struct RootTabView: View {
                 }
             }
             .ignoresSafeArea(.keyboard)
+            // The Marketplace tab's Sell sheet opens a create flow by its
+            // New post id ("sample_pack", "service", "track").
+            .onReceive(NotificationCenter.default.publisher(for: .openNewPost)) { notification in
+                if let type = notification.object as? String { selectedPostType = type }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .navigateToProfile)) { notification in
                 if let userId = notification.userInfo?["userId"] as? String {
                     // Push onto whichever tab is currently active — no detour through Home.
@@ -376,23 +391,15 @@ struct RootTabView: View {
         return result.withRenderingMode(.alwaysOriginal)
     }
 
-    /// Profile tab renders the user's avatar; every other tab uses its Lucide icon.
-    @ViewBuilder
+    /// Every tab — Profile included, for now — uses its plain Lucide icon
+    /// (Profile: the User glyph, not the avatar). The avatar crop below is kept
+    /// so it can come back.
     private func tabIcon(for item: TabBarItem) -> some View {
-        if item == .profile, let avatar = profileAvatarImage {
-            avatar
-                .renderingMode(.original)
-                .resizable()
-                .scaledToFill()
-                .frame(width: 26, height: 26)
-                .clipShape(Circle())
-        } else {
-            item.image
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 24, height: 24)
-        }
+        item.image
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(width: IconSize.lg.rawValue, height: IconSize.lg.rawValue)
     }
 
     /// Custom bottom tab bar (replaces SwiftUI's TabView to avoid the system cross-dissolve).
@@ -418,24 +425,11 @@ struct RootTabView: View {
                         AnalyticsService.shared?.log(.pageView, metadata: ["to": .string(analyticsName(item))])
                     }
                 } label: {
-                    VStack(spacing: 3) {
-                        tabIcon(for: item)
-                            // Unread dot on the Inbox tab — DMs OR notifications
-                            // (both live under this tab).
-                            .overlay(alignment: .topTrailing) {
-                                if item == .inbox, dependencies.inboxStore.inboxHasUnread {
-                                    Circle()
-                                        .fill(Color.vUnread)
-                                        .frame(width: 8, height: 8)
-                                        .offset(x: 3, y: -1)
-                                }
-                            }
-                        Text(item.title)
-                            .font(.appMicro)
+                    if item == .newPost {
+                        newPostTabButton
+                    } else {
+                        tabLabel(for: item)
                     }
-                    .foregroundStyle(selectedTab == item ? .white : Color(white: 0.55))
-                    .frame(maxWidth: .infinity)
-                    .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
@@ -446,11 +440,44 @@ struct RootTabView: View {
             Color.vBar
                 .overlay(alignment: .top) {
                     Rectangle()
-                        .fill(Color.vBorder)
+                        .fill(Color.vSurface2.opacity(0.8))
                         .frame(height: 0.5)
                 }
                 .ignoresSafeArea(edges: .bottom)
         }
+    }
+
+    /// The center New-post action — a 44×36 ink capsule with a "+". It
+    /// stays as-is while the New post sheet is up (the sheet is the feedback).
+    private var newPostTabButton: some View {
+        LucideIcon(.plus, .lg)
+            .foregroundStyle(Color.vOnInverse)
+            .frame(width: 44, height: 36)
+            .background(Color.vInverse, in: Capsule())
+            .frame(maxWidth: .infinity)
+            .contentShape(.rect)
+            .accessibilityLabel(TabBarItem.newPost.title)
+    }
+
+    private func tabLabel(for item: TabBarItem) -> some View {
+        VStack(spacing: 3) {
+            tabIcon(for: item)
+                // Unread dot on the Workspace tab — DMs OR notifications,
+                // reached from its header's Messages button.
+                .overlay(alignment: .topTrailing) {
+                    if item == .workspace, dependencies.inboxStore.inboxHasUnread {
+                        Circle()
+                            .fill(Color.vUnread)
+                            .frame(width: 8, height: 8)
+                            .offset(x: 2, y: -2)
+                    }
+                }
+            Text(item.title)
+                .font(.appCaption2Medium)
+        }
+        .foregroundStyle(selectedTab == item ? Color.vText : Color.vText3)
+        .frame(maxWidth: .infinity)
+        .contentShape(.rect)
     }
 }
 
@@ -471,8 +498,8 @@ private extension TabBarItem {
                 .withRouter(router)
         case .newPost:
             EmptyView()
-        case .inbox:
-            MessagesScreen()
+        case .workspace:
+            WorkspaceScreen()
                 .withRouter(router)
         case .profile:
             ProfileScreen()
@@ -494,4 +521,48 @@ private extension TabBarItem {
         .environment(dependencies.inboxStore)
         .environment(dependencies.listingsStore)
         .environment(dependencies.feedStore)
+}
+
+// MARK: - New post sheet
+
+/// The New post picker as the app's standard option sheet: shared header,
+/// icon rows with a caption, sized to its rows. Service / Pack only with the
+/// marketplace on.
+private struct NewPostSheet: View {
+    let onSelect: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private struct Option: Identifiable {
+        let id: String
+        let icon: LucideIcon.Name
+        let title: String
+        let caption: String
+    }
+
+    private var options: [Option] {
+        var list: [Option] = [
+            .init(id: "track", icon: .music2, title: "Track", caption: "Upload audio or video"),
+            .init(id: "listing", icon: .megaphone, title: "Listing", caption: "Post a collab call"),
+        ]
+        if FeatureFlags.marketplaceSurfaces {
+            list.append(.init(id: "service", icon: .briefcase, title: "Service", caption: "Offer mixing, features and more"))
+            list.append(.init(id: "sample_pack", icon: .package, title: "Pack", caption: "Sell samples or presets"))
+        }
+        return list
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(icon: .plus, title: "New post", subtitle: "What are you sharing?", prominent: true) { dismiss() }
+            VStack(spacing: 0) {
+                ForEach(options) { o in
+                    OptionSheetRow(icon: o.icon, title: o.title, subtitle: o.caption) { onSelect(o.id) }
+                }
+            }
+            .padding(.top, 6)
+            .padding(.bottom, 8)
+        }
+        .selfSizedDetent()
+        .sheetBackground()
+    }
 }

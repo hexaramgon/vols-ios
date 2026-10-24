@@ -2,8 +2,8 @@
 //  ProfileMarketTab.swift
 //  Volspire
 //
-//  Merged "Market" tab — the artist's collab listings, sample/preset packs, and
-//  services in one grid. Tapping any card opens its marketplace/listing detail.
+//  The profile's "Listings" tab — the artist's collab listings as the shared
+//  post cards. Pack/service cards stay ready for when the marketplace ships.
 //
 
 import DesignSystem
@@ -14,105 +14,35 @@ import SwiftUI
 struct ProfileMarketTab: View {
     @Environment(Router.self) private var router
     let viewModel: ProfileScreenViewModel
-    let isOwnProfile: Bool
 
     var body: some View {
         // For now this tab surfaces collab listings only — packs/services are
-        // hidden until they're wired up (the card builders below stay ready).
-        if viewModel.listings.isEmpty {
-            ProfileEmptyState(
-                icon: .handshake,
-                title: "No collab listings yet",
-                subtitle: isOwnProfile ? "Your open collab listings show up here." : nil
-            )
-        } else {
-            LazyVStack(spacing: 0) {
-                // A full-width hairline after every row (the tab bar's border closes
-                // the top), so each listing sits in its own cleanly divided band.
-                // NB: use an explicit white opacity — `Color.vBorder` is `.clear`
-                // app-wide, so it renders nothing.
-                ForEach(viewModel.listings) { listing in
-                    listingRow(listing)
-                    Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5)
+        // hidden until the marketplace ships (the card builders below stay ready).
+        Group {
+            if viewModel.listings.isEmpty && !viewModel.listingsLoaded {
+                ListingPostCardSkeleton().padding(.horizontal, -8).padding(.top, 4)
+            } else if viewModel.listings.isEmpty {
+                ProfileEmptyState(
+                    icon: .megaphone,
+                    title: "No listings yet"
+                )
+            } else {
+                LazyVStack(spacing: 12) {
+                    ForEach(Array(viewModel.listings.enumerated()), id: \.element.id) { i, listing in
+                        ListingPostCard(listing: listing, horizontalInset: 14)
+                            .staggeredAppear(i, in: "profile.listings-\(ObjectIdentifier(viewModel).hashValue)")
+                    }
                 }
+                // Cards run wider than the page's text column (as on Home).
+                .padding(.horizontal, -8)
+                .padding(.top, 4)
             }
-            .padding(.top, 4)
         }
+        .frame(maxWidth: 672)
+        // The cards' 4pt top inset lives on the cards only, so the empty
+        // state sits exactly where Tracks' and Featured On's do.
+        .padding(.horizontal, ViewConst.screenPaddings)
     }
-}
-
-// MARK: - Collab listing row (feed-style, separated by a full-width hairline)
-
-private extension ProfileMarketTab {
-    func listingRow(_ listing: ApiListing) -> some View {
-        Button {
-            router.navigateToCollabListing(listing)
-        } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                // Title on the left, category pill on the far right.
-                HStack(alignment: .top, spacing: 10) {
-                    Text(listing.title)
-                        // Same style as the home feed's listing titles.
-                        .font(.appFont.trackTitle)
-                        .foregroundStyle(.white)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    Spacer(minLength: 8)
-                    categoryPill(listing)
-                }
-
-                if let desc = listing.description, !desc.isEmpty {
-                    Text(desc)
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vText2)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                }
-
-                if let tags = listing.tags, !tags.isEmpty {
-                    ListingTagRow(tags: tags)
-                }
-
-                // Engagement on the left, time · status on the bottom right.
-                HStack(spacing: 8) {
-                    ListingStatsRow(listing: listing)
-                    Spacer(minLength: 8)
-                    Text("\(MessageTime.ago(MessageTime.parse(listing.createdAt))) ·")
-                        .font(.appCaption)
-                        .foregroundStyle(Color.vText3)
-                        .lineLimit(1)
-                    statusBadge(listing)
-                }
-                .padding(.top, 2)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, ViewConst.screenPaddings)
-            .padding(.vertical, 16)
-            .contentShape(.rect)
-        }
-        .buttonStyle(RowHighlightButtonStyle(cornerRadius: 0))
-    }
-
-    /// The brand category chip — same treatment as the home feed rows and the
-    /// listing detail (accent gradient, white label). `.fixedSize()` so sharing
-    /// a line with the two-line title never compresses the pill.
-    func categoryPill(_ listing: ApiListing) -> some View {
-        AccentChip(text: listing.categoryLabel)
-            .fixedSize()
-    }
-
-    func statusBadge(_ listing: ApiListing) -> some View {
-        let isOpen = (listing.status ?? "open") == "open"
-        let tint = isOpen ? Color.green : Color.vText3
-        return HStack(spacing: 5) {
-            Circle().fill(tint).frame(width: 6, height: 6)
-            Text(isOpen ? "Open" : "Closed")
-                .font(.appCaption2Semibold)
-                .foregroundStyle(tint)
-                .fixedSize()
-        }
-    }
-
 }
 
 // MARK: - Pack card
@@ -158,9 +88,9 @@ private extension ProfileMarketTab {
 
             VStack(alignment: .leading, spacing: 10) {
                 Text(pack.name)
-                    .font(.appSubheadlineSemibold).foregroundStyle(.white)
+                    .font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
                     .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
+                Rectangle().fill(Color.vDivider).frame(height: 1)
                 HStack(spacing: 5) {
                     LucideIcon(.download, .xs)
                     Text("\(pack.downloads.compactCount) downloads").font(.appCaption2)
@@ -173,7 +103,7 @@ private extension ProfileMarketTab {
             .padding(12)
         }
         .background(Color.vSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.panel))
     }
 }
 
@@ -214,10 +144,10 @@ private extension ProfileMarketTab {
 
             VStack(alignment: .leading, spacing: 10) {
                 Text(service.title)
-                    .font(.appSubheadlineSemibold).foregroundStyle(.white)
+                    .font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
                     .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
                 if let days = service.deliveryTimeDays {
-                    Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
+                    Rectangle().fill(Color.vDivider).frame(height: 1)
                     HStack(spacing: 5) {
                         LucideIcon(.clock, .xs)
                         Text("\(days)d delivery").font(.appCaption2)
@@ -228,6 +158,6 @@ private extension ProfileMarketTab {
             .padding(12)
         }
         .background(Color.vSurface)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.panel))
     }
 }

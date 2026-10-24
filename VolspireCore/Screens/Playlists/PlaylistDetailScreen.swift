@@ -2,10 +2,10 @@
 //  PlaylistDetailScreen.swift
 //  Volspire
 //
-//  A playlist reuses the Home "See all" collection screen (MediaCollectionScreen)
-//  for its cover-tinted hero + track list. This thin wrapper loads the playlist,
-//  hands its tracks + cover to that screen, and — only when you own the playlist —
-//  layers a "…" menu (edit/cover, share, privacy, delete) onto its nav bar.
+//  A playlist reuses MediaCollectionScreen for its track list, with the
+//  playlist header (big cover, title, @owner, Private). This thin wrapper
+//  loads the playlist and — only when you own it — wires the header's
+//  cover-edit, "Add tracks" picker and "…" menu (edit, delete).
 //
 
 import DesignSystem
@@ -18,10 +18,12 @@ struct PlaylistDetailScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(Dependencies.self) private var dependencies
     @Environment(LibraryStore.self) private var libraryStore
+    @Environment(SocialStore.self) private var socialStore
 
     @State private var viewModel: PlaylistDetailViewModel
     @State private var showDeleteConfirm = false
     @State private var showOptions = false
+    @State private var showAddTracks = false
     let title: String
 
     init(playlistId: String, title: String) {
@@ -29,16 +31,39 @@ struct PlaylistDetailScreen: View {
         _viewModel = State(wrappedValue: PlaylistDetailViewModel(playlistId: playlistId))
     }
 
-    private var displayTitle: String { viewModel.detail?.title ?? title }
+    private var displayTitle: String { viewModel.detail?.title ?? seed?.title ?? title }
 
-    /// The owner-only "…" button handed to MediaCollectionScreen's trailing slot.
-    private var optionsButton: some View {
-        Button { showOptions = true } label: {
-            LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
-        }
-        .buttonStyle(.plain)
+    /// The playlist as the Library already knows it (title, cover,
+    /// description, visibility) — renders the page's real layout on the first
+    /// frame while `get_playlist` is in flight. Library only lists your own
+    /// playlists, so a seed also means you own it.
+    private var seed: ApiPlaylist? {
+        libraryStore.playlists.first { $0.playlistId.caseInsensitiveCompare(viewModel.playlistId) == .orderedSame }
+    }
+
+    private var isLoaded: Bool { viewModel.detail != nil }
+    private var isOwner: Bool { isLoaded ? viewModel.isOwner : seed != nil }
+
+    private var listMeta: MediaList.Meta {
+        MediaList.Meta(
+            artwork: viewModel.cover(viewModel.detail?.coverUrl ?? seed?.coverUrl),
+            title: displayTitle,
+            subtitle: isLoaded ? viewModel.detail?.description : seed?.description
+        )
+    }
+
+    private var header: PlaylistHeaderInfo {
+        let owner = isOwner
+        let me = seed != nil ? socialStore.myProfile : nil
+        return PlaylistHeaderInfo(
+            ownerUsername: viewModel.detail?.ownerUsername ?? me?.username,
+            ownerId: viewModel.detail?.ownerId ?? me?.userId,
+            isPrivate: (viewModel.detail?.visibility ?? seed?.visibility) == "private",
+            isLoading: !isLoaded,
+            onEditCover: owner ? { viewModel.startEditing() } : nil,
+            onAddTracks: owner ? { showAddTracks = true } : nil,
+            onMore: owner ? { showOptions = true } : nil
+        )
     }
 
     var body: some View {
@@ -51,68 +76,36 @@ struct PlaylistDetailScreen: View {
             }
             .sheet(isPresented: $showOptions) { optionsSheet }
             .sheet(isPresented: $viewModel.showEdit) { editSheet }
+            .sheet(isPresented: $showAddTracks) {
+                AddTracksSheet(
+                    playlistId: viewModel.playlistId,
+                    existingIds: Set(viewModel.tracks.map(\.trackId))
+                ) { Task { await viewModel.load() } }
+            }
             .destructiveConfirm("Delete this playlist?", isPresented: $showDeleteConfirm) {
                 Task { if await viewModel.deletePlaylist() { dismiss() } }
             }
     }
 
-    /// Reuses MediaCollectionScreen (the Home "See all" screen) for the hero + list;
-    /// the owner-only "…" menu is layered on via an extra toolbar item.
+    /// One layout from the first frame: while loading, the header is filled
+    /// from the Library's copy and the rows are bones, so nothing pops in or
+    /// shifts. Edits and removals update the page in place.
     @ViewBuilder
     private var content: some View {
-        switch viewModel.state {
-        case .loaded:
-            MediaCollectionScreen(
-                items: viewModel.mediaItems,
-                listMeta: MediaList.Meta(artwork: viewModel.cover(viewModel.detail?.coverUrl), title: displayTitle, subtitle: viewModel.detail?.description),
-                trailingToolbar: viewModel.isOwner ? AnyView(optionsButton) : nil,
-                currentPlaylistId: viewModel.playlistId,
-                onRemoveFromPlaylist: viewModel.isOwner ? { media in await viewModel.removeTrack(trackId: media.id.value) } : nil
-            )
-            // Rebuild (refresh title/cover + re-extract palette) after an edit or a
-            // track removal — the track count keys a fresh list.
-            .id("\(viewModel.detail?.updatedAt ?? "")-\(viewModel.tracks.count)")
-        case .error:
+        if case .error = viewModel.state, !isLoaded {
             LoadErrorView(title: "Couldn't load playlist") { Task { await viewModel.load() } }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.vBase.ignoresSafeArea())
                 .immersiveLoadingChrome { dismiss() }
-        default:
-            collectionSkeleton
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.vBase.ignoresSafeArea())
-                .immersiveLoadingChrome { dismiss() }
+        } else {
+            MediaCollectionScreen(
+                items: viewModel.mediaItems,
+                listMeta: listMeta,
+                currentPlaylistId: viewModel.playlistId,
+                onRemoveFromPlaylist: isOwner ? { media in await viewModel.removeTrack(trackId: media.id.value) } : nil,
+                playlistHeader: header
+            )
         }
-    }
-
-    /// Shimmering stand-in for the loaded `MediaCollectionScreen`: centred hero
-    /// artwork + title + play/shuffle pills, then track-row bones.
-    private var collectionSkeleton: some View {
-        let bone = Color.white.opacity(0.08)
-        return ScrollView {
-            VStack(spacing: 14) {
-                RoundedRectangle(cornerRadius: 18, style: .continuous).fill(bone)
-                    .frame(width: 168, height: 168)
-                VStack(spacing: 8) {
-                    Capsule().fill(bone).frame(width: 180, height: 22)
-                    Capsule().fill(bone).frame(width: 120, height: 12)
-                }
-                HStack(spacing: 12) {
-                    Capsule().fill(bone).frame(height: 46).frame(maxWidth: .infinity)
-                    Capsule().fill(bone).frame(height: 46).frame(maxWidth: .infinity)
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 4)
-
-                SkeletonRows(count: 8, horizontalPadding: 14, boneOpacity: 0.08, shimmers: false)
-                    .padding(.top, 6)
-            }
-            .padding(.top, ViewConst.safeAreaInsets.top + 18)
-            .frame(maxWidth: .infinity)
-            .shimmering()
-        }
-        .scrollIndicators(.hidden)
-        .scrollDisabled(true)
     }
 
     private var footer: String {
@@ -171,13 +164,10 @@ private extension PlaylistDetailScreen {
 // MARK: - Immersive loading chrome
 
 private extension View {
-    /// Dark chrome for a pushed screen's loading/error state. Matches the loaded
-    /// `MediaCollectionScreen` exactly — a transparent nav bar with a system-placed
-    /// back button — so the back chevron sits in the same top-left spot and doesn't
-    /// jump (or double-inset) when loading finishes. Swipe-back stays working.
+    /// Chrome for the error state: a transparent nav bar with the back button
+    /// in the same top-left spot as the loaded page's. Swipe-back stays working.
     func immersiveLoadingChrome(onBack: @escaping () -> Void) -> some View {
         ignoresSafeArea(edges: .top)
-            .preferredColorScheme(.dark)
             .navigationBarBackButtonHidden(true)
             .toolbarBackground(.hidden, for: .navigationBar)
             .enableSwipeBack()

@@ -4,6 +4,7 @@
 //
 //
 
+import Photos
 import Services
 import SwiftUI
 import UIKit
@@ -42,6 +43,51 @@ extension UIApplication {
         let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
         vc.popoverPresentationController?.sourceView = presenter.view
         presenter.present(vc, animated: true)
+    }
+
+    /// "Save to Files": the system export picker for a local file (copied out,
+    /// so the temp original can go).
+    static func presentSaveToFiles(_ fileURL: URL) {
+        guard let presenter = topPresenter else { return }
+        let picker = UIDocumentPickerViewController(forExporting: [fileURL], asCopy: true)
+        presenter.present(picker, animated: true)
+    }
+}
+
+/// Downloading message attachments: to a temp file (Share / Save to Files) or
+/// into the photo library (add-only permission).
+enum AttachmentDownloads {
+    /// Fetches `url` into a uniquely-named temp file. The name is sender-
+    /// controlled, so only its last path component is used (no `..` escapes).
+    static func toTempFile(_ url: URL, name: String?, fallback: String = "attachment") async throws -> URL {
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let safeName = ((name ?? fallback) as NSString).lastPathComponent
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString)-\(safeName.isEmpty ? fallback : safeName)")
+        try data.write(to: tmp, options: .atomic)
+        return tmp
+    }
+
+    /// Saves an image to Photos (asks for add-only access the first time).
+    /// Returns false if access was denied or the save failed.
+    static func saveToPhotos(_ image: UIImage) async -> Bool {
+        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        guard status == .authorized || status == .limited else { return false }
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Downloads an image attachment and saves it to Photos.
+    static func saveToPhotos(from url: URL) async -> Bool {
+        guard let (data, _) = try? await URLSession.shared.data(from: url),
+              let image = UIImage(data: data) else { return false }
+        return await saveToPhotos(image)
     }
 }
 

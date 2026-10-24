@@ -13,62 +13,62 @@ import SwiftUI
 
 struct BlockedAccountsScreen: View {
     @Environment(Dependencies.self) private var dependencies
-    @Environment(\.dismiss) private var dismiss
 
     @State private var blocked: [ApiUserSummary] = []
     @State private var loading = true
     @State private var unblocking: Set<String> = []
+    @State private var error: String?
 
     var body: some View {
-        ScrollView {
-            if loading {
-                ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, 90)
-            } else if blocked.isEmpty {
-                EmptyStateView(
-                    icon: .ban,
-                    title: "No blocked accounts",
-                    message: "People you block can't message you or see your content. They'll show up here."
-                )
-                .padding(.top, 90)
-            } else {
-                LazyVStack(spacing: 0) {
-                    ForEach(blocked, content: row)
+        SettingsSectionPage(title: "Privacy") {
+            SettingsGroup(
+                title: "Blocked accounts",
+                caption: "People you block can't message you or see your content."
+            ) {
+                if loading {
+                    SkeletonRows(count: 3, thumb: .circle(size: 32), line2: nil, verticalPadding: 12)
+                } else if blocked.isEmpty {
+                    EmptyStateView(
+                        icon: .userX,
+                        title: "No blocked accounts",
+                        message: "Anyone you block will show up here."
+                    )
+                    .padding(.vertical, 32)
+                } else {
+                    ForEach(Array(blocked.enumerated()), id: \.element.id) { index, user in
+                        if index > 0 { SettingsDivider() }
+                        row(user)
+                    }
                 }
-                .padding(.top, 6)
+            }
+
+            if let error {
+                ErrorBanner(error)
             }
         }
-        .scrollIndicators(.hidden)
-        .scrollBounceBehavior(.basedOnSize)
-        .appNavBar(title: "Blocked accounts") { dismiss() }
         .task { await load() }
     }
 
     private func row(_ user: ApiUserSummary) -> some View {
-        HStack(spacing: 13) {
-            AvatarView(urlString: user.profileImageUrl, name: user.username, size: 44)
+        HStack(spacing: 12) {
+            AvatarView(urlString: user.profileImageUrl, name: user.username, size: 32)
 
             Text("@\(user.username ?? "user")")
-                .font(.appCallout).foregroundStyle(.white).lineLimit(1)
+                .font(.appSubheadlineSemibold).foregroundStyle(Color.vText).lineLimit(1)
 
             Spacer(minLength: 8)
 
-            Button { unblock(user) } label: {
-                Group {
-                    if unblocking.contains(user.id) {
-                        ProgressView().controlSize(.small).tint(.white)
-                    } else {
-                        Text("Unblock").font(.appFootnoteMedium).foregroundStyle(.white)
-                    }
-                }
-                .frame(minWidth: 74)
-                .padding(.vertical, 8)
-                .background(Color.white.opacity(0.1), in: Capsule())
+            SecondaryButton(
+                "Unblock",
+                size: .inline,
+                expands: false,
+                busy: unblocking.contains(user.id)
+            ) {
+                unblock(user)
             }
-            .buttonStyle(.plain)
-            .disabled(unblocking.contains(user.id))
         }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     private func load() async {
@@ -79,12 +79,14 @@ struct BlockedAccountsScreen: View {
 
     private func unblock(_ user: ApiUserSummary) {
         unblocking.insert(user.id)
+        error = nil
         Task {
             do {
                 try await dependencies.supabaseService.unblockUser(user.userId)
                 withAnimation(.snappy) { blocked.removeAll { $0.id == user.id } }
             } catch {
                 // Leave the row in place; the user can retry.
+                self.error = "Could not unblock. Try again."
             }
             unblocking.remove(user.id)
         }

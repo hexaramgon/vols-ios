@@ -24,6 +24,9 @@ struct NowPlayingCommentsPanel: View {
     /// Set while the player is being dragged down to dismiss — freezes the list so
     /// it doesn't rubber-band away from the rest of the player during the drag.
     var scrollLocked: Bool = false
+    /// The panel is on screen (swiped to / Comments tapped) — load right away.
+    /// Off screen it waits for the track to settle first (see `.task` below).
+    var isActive: Bool = false
 
     @Environment(PlayerController.self) var controller
     private let topAnchor = "comments-top"
@@ -34,6 +37,10 @@ struct NowPlayingCommentsPanel: View {
     /// dismissed (avoids a sheet-over-sheet transition).
     @State private var pendingReportComment: ApiTrackComment?
     @State private var reportingComment: ApiTrackComment?
+    /// Own comment awaiting the "Delete comment" confirm (from its ⋯ menu).
+    @State private var confirmDeleteComment: ApiTrackComment?
+    /// Staged by the long-press sheet's Delete; confirmed once it has dismissed.
+    @State private var pendingDeleteComment: ApiTrackComment?
 
     /// Non-nil when a workspace file is playing — its comments load instead of track ones.
     private var currentFileId: String? { controller.currentFileId }
@@ -48,18 +55,27 @@ struct NowPlayingCommentsPanel: View {
         }
         .environment(\.colorScheme, .dark)
         .foregroundStyle(.white)
-        // TODO: This panel is in the pager so its `.task` fires as soon as the
-        // player expands — comments load eagerly for every track. Make this lazy:
-        // only fetch when the user actually swipes to the comments panel.
-        // NOTE: when made lazy, move the offline "No connection" indicator
-        // (RegularNowPlaying, driven by `model.loadFailed`) onto a request that
-        // runs on expand (e.g. track metadata), or it won't show until a swipe.
-        .task(id: currentFileId ?? currentTrackId) { await model.loadComments(trackId: currentTrackId, fileId: currentFileId) }
+        // The panel lives in the pager, mounted whenever the player is
+        // expanded. Off screen, comments load only once the track has settled
+        // for a moment — flicking through tracks (feed swipe, skips) fires no
+        // request per skipped track. Opening the panel loads immediately; the
+        // model dedups a key it already has. The offline "No connection"
+        // indicator rides this load, so it still shows (a beat later).
+        .task(id: CommentsLoadTrigger(key: currentFileId ?? currentTrackId, active: isActive)) {
+            if !isActive {
+                guard (try? await Task.sleep(for: .milliseconds(800))) != nil else { return }
+            }
+            await model.loadComments(trackId: currentTrackId, fileId: currentFileId)
+        }
         .task { await model.loadCurrentUser() }
         .sheet(item: $optionsComment, onDismiss: {
             if let comment = pendingReportComment {
                 pendingReportComment = nil
                 reportingComment = comment
+            }
+            if let comment = pendingDeleteComment {
+                pendingDeleteComment = nil
+                confirmDeleteComment = comment
             }
         }) { comment in
             CommentOptionsSheet(
@@ -67,7 +83,7 @@ struct NowPlayingCommentsPanel: View {
                 isOwn: model.isOwn(comment),
                 onReply: { model.replyingTo = comment },
                 onReport: { pendingReportComment = comment },
-                onDelete: { model.delete(commentId: comment.commentId, trackId: currentTrackId, fileId: currentFileId) }
+                onDelete: { pendingDeleteComment = comment }
             )
         }
         .sheet(item: $reportingComment) { comment in
@@ -79,6 +95,31 @@ struct NowPlayingCommentsPanel: View {
                 subject: comment.user.username.map { "@\($0)" } ?? "Comment"
             )
         }
+        .confirmationDialog(
+            "Delete comment",
+            isPresented: Binding(
+                get: { confirmDeleteComment != nil },
+                set: { if !$0 { confirmDeleteComment = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: confirmDeleteComment
+        ) { comment in
+            Button("Delete comment", role: .destructive) {
+                model.delete(commentId: comment.commentId, trackId: currentTrackId, fileId: currentFileId)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This can't be undone.")
+        }
+    }
+
+    /// The heading with the count folded in — "Comments" while loading or
+    /// empty, "1 Comment", "3 Comments" (comments + replies; the list loads
+    /// in one page, so there's never a "+").
+    private var commentsTitle: String {
+        let n = model.comments.reduce(0) { $0 + 1 + ($1.replies?.count ?? 0) }
+        if model.isLoading || n == 0 { return "Comments" }
+        return n == 1 ? "1 Comment" : "\(n) Comments"
     }
 
     // MARK: Header
@@ -86,24 +127,18 @@ struct NowPlayingCommentsPanel: View {
     private var header: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Text("Comments")
+                Text(commentsTitle)
                     .font(.appSubheadlineSemibold)
                     .foregroundStyle(.white)
+                    .monospacedDigit()
                 if model.isLoading {
                     ProgressView().tint(.white.opacity(0.4)).scaleEffect(0.7)
-                } else {
-                    Text("\(model.comments.count)")
-                        .font(.appFootnote)
-                        .foregroundStyle(.white.opacity(0.45))
-                        .monospacedDigit()
                 }
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 16)
             .padding(.top, 14)
             .padding(.bottom, 12)
-
-            Divider().overlay(Color.white.opacity(0.1))
         }
     }
 
@@ -124,7 +159,7 @@ struct NowPlayingCommentsPanel: View {
                     }
 
                     ForEach(model.comments) { comment in
-                        commentRow(comment)
+                        commentRow(comment).id(comment.id)
                         if let replies = comment.replies, !replies.isEmpty {
                             ForEach(replies) { reply in
                                 commentRow(reply, isReply: true).padding(.leading, 36)
@@ -163,6 +198,18 @@ struct NowPlayingCommentsPanel: View {
             .onChange(of: model.comments.first?.id) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(topAnchor, anchor: .top) }
             }
+            // Opened from the live comment toast: bring that comment into view,
+            // highlighted, then let the highlight fade after a moment.
+            .onChange(of: model.highlightedCommentId, initial: true) { _, id in
+                guard let id else { return }
+                withAnimation(.smooth(duration: 0.35)) { proxy.scrollTo(id, anchor: .center) }
+                Task {
+                    try? await Task.sleep(for: .seconds(2.5))
+                    if model.highlightedCommentId == id {
+                        withAnimation(.easeOut(duration: 0.6)) { model.highlightedCommentId = nil }
+                    }
+                }
+            }
         }
     }
 
@@ -199,25 +246,22 @@ struct NowPlayingCommentsPanel: View {
                         .font(.appCaption2)
                         .foregroundStyle(.white.opacity(0.3))
                 }
-                ExpandableText(comment.content)
+                ExpandableText(comment.content, textColor: .vText)
 
-                if !isReply {
-                    Button("Reply") { model.replyingTo = comment }
-                        .font(.appFootnoteMedium)
-                        .foregroundStyle(.white.opacity(0.45))
-                        .buttonStyle(.plain)
-                        .padding(.top, 2)
-                }
+                actionsRow(comment, isReply: isReply)
+                    .padding(.top, 4)
             }
 
             Spacer(minLength: 0)
         }
         .contentShape(.rect)
         // Highlight the held comment while its options sheet is up (the sheet dims
-        // the whole panel, so this lifts the one being acted on).
+        // the whole panel, so this lifts the one being acted on), and the one
+        // opened from the live comment toast.
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.white.opacity(optionsComment?.id == comment.id ? 0.09 : 0))
+                .fill(.white.opacity(optionsComment?.id == comment.id ? 0.09
+                                     : model.highlightedCommentId == comment.id ? 0.12 : 0))
                 .padding(.horizontal, -10)
                 .padding(.vertical, -8)
         )
@@ -227,6 +271,27 @@ struct NowPlayingCommentsPanel: View {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             optionsComment = comment
         }
+    }
+
+    /// Just Reply (top-level comments). Copy / Delete (your own) / Report
+    /// live behind the long-press options sheet.
+    @ViewBuilder
+    private func actionsRow(_ comment: ApiTrackComment, isReply: Bool) -> some View {
+        if !isReply {
+            actionButton(.reply, "Reply") { model.replyingTo = comment }
+        }
+    }
+
+    private func actionButton(_ icon: LucideIcon.Name, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                LucideIcon(icon, .sm)
+                Text(title).font(.appCaption.weight(.semibold))
+            }
+            .foregroundStyle(Color.vText2)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
@@ -304,6 +369,13 @@ private struct CommentOptionsSheet: View {
             .padding(.top, 6)
         }
         .selfSizedDetent()
-        .sheetBackground()
+        .sheetBackground(alwaysDark: true)
     }
+}
+
+/// What the comments load is keyed on: the track / file, and whether the
+/// panel is on screen (flipping to on screen skips the settle delay).
+private struct CommentsLoadTrigger: Equatable {
+    let key: String?
+    let active: Bool
 }

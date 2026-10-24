@@ -31,14 +31,18 @@ struct CompleteProfileScreen: View {
                 AuthCanvas()
             }
         }
-        .preferredColorScheme(.dark)
         .task {
             guard viewModel == nil else { return }
-            viewModel = RegisterViewModel(
+            let model = RegisterViewModel(
                 authManager: dependencies.authManager,
                 supabaseService: dependencies.supabaseService,
                 mode: .completeProfile
             )
+            viewModel = model
+            // Hand the user a ready-made handle, so this step is a confirmation
+            // rather than a required entry of information the provider already
+            // supplied (App Store guideline 4).
+            await model.prefillGeneratedUsername()
         }
     }
 }

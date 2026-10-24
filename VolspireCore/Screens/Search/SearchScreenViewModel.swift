@@ -98,8 +98,10 @@ private extension SearchScreenViewModel {
         }
 
         errorMessage = nil
+        // Flip to loading NOW, not inside the task: the gap before the task's
+        // first turn rendered "No results" for a query that hadn't run yet.
+        isLoading = true
         searchTask = Task { @MainActor in
-            isLoading = true
             // Debounce so we don't fire an RPC on every keystroke.
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
@@ -109,8 +111,15 @@ private extension SearchScreenViewModel {
                 guard !Task.isCancelled else { return }
                 tracks = results.tracks
                 artists = results.artists
-                packs = results.packs
-                services = results.services
+                // Dropped while monetization is off (FeatureFlags.marketplace):
+                // pack/service detail pages show a price with nothing to buy and
+                // carry no report/block affordance, so they must not be
+                // reachable. Gating here rather than at the two section views
+                // keeps `hasResults` and the analytics count honest — hiding
+                // only the sections would leave a pack-only query claiming
+                // results while rendering an empty list.
+                packs = FeatureFlags.marketplace ? results.packs : []
+                services = FeatureFlags.marketplace ? results.services : []
                 isLoading = false
                 AnalyticsService.shared?.log(.searchPerformed, metadata: [
                     "query": .string(query),

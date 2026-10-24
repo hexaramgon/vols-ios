@@ -159,7 +159,9 @@ final class CreateListingViewModel {
             uploadState = .success
             var info: [String: Any] = [
                 "confirmationTitle": editingListingId != nil ? "Listing updated" : "Listing posted",
-                "confirmationSubtitle": trimmedTitle,
+                "confirmationSubtitle": editingListingId != nil
+                    ? trimmedTitle
+                    : "Your collab call \u{201C}\(trimmedTitle)\u{201D} is now live in Listings.",
             ]
             // Once the confirmation card dismisses, the app opens the new
             // listing's detail page (see RootTabView). Edits don't navigate —

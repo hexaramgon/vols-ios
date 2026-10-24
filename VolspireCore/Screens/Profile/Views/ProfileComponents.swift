@@ -2,64 +2,34 @@
 //  ProfileComponents.swift
 //  Volspire
 //
-//  Shared building blocks for the redesigned profile: the dark palette,
-//  the tab model, service/pack cover styling, and the grain overlay that
-//  gives the hero its film-like texture.
+//  Shared building blocks for the redesigned profile: the tab model,
+//  service/pack cover styling, and the grain overlay that gives the hero its
+//  film-like texture.
 //
 
 import CoreImage
 import DesignSystem
 import SwiftUI
 
-// MARK: - Palette (pure-dark, mirrors the web app's neutral scale)
+// MARK: - Palette
+// The `Color.v*` tokens now live in DesignSystem (Consts/ColorTokens.swift) —
+// themed for light/dark and shared with the packages.
 
-extension Color {
-    /// Alias for `Color.appBase` (DesignSystem) — kept so the ~25 existing
-    /// `Color.vBase` call sites don't need renaming. Change the background in
-    /// exactly one place: `Palette.swift`'s `appBase`.
-    static let vBase = Color.appBase
-    /// Alias for `Color.appBar` (DesignSystem) — the one chrome tone for every
-    /// header / nav bar / tab bar. Change it in `Palette.swift`'s `appBar`.
-    static let vBar = Color.appBar
-    /// Alias for `Color.appCard` (DesignSystem) — the subtle card / glassy-
-    /// control fill (empty-state CTA cards, profile hero cards & buttons).
-    /// Change it in `Palette.swift`'s `appCard`.
-    static let vCard = Color.appCard
-    /// Card / surface fill (≈ neutral-900).
-    static let vSurface = Color(white: 0.105)
-    /// Hairline borders.
-    /// App-wide element outline. Clear by design — no decorative borders on pills,
-    /// cards, avatars, or fields. (Flipping this one token removes every `vBorder`
-    /// outline at once; hairline dividers that reused it disappear with it.)
-    static let vBorder = Color.clear
-    /// Secondary text (≈ neutral-400).
-    static let vText2 = Color.white.opacity(0.64)
-    /// Tertiary text / muted labels (≈ neutral-600).
-    static let vText3 = Color.white.opacity(0.42)
-    /// Error / failure text — web `text-red-400`. The single app error red; pair
-    /// with `ErrorBanner` for inline errors. Replaces the ~5 ad-hoc reds.
-    static let vError = Color(red: 0.97, green: 0.44, blue: 0.44)
-    /// Destructive-action red (delete). Distinct from `vError` (validation red).
-    static let vDestructive = Color(red: 1, green: 0.37, blue: 0.37)
-    /// Owner / crown gold.
-    static let vOwnerGold = Color(red: 1, green: 0.84, blue: 0)
-    /// Unread / notification dot — web `bg-red-500` (#EF4444). The one color for
-    /// every unread indicator: tab-bar badge, header bell, notification and
-    /// conversation rows. Distinct from `vError` (red-400), which is for errors.
-    static let vUnread = Color(red: 0.937, green: 0.267, blue: 0.267)
-    /// Warning / caution — web `text-amber-500`.
-    static let vWarning = Color(red: 0.96, green: 0.62, blue: 0.04)
-}
+/// Pins `Radius` to DesignSystem's corner-radius scale app-wide — Kingfisher
+/// also exports a top-level `Radius`, which would otherwise make the name
+/// ambiguous in every file importing both.
+typealias Radius = DesignSystem.Radius
 
 extension View {
     /// Layered drop shadow that keeps hero text (name, location, bio) legible
     /// over bright banner areas — a tight edge shadow, a mid spread, and a soft
     /// ambient halo. The standard treatment for text over photography.
-    func heroTextShadow() -> some View {
+    /// `strength` 0 drops the shadow (themed heroes in light mode).
+    func heroTextShadow(_ strength: Double = 1) -> some View {
         self
-            .shadow(color: .black.opacity(0.6), radius: 3, y: 1)
-            .shadow(color: .black.opacity(0.45), radius: 9, y: 2)
-            .shadow(color: .black.opacity(0.3), radius: 18, y: 3)
+            .shadow(color: .black.opacity(0.6 * strength), radius: 3, y: 1)
+            .shadow(color: .black.opacity(0.45 * strength), radius: 9, y: 2)
+            .shadow(color: .black.opacity(0.3 * strength), radius: 18, y: 3)
     }
 }
 
@@ -69,6 +39,15 @@ enum ProfileTab: String, CaseIterable, Hashable {
     case tracks = "Tracks"
     case featuredOn = "Featured On"
     case market = "Market"
+
+    /// Tab label — the collab-listings tab reads "Listings" (web parity).
+    var title: String {
+        switch self {
+        case .tracks: "Tracks"
+        case .featuredOn: "Featured On"
+        case .market: "Listings"
+        }
+    }
 }
 
 // MARK: - Service / Pack cover styling
@@ -90,7 +69,7 @@ enum ServiceStyle {
         case "Recording":    token = "orange-900"
         default:             token = "neutral-800"
         }
-        return [TailwindGradient.color(token) ?? Color(white: 0.15), .vBase]
+        return [TailwindGradient.color(token) ?? Color.vSurface2, .vBase]
     }
 
     static func icon(for type: String) -> LucideIcon.Name {
@@ -163,14 +142,14 @@ struct RolePicker: View {
         } label: {
             Text(role)
                 .font(.appFootnoteMedium)
-                .foregroundStyle(selected ? .black : (capped ? Color.vText3 : Color.vText2))
+                .foregroundStyle(selected ? Color.vOnInverse : (capped ? Color.vText3 : Color.vText2))
                 .padding(.horizontal, 13)
                 .padding(.vertical, 8)
                 .background(
-                    Color.white.opacity(selected ? 1 : 0.05),
-                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    selected ? Color.vInverse : Color.ink(0.05),
+                    in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
                 )
-                .contentShape(.rect(cornerRadius: 11))
+                .contentShape(.rect(cornerRadius: Radius.card))
         }
         .buttonStyle(.plain)
         .disabled(capped)
@@ -225,7 +204,7 @@ struct ChipFlowLayout: Layout {
 /// the hero. Generated at the displayed size for crisp, non-scaled noise;
 /// fails silently to nothing if Core Image is unavailable.
 struct GrainOverlay: View {
-    var opacity: Double = 0.045
+    var opacity: Double = 0.035
 
     @State private var grain: Image?
 

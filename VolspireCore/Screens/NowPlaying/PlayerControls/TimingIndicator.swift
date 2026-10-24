@@ -113,12 +113,29 @@ extension ElasticSliderConfig {
     }
 }
 
-extension BinaryFloatingPoint {
-    func asTimeString(style: DateComponentsFormatter.UnitsStyle) -> String {
+/// One cached formatter per style, built on first use. DateComponentsFormatter
+/// construction is expensive Foundation work, and the timing indicator calls
+/// this twice per 10Hz tick while the player is expanded — ~20 fresh
+/// formatters per second before this cache (perf-backlog item). Main-actor:
+/// every caller is UI code, and the formatter type isn't thread-safe.
+@MainActor
+private enum TimeFormatters {
+    static var cached: [DateComponentsFormatter.UnitsStyle: DateComponentsFormatter] = [:]
+
+    static func formatter(for style: DateComponentsFormatter.UnitsStyle) -> DateComponentsFormatter {
+        if let existing = cached[style] { return existing }
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = [.minute, .second]
         formatter.unitsStyle = style
         formatter.zeroFormattingBehavior = .pad
-        return formatter.string(from: TimeInterval(self)) ?? ""
+        cached[style] = formatter
+        return formatter
+    }
+}
+
+extension BinaryFloatingPoint {
+    @MainActor
+    func asTimeString(style: DateComponentsFormatter.UnitsStyle) -> String {
+        TimeFormatters.formatter(for: style).string(from: TimeInterval(self)) ?? ""
     }
 }

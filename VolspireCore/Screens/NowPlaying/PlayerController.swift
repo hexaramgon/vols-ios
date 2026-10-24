@@ -34,13 +34,22 @@ final class PlayerController {
     /// or before it loads). Drives the full-bleed portrait-video layout in the
     /// expanded player.
     var videoAspect: CGSize?
+    /// The current video's item is ready to play — per item, so it resets the
+    /// instant a new track's player item arrives (the progress bar's duration
+    /// lingers from the previous track for a frame and can't be trusted).
+    var videoReady = false
+    private var videoReadyObservation: AnyCancellable?
 
     var state: MediaPlayerState = .paused(media: .none)
     /// True while the current track is loading/buffering (no audio yet) — the UI
     /// shows a spinner in place of the play/pause glyph.
     var isBuffering = false
     var commandProfile: CommandProfile = .init(isSwitchTrackEnabled: false)
-    var colors: [UIColor] = []
+    /// Dominant artwork colours for the background wash (empty → brand wash).
+    var colors: [Color] = []
+    /// The cover shrunk to a 4×4 grid (row-major) — the background mesh's
+    /// colours. Empty → the plain gradient wash.
+    var meshColors: [Color] = []
     var progress: PlaybackProgress?
     var isScrubbing: Bool = false
     var nowPlayingMeta: MediaMeta?
@@ -90,6 +99,9 @@ final class PlayerController {
         let title: String
         let description: String?
         let tags: [String]
+        /// Track length, captured when the card opens — reading the live
+        /// progress here re-rendered the card on every playback tick.
+        var duration: Double? = nil
     }
 
     var aboutModal: AboutModalPayload?
@@ -261,6 +273,12 @@ final class PlayerController {
         player?.backward()
     }
 
+    /// Straight to the previous track (no restart-if-3s-in) — the full-screen
+    /// video swipe.
+    func onPreviousTrack() {
+        player?.backward(alwaysPrevious: true)
+    }
+
     /// Toggle repeating the current track (the repeat button).
     func toggleRepeat() {
         isRepeatOn.toggle()
@@ -327,6 +345,7 @@ private extension PlayerController {
                 // Whether the current queue item is a workspace file (vs a track).
                 self.currentFileId = self.fileIdByMediaId[state.currentMediaID?.value ?? ""]
                 self.fetchTrackDetailIfNeeded()
+                self.preloadNeighbors()
             }
             .store(in: &cancellables)
 
@@ -336,6 +355,10 @@ private extension PlayerController {
                     self?.commandProfile = commandProfile
                 }
             }
+            .store(in: &cancellables)
+
+        player.$avPlayer
+            .sink { [weak self] avPlayer in self?.observeVideoReadiness(avPlayer) }
             .store(in: &cancellables)
 
         player.$nowPlayingMeta
@@ -361,6 +384,42 @@ private extension PlayerController {
         player.$shuffleEnabled
             .sink { [weak self] enabled in self?.isShuffleOn = enabled }
             .store(in: &cancellables)
+    }
+
+    /// Follows the video player's CURRENT item: false the moment it swaps,
+    /// true once that item is ready AND actually playing — "ready" alone
+    /// arrives a beat before the first frame draws, which showed a black box
+    /// between the cover and the video.
+    func observeVideoReadiness(_ avPlayer: AVPlayer?) {
+        videoReady = false
+        guard let avPlayer else {
+            videoReadyObservation = nil
+            return
+        }
+        let playing = avPlayer.publisher(for: \.timeControlStatus).map { $0 == .playing }
+        // Per item: starts false, turns true once ready + playing (+ a beat
+        // for the first frame), then stays true for that item — a pause or a
+        // rebuffer must not swap the video back to the cover.
+        videoReadyObservation = avPlayer.publisher(for: \.currentItem)
+            .map { item -> AnyPublisher<Bool, Never> in
+                guard let item else { return Just(false).eraseToAnyPublisher() }
+                return item.publisher(for: \.status)
+                    .map { $0 == .readyToPlay }
+                    .combineLatest(playing)
+                    .map { $0 && $1 }
+                    .scan(false) { shown, now in shown || now }
+                    .removeDuplicates()
+                    .map { ready -> AnyPublisher<Bool, Never> in
+                        ready
+                            ? Just(true).delay(for: .milliseconds(150), scheduler: DispatchQueue.main).eraseToAnyPublisher()
+                            : Just(false).eraseToAnyPublisher()
+                    }
+                    .switchToLatest()
+                    .eraseToAnyPublisher()
+            }
+            .switchToLatest()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] ready in self?.videoReady = ready }
     }
 
     func updateDisplay(withMeta meta: MediaMeta?, avPlayer: AVPlayer?) async {
@@ -413,7 +472,8 @@ private extension PlayerController {
                 videoAspect = nil
             }
 
-            colors = await meta.colors.map { UIColor($0) }
+            colors = await meta.colors
+            meshColors = await meta.meshColors
         } else {
             display = .placeholder
             nowPlayingMeta = nil
@@ -422,6 +482,7 @@ private extension PlayerController {
             // next track's `updateDisplay` sets it correctly (or clears it if the
             // next track is confirmed non-video).
             colors = [] // no artwork → the background's brand-wash fallback
+            meshColors = []
         }
     }
 
@@ -439,6 +500,25 @@ private extension PlayerController {
         let w = abs(resolved.width), h = abs(resolved.height)
         guard w > 0, h > 0 else { return nil }
         return CGSize(width: w, height: h)
+    }
+
+    // MARK: Feed neighbours
+
+    /// TikTok-style read-ahead for the feed: the covers of the previous and
+    /// next two items, and the next two tracks' details (the RPC is cached,
+    /// so landing on them reads from memory). Audio for the next two is
+    /// prefetched by the player itself.
+    private func preloadNeighbors() {
+        guard let player, state.currentMediaID != nil else { return }
+        let offsets = [1, 2, -1]
+        let covers = offsets.compactMap { player.neighborMeta($0)?.artwork }
+        ArtworkView.prefetch(covers, side: RegularNowPlaying.coverSide)
+        let ids = [1, 2].compactMap { player.neighborID($0)?.value }
+            .filter { fileIdByMediaId[$0] == nil && $0 != state.currentMediaID?.value }
+        guard !ids.isEmpty else { return }
+        Task { [supabaseService] in
+            for id in ids { _ = try? await supabaseService.getTrackMetadata(trackId: id) }
+        }
     }
 
     func fetchTrackDetailIfNeeded() {
@@ -466,6 +546,17 @@ private extension PlayerController {
                 applyEffects(.default)
             }
         }
+        // Independent RPCs, fetched in parallel — serialized, every track skip
+        // paid two round-trips before the like/save glyphs settled.
+        Task {
+            // Saved state — separate RPC, mirrors the web's get_track_interaction_status.
+            if let status = try? await supabaseService.getTrackInteractionStatus(trackId: trackId) {
+                guard state.currentMediaID?.value.caseInsensitiveCompare(trackId) == .orderedSame else { return }
+                // Saved truth lives in the shared store; feed it the server's
+                // answer (it ignores ids with an optimistic write in flight).
+                library?.reconcileSaved(trackId: trackId, isSaved: status.isSaved)
+            }
+        }
         Task {
             do {
                 let detail = try await supabaseService.getTrackMetadata(trackId: trackId)
@@ -476,13 +567,6 @@ private extension PlayerController {
                 trackDetail = detail
             } catch {
                 debugLog("[PlayerController] getTrackMetadata failed: \(error)")
-            }
-            // Saved state — separate RPC, mirrors the web's get_track_interaction_status.
-            if let status = try? await supabaseService.getTrackInteractionStatus(trackId: trackId) {
-                guard state.currentMediaID?.value.caseInsensitiveCompare(trackId) == .orderedSame else { return }
-                // Saved truth lives in the shared store; feed it the server's
-                // answer (it ignores ids with an optimistic write in flight).
-                library?.reconcileSaved(trackId: trackId, isSaved: status.isSaved)
             }
         }
     }
@@ -495,11 +579,62 @@ extension MediaMeta {
     var colors: [Color] {
         get async {
             guard let artwork else { return [] }
+            // .fair (10k px), not .high (100k px): the histogram feeds a blurred
+            // background wash, where the two are indistinguishable — .high cost
+            // ~20MB of transient allocation per track skip.
             return await artwork
                 .image?
-                .dominantColorFrequencies(with: .high)?
+                .dominantColorFrequencies(with: .fair)?
                 .map { Color(uiColor: $0.color) } ?? []
         }
+    }
+}
+
+extension MediaMeta {
+    /// The cover averaged down to 4×4 pixels, row-major from the top-left —
+    /// one colour per mesh point, so the background echoes the cover's layout
+    /// as well as its palette. Done once per track (a 16-pixel draw); empty
+    /// when there's no artwork.
+    var meshColors: [Color] {
+        get async {
+            guard let artwork, let cg = await artwork.image?.cgImage else { return [] }
+            let side = 4
+            var pixels = [UInt8](repeating: 0, count: side * side * 4)
+            let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+                guard let ctx = CGContext(
+                    data: buffer.baseAddress, width: side, height: side,
+                    bitsPerComponent: 8, bytesPerRow: side * 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+                ) else { return false }
+                ctx.interpolationQuality = .high
+                ctx.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
+                return true
+            }
+            guard drawn else { return [] }
+            return (0..<(side * side)).map { i in
+                Color(red: Double(pixels[i * 4]) / 255,
+                      green: Double(pixels[i * 4 + 1]) / 255,
+                      blue: Double(pixels[i * 4 + 2]) / 255)
+            }
+        }
+    }
+}
+
+extension PlayerController {
+    /// Any queue item's metadata — what the feed's pages draw.
+    func meta(for id: MediaID) -> MediaMeta? {
+        player?.mediaState?.metaOfMedia(withID: id)
+    }
+
+    /// The queue item `offset` steps from `id` (the feed's centre page).
+    func neighborID(of id: MediaID, _ offset: Int) -> MediaID? {
+        player?.neighborID(of: id, offset)
+    }
+
+    /// Plays exactly the track the feed landed on.
+    func skip(to id: MediaID) {
+        player?.skip(to: id)
     }
 }
 

@@ -93,14 +93,57 @@ public final class StorageService: Sendable {
 
     // MARK: - Signed URLs (Private Buckets)
 
+    /// path → (signed url, wall-clock expiry) memo. Signing is a network
+    /// round-trip; without this every folder open (and every folder-change
+    /// event) re-signed the whole file list even when the RPC itself was a
+    /// cache hit. Entries live for the signature's validity minus a 5-minute
+    /// safety margin; sign-out clears it via `clearSignedUrlMemo()`.
+    private actor SignedUrlMemo {
+        private var entries: [String: (url: String, expiresAt: Date)] = [:]
+
+        func lookup(_ key: String) -> String? {
+            guard let entry = entries[key] else { return nil }
+            guard entry.expiresAt > Date() else {
+                entries.removeValue(forKey: key)
+                return nil
+            }
+            return entry.url
+        }
+
+        func store(_ key: String, url: String, validFor seconds: TimeInterval) {
+            // Sweep opportunistically so dead entries can't accumulate.
+            if entries.count > 512 {
+                let now = Date()
+                entries = entries.filter { $0.value.expiresAt > now }
+            }
+            entries[key] = (url, Date().addingTimeInterval(seconds))
+        }
+
+        func clear() { entries.removeAll() }
+    }
+
+    /// Static: view models create their own StorageService instances, and the
+    /// memo must be shared across all of them (and clearable at sign-out).
+    private static let signedUrlMemo = SignedUrlMemo()
+
+    /// Drops all memoized signed URLs (call on sign-out).
+    public static func clearSignedUrlMemo() async {
+        await signedUrlMemo.clear()
+    }
+
+    private var memoValidity: TimeInterval { TimeInterval(Self.signedUrlExpiry - 300) }
+
     /// Creates a signed URL for a private bucket. Returns nil on failure.
     public func signUrl(bucket: StorageBucket, pathOrUrl: String?) async -> String? {
         guard let pathOrUrl, !pathOrUrl.isEmpty else { return nil }
         let path = Self.extractPath(bucket: bucket, from: pathOrUrl)
+        let key = "\(bucket.rawValue)/\(path)"
+        if let memoized = await Self.signedUrlMemo.lookup(key) { return memoized }
         do {
             let url = try await client.storage
                 .from(bucket.rawValue)
                 .createSignedURL(path: path, expiresIn: Self.signedUrlExpiry)
+            await Self.signedUrlMemo.store(key, url: url.absoluteString, validFor: memoValidity)
             return url.absoluteString
         } catch {
             debugLog("[StorageService] Failed to sign \(bucket.rawValue)/\(path): \(error)")
@@ -108,31 +151,38 @@ public final class StorageService: Sendable {
         }
     }
 
-    /// Batch-signs an array of paths for a private bucket.
+    /// Batch-signs an array of paths for a private bucket. Memo-served paths
+    /// skip the request entirely; only genuine misses go in the batch call.
     public func signUrls(bucket: StorageBucket, paths: [String?]) async -> [String?] {
-        let validEntries: [(index: Int, path: String)] = paths.enumerated().compactMap { i, p in
-            guard let p, !p.isEmpty else { return nil }
-            return (i, Self.extractPath(bucket: bucket, from: p))
+        var results: [String?] = paths.map { _ in nil }
+        var misses: [(index: Int, path: String, key: String)] = []
+        for (i, p) in paths.enumerated() {
+            guard let p, !p.isEmpty else { continue }
+            let path = Self.extractPath(bucket: bucket, from: p)
+            let key = "\(bucket.rawValue)/\(path)"
+            if let memoized = await Self.signedUrlMemo.lookup(key) {
+                results[i] = memoized
+            } else {
+                misses.append((i, path, key))
+            }
         }
 
-        guard !validEntries.isEmpty else { return paths.map { _ in nil } }
+        guard !misses.isEmpty else { return results }
 
         do {
-            let pathsToSign = validEntries.map(\.path)
             let signedData = try await client.storage
                 .from(bucket.rawValue)
-                .createSignedURLs(paths: pathsToSign, expiresIn: Self.signedUrlExpiry)
+                .createSignedURLs(paths: misses.map(\.path), expiresIn: Self.signedUrlExpiry)
 
-            var results: [String?] = paths.map { _ in nil }
-            for (i, entry) in validEntries.enumerated() {
-                if i < signedData.count {
-                    results[entry.index] = signedData[i].absoluteString
-                }
+            for (i, miss) in misses.enumerated() where i < signedData.count {
+                let url = signedData[i].absoluteString
+                results[miss.index] = url
+                await Self.signedUrlMemo.store(miss.key, url: url, validFor: memoValidity)
             }
             return results
         } catch {
             debugLog("[StorageService] Batch sign failed for \(bucket.rawValue): \(error)")
-            return paths.map { _ in nil }
+            return results
         }
     }
 

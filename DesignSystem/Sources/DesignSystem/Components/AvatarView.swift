@@ -53,10 +53,8 @@ public struct AvatarView: View {
         .clipShape(Circle())
     }
 
-    // Mirror the app's vSurface / vText2 (defined app-side in ProfileComponents;
-    // keep these in sync if those ever change).
-    private static let fallbackFill = Color(white: 0.105)
-    private static let fallbackTint = Color.white.opacity(0.64)
+    private static let fallbackFill = Color.vSurface
+    private static let fallbackTint = Color.vText2
 }
 
 #Preview {

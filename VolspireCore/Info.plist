@@ -25,10 +25,10 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Volspire saves photos from your messages to your library when you tap Save.</string>
 	<key>GIDClientID</key>
 	<string>35604592462-sl580dgdrb2aq9sc3md716t49apjfnbv.apps.googleusercontent.com</string>
-	<!-- Standard HTTPS/TLS + auth only (exempt) — skips the App Store Connect
-	     export-compliance questionnaire on every upload. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>UIBackgroundModes</key>
@@ -38,5 +38,10 @@
 	</array>
 	<key>UIDesignRequiresCompatibility</key>
 	<true/>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 </dict>
 </plist>

@@ -20,8 +20,8 @@ public struct RefreshChip: View {
 
     public var body: some View {
         ProgressView()
-            .tint(.white)
-            .shadow(color: .black.opacity(0.45), radius: 4, y: 1)
+            .tint(Color.vText)
+            .shadow(color: .black.opacity(0.2), radius: 4, y: 1)
     }
 }
 

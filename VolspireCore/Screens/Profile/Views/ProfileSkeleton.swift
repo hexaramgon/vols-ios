@@ -12,7 +12,7 @@ import DesignSystem
 import SwiftUI
 
 struct ProfileSkeleton: View {
-    private let bone = Color.white.opacity(0.08)
+    private let bone = Color.vSkeleton
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +30,7 @@ struct ProfileSkeleton: View {
         ZStack(alignment: .bottomLeading) {
             // Neutral fallback wash — same shape the real hero uses before
             // banner colours arrive.
-            LinearGradient(colors: [Color(white: 0.18), .vBase], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [Color.vSurface, .vBase], startPoint: .top, endPoint: .bottom)
 
             VStack(alignment: .leading, spacing: 30) {
                 HStack(alignment: .bottom, spacing: 16) {
@@ -60,17 +60,17 @@ struct ProfileSkeleton: View {
                 }
 
                 HStack(spacing: 8) {
-                    RoundedRectangle(cornerRadius: 9)
+                    Capsule()
                         .fill(bone)
-                        .frame(height: 34)
+                        .frame(height: CapsuleButtonLabel.height)
                         .frame(maxWidth: .infinity)
-                    RoundedRectangle(cornerRadius: 9)
+                    Capsule()
                         .fill(bone)
-                        .frame(height: 34)
+                        .frame(height: CapsuleButtonLabel.height)
                         .frame(maxWidth: .infinity)
-                    RoundedRectangle(cornerRadius: 9)
+                    Capsule()
                         .fill(bone)
-                        .frame(width: 34, height: 34)
+                        .frame(width: CapsuleButtonLabel.height, height: CapsuleButtonLabel.height)
                 }
                 .padding(.top, 2)
             }
@@ -94,7 +94,7 @@ struct ProfileSkeleton: View {
 
     private var statDivider: some View {
         Rectangle()
-            .fill(.white.opacity(0.1))
+            .fill(Color.vDivider)
             .frame(width: 1, height: 24)
     }
 
@@ -114,7 +114,7 @@ struct ProfileSkeleton: View {
         .padding(.bottom, 13)
         .overlay(alignment: .bottom) {
             Rectangle()
-                .fill(.white.opacity(0.08))
+                .fill(bone)
                 .frame(height: 1)
         }
     }

@@ -2,8 +2,13 @@
 //  ProfileTabBar.swift
 //  Volspire
 //
-//  Equal-width text tabs with a label-width underline that slides + resizes
-//  between tabs via matchedGeometry.
+//  Text tabs without counts, spread evenly across the bar, styled like Home's
+//  Collab / Listings / My Network band: the active one ink + bold, inactive
+//  medium @ vText3, and a 48×4 ink bar sitting on the hairline that slides to
+//  the tapped tab while the labels fade.
+//
+//  The content below crossfades (opacity only); the bar keeps its own copy of
+//  the selection so the underline slides however the switch is triggered.
 //
 
 import DesignSystem
@@ -14,7 +19,10 @@ struct ProfileTabBar: View {
     let selected: ProfileTab
     let onSelect: (ProfileTab) -> Void
 
-    @Namespace private var ns
+    @Namespace private var underline
+    /// The bar's own copy of `selected`, moved inside an animation so the
+    /// underline slides even though the screen switches without one.
+    @State private var shown: ProfileTab?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -23,44 +31,33 @@ struct ProfileTabBar: View {
             }
         }
         .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.top, 6)
-        .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.08)).frame(height: 1) }
+        .background(alignment: .bottom) { Rectangle().fill(Color.vDivider).frame(height: 1) }
         .background(Color.vBase)
+        .onAppear { shown = selected }
+        .onChange(of: selected) { _, tab in
+            withAnimation(.smooth(duration: 0.3)) { shown = tab }
+        }
     }
 
     private func tabButton(_ tab: ProfileTab) -> some View {
-        let active = selected == tab
+        let active = (shown ?? selected) == tab
         return Button { onSelect(tab) } label: {
-            VStack(spacing: 10) {
-                LucideIcon(icon(for: tab), .xl)
-                    .foregroundStyle(active ? .white : Color.vText3)
-                    .frame(maxWidth: .infinity)
-                ZStack {
-                    Capsule().fill(.clear).frame(height: 2.5)
+            Text(tab.title)
+                .font(active ? .appSubheadlineBold : .appSubheadlineMedium)
+                .foregroundStyle(active ? Color.vText : Color.vText3)
+                .lineLimit(1)
+                .padding(.vertical, 16)
+                // Evenly spaced: each tab takes an equal share of the bar.
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .bottom) {
                     if active {
-                        Capsule().fill(.white).frame(height: 2.5)
-                            .matchedGeometryEffect(id: "profileTabUnderline", in: ns)
+                        Capsule().fill(Color.vInverse).frame(width: 48, height: 4)
+                            .matchedGeometryEffect(id: "underline", in: underline)
                     }
                 }
-                .padding(.horizontal, 14)
-            }
-            .padding(.top, 6)
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(label(tab))
-    }
-
-    private func icon(for tab: ProfileTab) -> LucideIcon.Name {
-        switch tab {
-        case .tracks: .music
-        case .featuredOn: .sparkles
-        case .market: .handshake // only collab listings surface here right now
-        }
-    }
-
-    private func label(_ tab: ProfileTab) -> String {
-        tab == .featuredOn ? "Featured On" : tab.rawValue
+        .accessibilityAddTraits(selected == tab ? .isSelected : [])
     }
 }

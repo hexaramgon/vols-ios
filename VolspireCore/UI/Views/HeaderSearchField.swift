@@ -28,7 +28,7 @@ struct HeaderSearchField: View {
                 text = ""
             }
             .font(.appCallout)
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.vText)
         }
         .padding(.horizontal, ViewConst.screenPaddings)
         .padding(.bottom, 12)
@@ -39,8 +39,8 @@ struct HeaderSearchField: View {
             LucideIcon(.search, .md).foregroundStyle(Color.vText3)
             TextField("", text: $text, prompt: Text(prompt).foregroundColor(Color.vText3))
                 .font(.appCallout)
-                .foregroundStyle(.white)
-                .tint(.white)
+                .foregroundStyle(Color.vText)
+                .tint(Color.vText)
                 .focused(focus)
                 .autocorrectionDisabled()
             if !text.isEmpty {
@@ -57,7 +57,7 @@ struct HeaderSearchField: View {
         // Fixed height — the clear button (28pt) appearing once you type must
         // not grow the field.
         .frame(height: 42)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.vBorder, lineWidth: 1))
+        .background(focus.wrappedValue ? Color.vFieldFocus : Color.vField,
+                    in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 }

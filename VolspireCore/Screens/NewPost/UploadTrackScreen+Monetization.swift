@@ -18,7 +18,7 @@ extension UploadTrackScreen {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Buyer Downloads")
 
-            Text("Files paying buyers get after they purchase. Upload each format once — the paid tiers below decide who gets what.")
+            Text("Files paying buyers get after they purchase. Upload each format once; the paid tiers below decide who gets what.")
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText2)
             Text("All optional. Skip if you only enable Free / Stream.")
@@ -65,7 +65,7 @@ extension UploadTrackScreen {
                     HStack(spacing: 4) {
                         Text(label)
                             .font(.appBodyMedium)
-                            .foregroundStyle(attached ? .white : Color.vText2)
+                            .foregroundStyle(attached ? Color.vText : Color.vText2)
                         if !attached {
                             Text("· optional")
                                 .font(.appFootnote)
@@ -105,15 +105,8 @@ extension UploadTrackScreen {
             }
             .padding(12)
             .background(
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(attached ? UploadTheme.fieldFill : Color.white.opacity(0.02))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(
-                        UploadTheme.border,
-                        style: attached ? StrokeStyle(lineWidth: 1) : UploadTheme.dashed
-                    )
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(attached ? Color.vControl : Color.vField)
             )
             .contentShape(.rect)
         }
@@ -143,7 +136,7 @@ extension UploadTrackScreen {
                     Text(tierValidation)
                         .font(.appFootnote)
                 }
-                .foregroundStyle(UploadTheme.warningText)
+                .foregroundStyle(Color.vWarning)
             }
         }
     }
@@ -162,7 +155,7 @@ extension UploadTrackScreen {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(tier.label)
                             .font(.appBodyMedium)
-                            .foregroundStyle(enabled ? .white : Color.vText2)
+                            .foregroundStyle(enabled ? Color.vText : Color.vText2)
                         Text(tier.blurb)
                             .font(.appFootnote)
                             .foregroundStyle(Color.vText3)
@@ -191,7 +184,7 @@ extension UploadTrackScreen {
                         prompt: Text("0.00").foregroundStyle(Color.vText3)
                     )
                     .font(.appBody)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .keyboardType(.decimalPad)
                     .focused($priceFieldFocused)
                     .doneKeyboardToolbar($priceFieldFocused)
@@ -204,7 +197,7 @@ extension UploadTrackScreen {
                 if included.isEmpty {
                     Text("Missing required files")
                         .font(.appFootnote)
-                        .foregroundStyle(UploadTheme.warningText)
+                        .foregroundStyle(Color.vWarning)
                 } else {
                     ChipFlowLayout(spacing: 6, lineSpacing: 6) {
                         ForEach(included, id: \.self) { kind in
@@ -213,7 +206,7 @@ extension UploadTrackScreen {
                                 .foregroundStyle(Color.vText2)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
-                                .background(Capsule().fill(Color.white.opacity(0.06)))
+                                .background(Capsule().fill(Color.ink(0.06)))
                                 .overlay(Capsule().strokeBorder(Color.vBorder, lineWidth: 1))
                         }
                     }
@@ -222,12 +215,8 @@ extension UploadTrackScreen {
         }
         .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(enabled ? UploadTheme.fieldFill : Color.white.opacity(0.02))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(enabled ? Color.white.opacity(0.25) : Color.vBorder, lineWidth: 1)
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(enabled ? Color.vControl : Color.vCard)
         )
     }
 

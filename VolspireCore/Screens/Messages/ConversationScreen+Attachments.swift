@@ -16,7 +16,7 @@ import UniformTypeIdentifiers
 // MARK: - Loading skeleton (alternating bubble bones, soft pulse)
 
 struct ThreadSkeleton: View {
-    private let bone = Color.white.opacity(0.07)
+    private let bone = Color.vSkeleton
 
     /// (fromMe, width) — a plausible-looking back-and-forth.
     private let rows: [(Bool, CGFloat)] = [
@@ -103,12 +103,12 @@ struct AudioAttachmentPlayer: View {
         VStack(spacing: 11) {
             HStack(spacing: 11) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.08))
-                    LucideIcon(.music, .md).foregroundStyle(.white)
+                    RoundedRectangle(cornerRadius: Radius.tile, style: .continuous).fill(Color.vControl)
+                    LucideIcon(.music, .md).foregroundStyle(Color.vText)
                 }
                 .frame(width: 40, height: 40)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(name ?? "Audio").font(.appSubheadlineMedium).foregroundStyle(.white).lineLimit(1)
+                    Text(name ?? "Audio").font(.appSubheadlineMedium).foregroundStyle(Color.vText).lineLimit(1)
                     Text(metaText).font(.appCaption2).foregroundStyle(Color.vText3)
                 }
                 Spacer(minLength: 0)
@@ -116,14 +116,13 @@ struct AudioAttachmentPlayer: View {
 
             HStack(spacing: 11) {
                 Button { toggle() } label: {
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.black)
+                    LucideIcon(isPlaying ? .pauseFill : .playFill, .sm)
+                        .foregroundStyle(Color.vOnInverse)
                         // Swap the glyph instantly (like the expanded player) — no fade.
                         .contentTransition(.identity)
                         .animation(nil, value: isPlaying)
                         .frame(width: 34, height: 34)
-                        .background(.white, in: Circle())
+                        .background(Color.vInverse, in: Circle())
                 }
                 .buttonStyle(.plain)
 

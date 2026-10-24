@@ -13,7 +13,7 @@ struct EqualizerBars: View {
     var heights: [CGFloat] = [12, 22, 9, 18, 14]
     var barWidth: CGFloat = 3
     var spacing: CGFloat = 3
-    var tint: Color = .white
+    var tint: Color = .vText
     var isAnimating: Bool = true
     @State private var raised = false
 
@@ -32,6 +32,8 @@ struct EqualizerBars: View {
                     )
             }
         }
+        // Paused (`isAnimating` false) settles static. Callers must
+        // `.id(isAnimating)` so a running loop is torn down on pause.
         .onAppear { raised = true }
     }
 }

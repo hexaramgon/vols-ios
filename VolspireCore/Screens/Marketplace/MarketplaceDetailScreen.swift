@@ -19,6 +19,7 @@ struct MarketplaceDetailScreen: View {
     @Environment(Router.self) private var router
     @Environment(Dependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
+    @Environment(PlayerController.self) private var playerController
 
     private enum Item {
         case pack(ApiMarketplacePack)
@@ -34,11 +35,6 @@ struct MarketplaceDetailScreen: View {
     @State private var packDetail: ApiPackDetail?
     @State private var serviceDetail: ApiServiceDetail?
     @State private var loadingDetail = true
-    /// Scroll-driven chrome state — read only by `CollapsedTitleBar`, so
-    /// per-frame scroll writes never re-render this page. Thresholds preserve
-    /// the old fade window: cover height (screen width) −150 → −80.
-    @State private var barState = ScrollFadeState(fadeStart: UIScreen.size.width - 150, fadeDistance: 70)
-
     /// Samples list paging — mirrors the web's FileGroup show-more behavior
     /// (start capped, reveal in steps, "show all" / "collapse").
     private enum SampleLimit { static let initial = 8; static let step = 10 }
@@ -83,32 +79,24 @@ struct MarketplaceDetailScreen: View {
                 }
                 .padding(.horizontal, ViewConst.screenPaddings)
                 .padding(.top, 18)
-                .padding(.bottom, 40)
+                // Clear the tab bar + mini-player (the listing detail's inset).
+                .padding(.bottom, 40 + playerController.contentBottomInset)
                 .animation(.easeInOut(duration: 0.25), value: loadingDetail)
             }
         }
         .scrollIndicators(.hidden)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
-            barState.update(offsetY: y)
-        }
-        .background(Color.vBase.ignoresSafeArea())
-        .preferredColorScheme(.dark)
-        .ignoresSafeArea(edges: .top)
-        .navigationBarBackButtonHidden(true)
-        // Hiding the back button disables the edge-swipe-back by default; this
-        // re-enables the native left-edge interactive pop (the iOS standard, as
-        // the collab detail and profile screens use).
-        .enableSwipeBack()
-        .toolbarBackground(.hidden, for: .navigationBar)
-        // Solid bar + centred title/creator fade in once the cover scrolls away
-        // — its own component observing `barState`, so per-frame scroll writes
-        // never re-render this page (same isolation as the listing detail).
-        .overlay(alignment: .top) {
-            CollapsedTitleBar(state: barState, title: title, subtitle: "@\(creatorName)")
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) { backButton }
-            ToolbarItem(placement: .topBarTrailing) { optionsButton }
+        // The shared hero nav bar (profile / folder pages): white back + "…"
+        // over the cover at rest, then the frosted bar with the centred title
+        // and @creator fading in once the cover scrolls away.
+        .appNavBar(
+            title: title,
+            subtitle: "@\(creatorName)",
+            collapsing: true,
+            fadeTitle: true,
+            overlaysContent: true,
+            onBack: { dismiss() }
+        ) {
+            optionsButton
         }
         .task { await loadDetail() }
         .sheet(isPresented: $showOptions, onDismiss: {
@@ -131,12 +119,14 @@ struct MarketplaceDetailScreen: View {
         }
     }
 
-    private var backButton: some View {
-        BackButton()
-    }
-
     private func loadDetail() async {
         switch item {
+        // The Marketplace tab's DEBUG design-preview samples carry their own
+        // detail (MarketplaceSamples); everything else loads from the server.
+        case let .pack(p) where MarketplaceSamples.isSample(p.packId):
+            packDetail = MarketplaceSamples.packDetail(p.packId)
+        case let .service(s) where MarketplaceSamples.isSample(s.serviceId):
+            serviceDetail = MarketplaceSamples.serviceDetail(s.serviceId)
         case let .pack(p): packDetail = try? await dependencies.supabaseService.getPack(packId: p.packId)
         case let .service(s): serviceDetail = try? await dependencies.supabaseService.getServiceDetail(serviceId: s.serviceId)
         }
@@ -150,7 +140,7 @@ private extension MarketplaceDetailScreen {
     /// Three-dots affordance, styled like the collab listing's — shadowed so it
     /// stays legible over the cover, then sits on the solid bar once scrolled.
     var optionsButton: some View {
-        HeaderIconButton(icon: .ellipsis, shadow: true, size: ViewConst.heroOverlayIconSize) { showOptions = true }
+        HeaderIconButton(icon: .ellipsis, size: ViewConst.heroOverlayIconSize) { showOptions = true }
     }
 
     /// True when the signed-in user owns this listing.
@@ -275,8 +265,9 @@ private extension MarketplaceDetailScreen {
                         .overlay(LinearGradient(colors: [.white.opacity(0.07), .clear, .black.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing))
                         .overlay { LucideIcon(fallbackIcon, .hero).foregroundStyle(.white.opacity(0.4)) }
                 } else {
-                    LinearGradient(colors: [Color.white.opacity(0.10), Color.vBase], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        .overlay { LucideIcon(fallbackIcon, .hero).foregroundStyle(.white.opacity(0.32)) }
+                    // No cover or gradient: the title's name mesh, the same art
+                    // as its Marketplace card.
+                    PlaylistCoverFallback(name: title, iconSize: .hero, icon: fallbackIcon)
                 }
             }
             .frame(width: UIScreen.size.width, height: height)
@@ -302,17 +293,17 @@ private extension MarketplaceDetailScreen {
         VStack(alignment: .leading, spacing: 8) {
             Text(priceText(price, currency: currency))
                 .font(.appTitleXXL)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
             Text(title)
                 .font(.appTitle2Semibold)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
                 .fixedSize(horizontal: false, vertical: true)
             if let type = typeLabel {
-                Text(type.uppercased())
-                    .font(.appCaption2Bold).tracking(0.6)
+                Text(type)
+                    .font(.appCaptionMedium)
                     .foregroundStyle(Color.vText2)
                     .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Color.white.opacity(0.08), in: Capsule())
+                    .background(Color.vControl, in: Capsule())
                     .padding(.top, 2)
             }
         }
@@ -329,10 +320,10 @@ private extension MarketplaceDetailScreen {
                 ForEach(stats) { s in
                     HStack(spacing: 6) {
                         LucideIcon(s.icon, .xs).foregroundStyle(s.tint ?? Color.vText2)
-                        Text(s.label).font(.appFootnote).foregroundStyle(.white)
+                        Text(s.label).font(.appFootnote).foregroundStyle(Color.vText)
                     }
                     .padding(.horizontal, 11).padding(.vertical, 7)
-                    .background(Color.white.opacity(0.05), in: Capsule())
+                    .background(Color.ink(0.05), in: Capsule())
                 }
             }
         }
@@ -459,11 +450,11 @@ private extension MarketplaceDetailScreen {
                 HStack(spacing: 12) {
                     sellerAvatar
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("@\(creatorName)").font(.appCalloutSemibold).foregroundStyle(.white).lineLimit(1)
+                        Text("@\(creatorName)").font(.appCalloutSemibold).foregroundStyle(Color.vText).lineLimit(1)
                         if let rep = sellerReputation, (rep.reviewCount ?? 0) > 0, let r = rep.avgRating {
                             HStack(spacing: 4) {
                                 LucideIcon(.star, .xs).foregroundStyle(Color.yellow)
-                                Text(String(format: "%.1f", r)).font(.appCaptionMedium).foregroundStyle(.white)
+                                Text(String(format: "%.1f", r)).font(.appCaptionMedium).foregroundStyle(Color.vText)
                                 Text("· \(rep.reviewCount ?? 0) reviews").font(.appCaption).foregroundStyle(Color.vText3)
                             }
                         } else {
@@ -480,8 +471,8 @@ private extension MarketplaceDetailScreen {
             }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.vBorder))
+            .background(Color.vCard, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.vBorder))
         }
         .buttonStyle(.plain)
         .disabled(creatorId == nil)
@@ -503,9 +494,9 @@ private extension MarketplaceDetailScreen {
 private extension MarketplaceDetailScreen {
     func section(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title.uppercased())
-                .font(.appFont.sectionLabel).tracking(0.6)
-                .foregroundStyle(Color.vText3)
+            Text(title)
+                .font(.appFont.sectionTitle)
+                .foregroundStyle(Color.vText)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -514,7 +505,7 @@ private extension MarketplaceDetailScreen {
     func bodyText(_ text: String) -> some View {
         Text(text)
             .font(.appSubheadline)
-            .foregroundStyle(Color.white.opacity(0.88))
+            .foregroundStyle(Color.vText2)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -525,7 +516,7 @@ private extension MarketplaceDetailScreen {
                 Text(t)
                     .font(.appCaptionMedium).foregroundStyle(Color.vText2)
                     .padding(.horizontal, 11).padding(.vertical, 6)
-                    .background(Color.white.opacity(0.06), in: Capsule())
+                    .background(Color.vSkeleton, in: Capsule())
                     .overlay(Capsule().strokeBorder(Color.vBorder, lineWidth: 1))
             }
         }
@@ -534,7 +525,7 @@ private extension MarketplaceDetailScreen {
     func bullet(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 9) {
             LucideIcon(.check, .sm).foregroundStyle(Color.green).padding(.top, 2)
-            Text(text).font(.appSubheadline).foregroundStyle(.white)
+            Text(text).font(.appSubheadline).foregroundStyle(Color.vText)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
@@ -550,7 +541,7 @@ private extension MarketplaceDetailScreen {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { idx, file in
                     fileRow(file)
                     if idx < shown.count - 1 {
-                        Rectangle().fill(Color.white.opacity(0.05)).frame(height: 1)
+                        Rectangle().fill(Color.ink(0.05)).frame(height: 1)
                     }
                 }
                 if files.count > SampleLimit.initial {
@@ -570,9 +561,9 @@ private extension MarketplaceDetailScreen {
                     }
                 } label: {
                     Text("Show more (+\(min(SampleLimit.step, hidden)))")
-                        .font(.appCaptionMedium).foregroundStyle(.white)
+                        .font(.appCaptionMedium).foregroundStyle(Color.vText)
                         .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(Color.white.opacity(0.08), in: Capsule())
+                        .background(Color.vControl, in: Capsule())
                         .overlay(Capsule().strokeBorder(Color.vBorder, lineWidth: 1))
                 }
                 .buttonStyle(.plain)
@@ -607,17 +598,17 @@ private extension MarketplaceDetailScreen {
         HStack(spacing: 11) {
             LucideIcon(.music, .sm).foregroundStyle(Color.vText2)
                 .frame(width: 34, height: 34)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .background(Color.ink(0.05), in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
-                Text(file.name).font(.appSubheadlineMedium).foregroundStyle(.white).lineLimit(1)
+                Text(file.name).font(.appSubheadlineMedium).foregroundStyle(Color.vText).lineLimit(1)
                 Text([file.format, file.fileSize.map(\.byteLabel)].compactMap { $0 }.joined(separator: " · "))
                     .font(.appCaption2).foregroundStyle(Color.vText3).lineLimit(1)
             }
             Spacer(minLength: 0)
             if file.isPreview {
-                Text("PREVIEW").font(.appNanoBold).tracking(0.5).foregroundStyle(.black)
+                Text("Preview").font(.appCaption2Semibold).foregroundStyle(Color.vOnInverse)
                     .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(.white, in: Capsule())
+                    .background(Color.vInverse, in: Capsule())
             }
         }
         .padding(.vertical, 9)
@@ -626,33 +617,33 @@ private extension MarketplaceDetailScreen {
     func packageCard(_ pkg: ApiServicePackage) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text(pkg.name).font(.appCalloutBold).foregroundStyle(.white)
+                Text(pkg.name).font(.appCalloutBold).foregroundStyle(Color.vText)
                 Spacer(minLength: 0)
-                Text(priceText(pkg.price, currency: currency)).font(.appHeadlineBold).foregroundStyle(.white)
+                Text(priceText(pkg.price, currency: currency)).font(.appHeadlineBold).foregroundStyle(Color.vText)
             }
             HStack(spacing: 14) {
                 if let d = pkg.delivery { metaLabel(.clock, "\(d)-day delivery") }
                 if let r = pkg.revisions { metaLabel(.refreshCw, "\(r) revisions") }
             }
             if let features = pkg.features, !features.isEmpty {
-                Rectangle().fill(Color.white.opacity(0.07)).frame(height: 1).padding(.vertical, 2)
+                Rectangle().fill(Color.vDivider).frame(height: 1).padding(.vertical, 2)
                 VStack(alignment: .leading, spacing: 8) { ForEach(features, id: \.self) { bullet($0) } }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.vBorder))
+        .background(Color.vCard, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(Color.vBorder))
     }
 
     func processStep(index: Int, step: ApiServiceProcessStep) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Text("\(index)")
-                .font(.appFootnoteBold).foregroundStyle(.black)
+                .font(.appFootnoteBold).foregroundStyle(Color.vOnInverse)
                 .frame(width: 26, height: 26)
-                .background(.white, in: Circle())
+                .background(Color.vInverse, in: Circle())
             VStack(alignment: .leading, spacing: 3) {
-                Text(step.step).font(.appSubheadlineSemibold).foregroundStyle(.white)
+                Text(step.step).font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
                 if let d = step.description, !d.isEmpty {
                     Text(d).font(.appFootnote).foregroundStyle(Color.vText2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -664,7 +655,7 @@ private extension MarketplaceDetailScreen {
 
     func faqRow(_ faq: ApiServiceFaq) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(faq.q).font(.appSubheadlineSemibold).foregroundStyle(.white)
+            Text(faq.q).font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
                 .fixedSize(horizontal: false, vertical: true)
             if let a = faq.a, !a.isEmpty {
                 Text(a).font(.appFootnote).foregroundStyle(Color.vText2)
@@ -678,7 +669,7 @@ private extension MarketplaceDetailScreen {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text("@\(review.reviewer?.username ?? "user")")
-                    .font(.appFootnoteSemibold).foregroundStyle(.white)
+                    .font(.appFootnoteSemibold).foregroundStyle(Color.vText)
                 if let r = review.rating {
                     HStack(spacing: 2) {
                         LucideIcon(.star, .xs).foregroundStyle(Color.yellow)
@@ -706,9 +697,9 @@ private extension MarketplaceDetailScreen {
         VStack(alignment: .leading, spacing: 22) {
             ForEach(0 ..< 3, id: \.self) { _ in
                 VStack(alignment: .leading, spacing: 10) {
-                    Capsule().fill(Color.white.opacity(0.06)).frame(width: 90, height: 11)
-                    Capsule().fill(Color.white.opacity(0.06)).frame(maxWidth: .infinity).frame(height: 13)
-                    Capsule().fill(Color.white.opacity(0.06)).frame(width: 200, height: 13)
+                    Capsule().fill(Color.vSkeleton).frame(width: 90, height: 11)
+                    Capsule().fill(Color.vSkeleton).frame(maxWidth: .infinity).frame(height: 13)
+                    Capsule().fill(Color.vSkeleton).frame(width: 200, height: 13)
                 }
             }
         }

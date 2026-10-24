@@ -9,18 +9,19 @@
 //  away with each view.
 //
 
+import DesignSystem
 import SwiftUI
 
 @Observable
 final class FloatingActionModel {
-    private(set) var systemImage: String?
+    private(set) var icon: LucideIcon.Name?
     private(set) var isBusy = false
     private(set) var action: () -> Void = {}
     private var owner: String?
 
-    func set(owner: String, systemImage: String, isBusy: Bool, action: @escaping () -> Void) {
+    func set(owner: String, icon: LucideIcon.Name, isBusy: Bool, action: @escaping () -> Void) {
         self.owner = owner
-        self.systemImage = systemImage
+        self.icon = icon
         self.isBusy = isBusy
         self.action = action
     }
@@ -30,7 +31,7 @@ final class FloatingActionModel {
     func clear(owner: String) {
         guard self.owner == owner else { return }
         self.owner = nil
-        self.systemImage = nil
+        self.icon = nil
         self.isBusy = false
         self.action = {}
     }
@@ -45,35 +46,35 @@ extension View {
     /// Declares this screen's floating action. The button is rendered once,
     /// persistently, by the enclosing router overlay — not by this view — so it
     /// doesn't move when navigating between screens that share it.
-    func floatingAction(owner: String, systemImage: String, isBusy: Bool = false, action: @escaping () -> Void) -> some View {
-        modifier(FloatingActionConfigurator(owner: owner, systemImage: systemImage, isBusy: isBusy, action: action))
+    func floatingAction(owner: String, icon: LucideIcon.Name, isBusy: Bool = false, action: @escaping () -> Void) -> some View {
+        modifier(FloatingActionConfigurator(owner: owner, icon: icon, isBusy: isBusy, action: action))
     }
 
     /// Renders the persistent floating action button for `model`. Applied once,
     /// to the tab's NavigationStack.
     func floatingActionOverlay(_ model: FloatingActionModel) -> some View {
         overlay(alignment: .bottomTrailing) {
-            if let systemImage = model.systemImage {
-                FloatingActionButton(systemImage: systemImage, isBusy: model.isBusy) {
+            if let icon = model.icon {
+                FloatingActionButton(icon: icon, isBusy: model.isBusy) {
                     model.action()
                 }
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
             }
         }
-        .animation(.smooth(duration: 0.22), value: model.systemImage)
+        .animation(.smooth(duration: 0.22), value: model.icon)
     }
 }
 
 private struct FloatingActionConfigurator: ViewModifier {
     @Environment(FloatingActionModel.self) private var model
     let owner: String
-    let systemImage: String
+    let icon: LucideIcon.Name
     let isBusy: Bool
     let action: () -> Void
 
     func body(content: Content) -> some View {
         content
-            .onAppear { model.set(owner: owner, systemImage: systemImage, isBusy: isBusy, action: action) }
+            .onAppear { model.set(owner: owner, icon: icon, isBusy: isBusy, action: action) }
             .onDisappear { model.clear(owner: owner) }
             .onChange(of: isBusy) { _, busy in model.updateBusy(owner: owner, busy) }
     }

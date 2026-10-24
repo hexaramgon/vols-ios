@@ -11,7 +11,7 @@ import DesignSystem
 import SwiftUI
 
 struct FloatingActionButton: View {
-    let systemImage: String
+    let icon: LucideIcon.Name
     var isBusy: Bool = false
     let action: () -> Void
 
@@ -19,16 +19,17 @@ struct FloatingActionButton: View {
         Button(action: action) {
             Group {
                 if isBusy {
-                    ProgressView().tint(.black)
+                    ProgressView().tint(Color.vOnInverse)
                 } else {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(.black)
+                    LucideIcon(icon, .xl)
+                        .foregroundStyle(Color.vOnInverse)
                 }
             }
+            // Ink circle + paper glyph (PrimaryButton's treatment); the shadow
+            // stays real black in both modes.
             .frame(width: 56, height: 56)
-            .background(.white, in: Circle())
-            .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
+            .background(Color.vInverse, in: Circle())
+            .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
         }
         .buttonStyle(.plain)
         .disabled(isBusy)

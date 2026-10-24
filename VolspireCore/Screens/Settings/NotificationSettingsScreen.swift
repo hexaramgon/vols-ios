@@ -10,67 +10,40 @@ import DesignSystem
 import SwiftUI
 
 struct NotificationSettingsScreen: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(PlayerController.self) private var playerController
     @State private var viewModel = SettingsViewModel()
 
-    /// Clears the custom tab bar + home indicator + (when present) the floating
-    /// mini-player — none of which are part of this pushed screen's safe area.
-    private var bottomInset: CGFloat { playerController.contentBottomInset }
-
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                // Prefs gate PUSHES only — the in-app notifications feed always
-                // shows everything (see get_user_notifications).
-                Text("Choose which push notifications you receive. Everything still shows in your notifications feed.")
-                    .font(.appFootnote)
-                    .foregroundStyle(Color.vText3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                    .padding(.top, 2)
-                    .padding(.bottom, 18)
-
-                card
+        SettingsSectionPage(title: "Notifications") {
+            // Prefs gate PUSHES only — the in-app notifications feed always
+            // shows everything (see get_user_notifications).
+            SettingsGroup(
+                title: "Email & push alerts",
+                caption: "Choose which activity reaches you outside the app."
+            ) {
+                ForEach(Array(NotificationPref.visibleCases.enumerated()), id: \.element.id) { index, pref in
+                    if index > 0 { SettingsDivider() }
+                    toggleRow(pref)
+                }
             }
-            .padding(.bottom, bottomInset)
+            .redacted(reason: viewModel.prefsLoaded ? [] : .placeholder)
+
+            if let error = viewModel.saveError {
+                ErrorBanner(error)
+            }
         }
-        .scrollIndicators(.hidden)
-        .appNavBar(title: "Notifications") { dismiss() }
         .task { await viewModel.loadPreferences() }
     }
-}
 
-private extension NotificationSettingsScreen {
-    var card: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(NotificationPref.allCases.enumerated()), id: \.element.id) { index, pref in
-                if index > 0 {
-                    Rectangle().fill(.white.opacity(0.07)).frame(height: 1)
-                }
-                toggleRow(pref)
-            }
-        }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .redacted(reason: viewModel.prefsLoaded ? [] : .placeholder)
-    }
-
-    func toggleRow(_ pref: NotificationPref) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(pref.title).font(.appBodyMedium).foregroundStyle(.white)
-                Text(pref.subtitle).font(.appFootnote).foregroundStyle(Color.vText3).lineLimit(2)
-            }
-            Spacer(minLength: 12)
+    private func toggleRow(_ pref: NotificationPref) -> some View {
+        SettingsRow(title: pref.title, caption: pref.subtitle) {
             Toggle("", isOn: Binding(
                 get: { viewModel.isOn(pref) },
                 set: { newValue in Task { await viewModel.toggle(pref, to: newValue) } }
             ))
             .labelsHidden()
-            .tint(Color.brand)
+            .toggleStyle(.ink)
             .disabled(!viewModel.prefsLoaded)
         }
-        .padding(.vertical, 14)
     }
 }
 

@@ -9,9 +9,9 @@ import SwiftUI
 
 enum TabBarItem: Hashable, CaseIterable {
     case home       // "Explore"
-    case library    // "Library" — saved tracks + Workspace folders
+    case library    // "Library" — playlists, saved tracks, music lists
     case newPost
-    case inbox       // Messages / conversations
+    case workspace  // Workspace folders; Messages opens from its header
     case profile
 }
 
@@ -21,7 +21,7 @@ extension TabBarItem {
         case .home: "Explore"
         case .library: "Library"
         case .newPost: "New Post"
-        case .inbox: "Inbox"
+        case .workspace: "Workspace"
         case .profile: "Profile"
         }
     }
@@ -31,8 +31,8 @@ extension TabBarItem {
         case .home: Image(lucide: .house)
         case .library: Image(lucide: .library)
         case .newPost: Image(lucide: .circlePlus)
-        case .inbox: Image(lucide: .inbox)
-        case .profile: Image(lucide: .circleUser) // fallback; replaced by avatar in RootTabView
+        case .workspace: Image(lucide: .folder)
+        case .profile: Image(lucide: .user)
         }
     }
 }

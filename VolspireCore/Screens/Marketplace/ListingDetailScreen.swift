@@ -2,9 +2,11 @@
 //  ListingDetailScreen.swift
 //  Volspire
 //
-//  Collab-board listing detail. Text-forward like the web `listing-detail`:
-//  category + status, title, author + stats, Respond / Save actions, the
-//  description, tags, playable audio clips, and comments.
+//  Collab-board listing detail — the web `listing-detail` post page: a 53pt
+//  "‹ Listings" band (author controls as round icon buttons), the post
+//  (byline, title, description, tags, clips, stat + action footer), then the
+//  author-only Responses section and the Comments section with its inline
+//  composer at the top.
 //
 
 import DesignSystem
@@ -16,7 +18,6 @@ import UIKit
 struct ListingDetailScreen: View {
     @Environment(Router.self) private var router
     @Environment(Dependencies.self) private var dependencies
-    @Environment(ConversationState.self) private var conversationState
     @Environment(PlayerController.self) private var playerController
     @Environment(ListingsStore.self) private var listingsStore
     @Environment(\.dismiss) private var dismiss
@@ -26,28 +27,29 @@ struct ListingDetailScreen: View {
     @State private var showDeleteConfirm = false
     @State private var showAdminOptions = false
     @State private var pendingAdminDelete = false
-    @State private var pendingEdit = false
     @State private var showEdit = false
-    /// The comment whose options sheet is open (matches the track comments UX).
+    /// The comment whose options sheet is open (long-press: copy / delete / report).
     @State private var commentOptions: ApiListingComment?
     /// Staged report → presented after the options sheet dismisses.
     @State private var pendingReportComment: ApiListingComment?
     @State private var reportingComment: ApiListingComment?
-    @FocusState private var commentFocused: Bool
+    /// The comment awaiting the "Delete comment" confirm.
+    @State private var deletingComment: ApiListingComment?
+    /// Close / Reopen asks first, then confirms what happened.
+    @State private var showStatusConfirm = false
+    /// Staged by the long-press sheet's Delete; confirmed once it dismisses.
+    @State private var pendingDeleteComment: ApiListingComment?
+    @FocusState private var focusedField: Field?
     // Non-author viewer "…": report the listing / author, or block the author.
     @State private var showViewerOptions = false
     @State private var pendingViewer: ViewerAction?
     @State private var reportTarget: ReportTarget?
     @State private var showBlockAuthor = false
-    /// Scroll-driven chrome state — read only by `CollapsedTitleBar`.
-    @State private var barState = ScrollFadeState()
-    /// Which discussion list the author is viewing (visitors only see comments).
-    @State private var discussionTab: DiscussionTab = .comments
-    /// Signed-in user's avatar for the composer pill (matches the player's).
+    /// Signed-in user's avatar for the composer.
     @State private var myAvatarUrl: String?
     @State private var myInitial: String = "?"
 
-    enum DiscussionTab { case comments, responses }
+    enum Field: Hashable { case comment, reply }
 
     init(listing: ApiListing) {
         _viewModel = State(wrappedValue: ListingDetailViewModel(listing: listing))
@@ -56,75 +58,21 @@ struct ListingDetailScreen: View {
     private var listing: ApiListing { viewModel.listing }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                hero
-                VStack(alignment: .leading, spacing: 26) {
-                    // The pitch first — description, tags, reference clips —
-                    // THEN the decision point (Respond/Save), then discussion.
-                    if let desc = listing.description, !desc.isEmpty { bodyText(desc) }
-                    if let tags = listing.tags, !tags.isEmpty { chipRow(tags.map { "#\($0)" }) }
-                    if !listing.attachments.isEmpty { audioCard }
-                    // Respond + Save are for visitors only — authors manage via the "…" menu.
-                    if !viewModel.isAuthor { actionRow }
-                    discussion
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 10)
-                .padding(.bottom, 36)
+        Group {
+            if viewModel.notFound {
+                notFoundState
+            } else {
+                content
             }
         }
-        .scrollIndicators(.hidden)
-        .scrollDismissesKeyboard(.interactively)
-        // Tapping anywhere on the content drops the keyboard (buttons still
-        // win the tap — this only catches otherwise-inert space).
-        .tapToDismissKeyboard()
-        // Composer pinned at the screen bottom, like the expanded player's —
-        // hidden while the author is browsing responses (it posts comments).
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            if !(viewModel.isAuthor && discussionTab == .responses) {
-                composerBar
-                    // Slides down + fades when the author flips to Responses
-                    // (the pill tap drives this inside withAnimation).
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
+        .backTitleBand("Listings") {
+            if !viewModel.notFound { bandActions }
         }
-        // Let the system inset the scroll for the keyboard (like the Messages
-        // thread) so the bottom comments stay reachable while typing — the
-        // composer's `safeAreaInset` rides up with it.
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
-            barState.update(offsetY: y)
-        }
-        .background(Color.vBase.ignoresSafeArea())
-        .preferredColorScheme(.dark)
-        .ignoresSafeArea(edges: .top)
-        .navigationBarBackButtonHidden(true)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) { backButton }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                if viewModel.isAuthor { adminButton } else { viewerButton }
-            }
-        }
-        // Solid bar + centred title fade in once the hero scrolls away — its
-        // own component observing `barState`, so per-frame scroll writes never
-        // re-render this page (same isolation as the profile/Home headers).
-        .overlay(alignment: .top) {
-            CollapsedTitleBar(
-                state: barState,
-                title: "\(listing.categoryLabel) Listing",
-                subtitle: "@\(listing.author.username)"
-            )
-        }
-        .enableSwipeBack()
-        // Reset the shared chrome flag on leave so the tab bar + mini player
-        // return (it's toggled by the keyboard handlers on the composer).
-        .onDisappear { conversationState.composerActive = false }
         .task {
             viewModel.listings = listingsStore
             await viewModel.load()
         }
-        // Own avatar for the composer pill — cached profile fetch, cheap.
+        // Own avatar for the composer — cached profile fetch, cheap.
         .task {
             guard let uid = dependencies.authManager.currentUserId,
                   let profile = try? await dependencies.supabaseService.getUserProfile(userId: uid)
@@ -135,19 +83,23 @@ struct ListingDetailScreen: View {
         .sheet(isPresented: $showRespond) { respondSheet }
         .sheet(isPresented: $showAdminOptions, onDismiss: {
             if pendingAdminDelete { pendingAdminDelete = false; showDeleteConfirm = true }
-            if pendingEdit { pendingEdit = false; showEdit = true }
         }) { adminOptionsSheet }
         .sheet(item: $commentOptions, onDismiss: {
             if let comment = pendingReportComment {
                 pendingReportComment = nil
                 reportingComment = comment
             }
+            // Delete confirms once the options sheet has gone.
+            if let comment = pendingDeleteComment {
+                pendingDeleteComment = nil
+                deletingComment = comment
+            }
         }) { comment in
             ListingCommentOptionsSheet(
                 comment: comment,
-                isOwn: viewModel.isOwnComment(comment),
+                canDelete: viewModel.canDeleteComment(comment),
                 onReport: { pendingReportComment = comment },
-                onDelete: { Task { await viewModel.deleteComment(comment) } }
+                onDelete: { pendingDeleteComment = comment }
             )
         }
         .sheet(item: $reportingComment) { comment in
@@ -183,28 +135,79 @@ struct ListingDetailScreen: View {
             ))
         }
         .destructiveConfirm(
-            "Delete this listing?",
+            "Delete listing",
             isPresented: $showDeleteConfirm,
-            message: "This permanently removes the listing and its responses."
+            message: "It will be permanently deleted. This cannot be undone."
         ) {
             Task { if await viewModel.deleteListing() { dismiss() } }
         }
+        .destructiveConfirm(
+            "Delete comment",
+            isPresented: Binding(get: { deletingComment != nil }, set: { if !$0 { deletingComment = nil } }),
+            message: "This can't be undone."
+        ) {
+            if let comment = deletingComment { Task { await viewModel.deleteComment(comment) } }
+        }
+        // Close / Reopen: one sheet that explains it, shows progress on its
+        // button, and closes once it's done — the page then eases into the
+        // new state (Closed pill, lock icon, Respond → Closed).
+        .sheet(isPresented: $showStatusConfirm) {
+            ListingStatusSheet(closing: !viewModel.isClosed) {
+                await viewModel.toggleStatus()
+            }
+        }
     }
 
-    /// Author-only "…" — opens a slide-up sheet to open/close or delete.
-    private var adminButton: some View {
-        HeaderIconButton(icon: .ellipsis, shadow: true, size: ViewConst.heroOverlayIconSize) { showAdminOptions = true }
+    private var content: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                post
+                if viewModel.isAuthor { responsesSection }
+                commentsSection
+            }
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .padding(.bottom, 40 + playerController.contentBottomInset)
+        }
+        .scrollIndicators(.hidden)
+        .scrollDismissesKeyboard(.interactively)
+    }
+
+    /// The band's trailing controls: author → Edit, Close/Reopen, ⋯ (delete);
+    /// visitor → ⋯ (report / block).
+    @ViewBuilder
+    private var bandActions: some View {
+        if viewModel.isAuthor {
+            // Same bare icon as the listing's Save / Share.
+            CardActionIcon(icon: .pencil) { showEdit = true }
+                .accessibilityLabel("Edit listing")
+            CardActionIcon(icon: viewModel.isClosed ? .lockOpen : .lock) {
+                guard !viewModel.isTogglingStatus else { return }
+                showStatusConfirm = true
+            }
+            .opacity(viewModel.isTogglingStatus ? 0.5 : 1)
+            .accessibilityLabel(viewModel.isClosed ? "Reopen listing" : "Close listing")
+            HeaderIconButton(icon: .ellipsis, size: ViewConst.heroOverlayIconSize) { showAdminOptions = true }
+        } else if viewModel.currentUserId != nil {
+            HeaderIconButton(icon: .ellipsis, size: ViewConst.heroOverlayIconSize) { showViewerOptions = true }
+        }
+    }
+
+    private var notFoundState: some View {
+        VStack(spacing: 24) {
+            EmptyStateView(
+                icon: .megaphone,
+                title: "Listing not found",
+                message: "It may have been removed or set private."
+            )
+            SecondaryButton("Back home", size: .inline, expands: false) { dismiss() }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private enum ViewerAction { case reportListing, reportAuthor, block }
     private enum ReportTarget: Int, Identifiable { case listing, author; var id: Int { rawValue } }
 
-    /// Non-author "…" — report the listing or its author, or block the author.
-    private var viewerButton: some View {
-        HeaderIconButton(icon: .ellipsis, shadow: true, size: ViewConst.heroOverlayIconSize) { showViewerOptions = true }
-    }
-
-    /// Viewer options as a slide-up sheet — mirrors `adminOptionsSheet`.
+    /// Viewer options as a slide-up sheet.
     private var viewerOptionsSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(icon: listing.categoryIcon, title: listing.title, subtitle: "@\(listing.author.username)") {
@@ -220,7 +223,7 @@ struct ListingDetailScreen: View {
                     pendingViewer = .reportAuthor
                     showViewerOptions = false
                 }
-                OptionSheetRow(icon: .ban, title: "Block @\(listing.author.username)", tint: .vDestructive) {
+                OptionSheetRow(icon: .ban, title: "Block @\(listing.author.username)", tint: .vError) {
                     pendingViewer = .block
                     showViewerOptions = false
                 }
@@ -239,29 +242,16 @@ struct ListingDetailScreen: View {
         }
     }
 
-    /// Author options as a slide-up sheet — the shared `SheetHeader` + Lucide rows,
-    /// matching the folder / playlist / track option sheets.
+    /// Author "⋯" — Edit and Close/Reopen live in the band; the menu holds Delete.
     private var adminOptionsSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(icon: listing.categoryIcon, title: listing.title, subtitle: viewModel.isClosed ? "Closed" : "Open") {
                 showAdminOptions = false
             }
 
-            VStack(spacing: 0) {
-                OptionSheetRow(icon: .squarePen, title: "Edit listing") {
-                    pendingEdit = true
-                    showAdminOptions = false
-                }
-                OptionSheetRow(icon: viewModel.isClosed ? .circleCheck : .lock,
-                               title: viewModel.isClosed ? "Reopen listing" : "Close listing") {
-                    showAdminOptions = false
-                    Task { await viewModel.toggleStatus() }
-                }
-                OptionSheetRow(icon: .trash2, title: "Delete listing",
-                               tint: .vDestructive) {
-                    pendingAdminDelete = true
-                    showAdminOptions = false
-                }
+            OptionSheetRow(icon: .trash2, title: "Delete listing", tint: .vError) {
+                pendingAdminDelete = true
+                showAdminOptions = false
             }
             .padding(.top, 6)
         }
@@ -270,108 +260,99 @@ struct ListingDetailScreen: View {
     }
 }
 
-// MARK: - Hero + actions
+// MARK: - Post
 
 private extension ListingDetailScreen {
-    /// Immersive header — the Playlists/Workspace brand-wash recipe behind the
-    /// category chip, title, author and stats. Content-sized; the wash alone
-    /// stretches on overscroll (backdrop-scoped, so nothing interactive sits
-    /// under per-frame geometry).
-    var hero: some View {
-        VStack(alignment: .leading, spacing: 14) {
+    /// The home listing card, opened up: byline, the ask, the full pitch, then
+    /// the card footer (counts left, actions right).
+    var post: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            byline
+
             Text(listing.title)
-                .font(.appTitle)
-                .foregroundStyle(.white)
+                .font(.appLargeTitle)
+                .tracking(-0.4)
+                .foregroundStyle(Color.vText)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 16)
 
-            // Author + date on the left, category (and Closed) on the right —
-            // one compact identity row, no stats belt.
-            HStack(spacing: 8) {
-                authorRow
-                if viewModel.isClosed { closedChip }
-                categoryChip
+            if let desc = listing.description, !desc.isEmpty {
+                Text(desc)
+                    .font(.appSubheadline)
+                    .foregroundStyle(Color.vText2)
+                    .lineSpacing(4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 12)
             }
+
+            if let tags = listing.tags, !tags.isEmpty {
+                ChipFlowLayout(spacing: 8, lineSpacing: 8) {
+                    ForEach(tags, id: \.self) { tag in
+                        Text("#\(tag)")
+                            .font(.appCaption)
+                            .foregroundStyle(Color.vText2)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Color.ink(0.06), in: Capsule())
+                    }
+                }
+                .padding(.top, 16)
+            }
+
+            if !listing.attachments.isEmpty {
+                audioClips.padding(.top, 16)
+            }
+
+            footer.padding(.top, 20)
         }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.top, ViewConst.safeAreaInsets.top + 56)
-        .padding(.bottom, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            GeometryReader { geo in
-                let stretch = max(0, geo.frame(in: .scrollView).minY)
-                heroWash
-                    .frame(height: geo.size.height + stretch)
-                    .offset(y: -stretch)
+        .padding(.vertical, 20)
+        .overlay(alignment: .bottom) { hairline }
+    }
+
+    var hairline: some View {
+        Rectangle().fill(Color.vDivider).frame(height: 1)
+    }
+
+    var byline: some View {
+        HStack(spacing: 12) {
+            Button { router.navigateToProfile(userId: listing.author.userId) } label: {
+                HStack(spacing: 12) {
+                    AvatarView(urlString: listing.author.profileImageUrl, name: listing.author.username, size: 40)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("@\(listing.author.username)")
+                            .font(.appSubheadlineSemibold)
+                            .foregroundStyle(Color.vText)
+                            .lineLimit(1)
+                        Text("\(listing.categoryLabel) · \(MessageTime.ago(MessageTime.parse(listing.createdAt)))")
+                            .font(.appCaption)
+                            .foregroundStyle(Color.vText3)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(.rect)
             }
+            .buttonStyle(.plain)
+
+            if viewModel.isClosed { closedPill }
         }
     }
 
-    /// The app's hero wash: brand fading into the base + a corner glow + grain.
-    var heroWash: some View {
-        ZStack {
-            Color.vBase
-            LinearGradient(
-                stops: [
-                    .init(color: Color.brand.opacity(0.42), location: 0),
-                    .init(color: Color.brand.opacity(0.12), location: 0.45),
-                    .init(color: Color.brand.opacity(0), location: 0.95),
-                ],
-                startPoint: .top, endPoint: .bottom
-            )
-            RadialGradient(
-                colors: [Color.brand.opacity(0.18), Color.brand.opacity(0)],
-                center: .topTrailing, startRadius: 0, endRadius: 220
-            )
-            GrainOverlay()
+    /// Grey, not red — closed is a state, not an error.
+    var closedPill: some View {
+        HStack(spacing: 4) {
+            LucideIcon(.lock, .xs)
+            Text("Closed").font(.appCaptionMedium)
         }
-    }
-
-    /// Category on the brand accent — same chip family as the Collaborator
-    /// badge and the "New" pills, sized down to sit in the author row.
-    var categoryChip: some View {
-        HStack(spacing: 5) {
-            LucideIcon(listing.categoryIcon, .xs)
-            Text(listing.categoryLabel).font(.appCaptionMedium)
-        }
-        .foregroundStyle(.white)
+        .foregroundStyle(Color.vText2)
         .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(LinearGradient.sendAccent, in: Capsule())
+        .padding(.vertical, 4)
+        .background(Color.vControl, in: Capsule())
     }
 
-    var closedChip: some View {
-        Text("Closed")
-            .font(.appCaptionMedium)
-            .foregroundStyle(Color.vDestructive)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Color.vDestructive.opacity(0.16), in: Capsule())
-    }
-
-    var authorRow: some View {
-        Button { router.navigateToProfile(userId: listing.author.userId) } label: {
-            HStack(spacing: 9) {
-                avatar(listing.author, size: 30)
-                Text("@\(listing.author.username)")
-                    .font(.appFootnoteMedium).foregroundStyle(.white)
-                Text("·").foregroundStyle(Color.vText3)
-                Text(MessageTime.agoLong(iso: listing.createdAt))
-                    .font(.appFootnote).foregroundStyle(.white.opacity(0.65))
-                Spacer(minLength: 0)
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-    }
-
-    var backButton: some View {
-        BackButton()
-    }
-
-    /// Audio clips — each rendered with the same inline player as chat audio
-    /// attachments (scrubber + time, one-at-a-time playback). No section
-    /// header: the players are self-describing.
-    var audioCard: some View {
+    /// Audio clips — the shared inline player (scrubber + time, one at a time).
+    var audioClips: some View {
         VStack(spacing: 10) {
             ForEach(Array(listing.attachments.enumerated()), id: \.offset) { idx, clip in
                 if let url = viewModel.clipURL(clip) {
@@ -389,24 +370,53 @@ private extension ListingDetailScreen {
         }
     }
 
-    var actionRow: some View {
-        HStack(spacing: 10) {
-            PrimaryButton(respondLabel, size: .inline, enabled: canRespond) {
-                if let convoId = viewModel.existingConvoId { openConversation(convoId: convoId, with: listing.author) }
-                else { showRespond = true }
+    /// Stats left; visitors get Save, Share and the white Respond capsule,
+    /// the author Share only.
+    var footer: some View {
+        HStack(spacing: 20) {
+            StatCount(icon: .users, value: listing.responseCount ?? 0)
+            StatCount(icon: .messageCircle, value: listing.commentCount ?? 0)
+            Spacer(minLength: 0)
+            HStack(spacing: 4) {
+                // Bare icons, like the listing cards.
+                if !viewModel.isAuthor {
+                    CardActionIcon(
+                        icon: viewModel.isSaved ? .bookmarkFill : .bookmark,
+                        active: viewModel.isSaved,
+                        popOn: viewModel.isSaved
+                    ) {
+                        guard !viewModel.isSaving else { return }
+                        Task { await viewModel.toggleSave() }
+                    }
+                    .accessibilityLabel(viewModel.isSaved ? "Saved" : "Save")
+                }
+                CardActionIcon(icon: .share2) {
+                    UIApplication.presentActivitySheet(["\(listing.title) \(viewModel.shareURL)"])
+                }
+                .accessibilityLabel("Share")
+                if !viewModel.isAuthor { respondButton.padding(.leading, 6) }
             }
-
-            // Save matches the expanded player's save: a bare .xl bookmark,
-            // no background — the 48pt frame is just the tap target.
-            Button { Task { await viewModel.toggleSave() } } label: {
-                LucideIcon(viewModel.isSaved ? .bookmarkFill : .bookmark, .xl)
-                    .foregroundStyle(.white)
-                    .frame(width: 42, height: 42)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .disabled(viewModel.isSaving)
         }
+    }
+
+    var respondButton: some View {
+        Button {
+            if let convoId = viewModel.existingConvoId { openConversation(convoId: convoId, with: listing.author) }
+            else { showRespond = true }
+        } label: {
+            HStack(spacing: 6) {
+                LucideIcon(viewModel.existingConvoId != nil ? .messageSquare : .reply, .sm)
+                Text(respondLabel).font(.appSubheadlineSemibold)
+            }
+            .foregroundStyle(Color.vOnInverse)
+            .padding(.horizontal, 14)
+            .frame(height: 32)
+            .background(Color.vInverse, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canRespond)
+        .opacity(canRespond ? 1 : 0.3)
     }
 
     /// Respond/Open-chat is enabled unless the listing is closed with no thread.
@@ -417,371 +427,241 @@ private extension ListingDetailScreen {
         return viewModel.isClosed ? "Closed" : "Respond"
     }
 
+    /// "7 Comments" / "1 Response" — one semibold line, like the player's
+    /// comments header; just the noun while there are none.
+    func sectionHeading(_ title: String, count: Int) -> some View {
+        let singular = String(title.dropLast())
+        let text = count == 0 ? title : "\(count) \(count == 1 ? singular : title)"
+        return Text(text)
+            .font(.appSubheadlineSemibold)
+            .foregroundStyle(Color.vText)
+            .monospacedDigit()
+    }
 }
 
-// MARK: - Author + Comments
+// MARK: - Responses (author only)
 
 private extension ListingDetailScreen {
-    /// Comments + (author-only) responses — no text headers: the author flips
-    /// between the two with segmented pills (the app's 7D/30D toggle style);
-    /// visitors get the comments flowing straight in after a hairline.
-    var discussion: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Rectangle().fill(Color.white.opacity(0.06)).frame(height: 0.5)
+    var responsesSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            sectionHeading("Responses", count: listing.responseCount ?? viewModel.responses.count)
 
-            if viewModel.isAuthor {
-                HStack(spacing: 6) {
-                    discussionPill("Comments", count: viewModel.comments.count, tab: .comments)
-                    discussionPill("Responses", count: viewModel.responses.count, tab: .responses)
-                    Spacer(minLength: 0)
-                }
-            }
-
-            // The same subtle centred marker on your own post as on others' —
-            // reflecting whichever list is showing.
-            if viewModel.isAuthor, discussionTab == .responses {
-                discussionMarker("Responses", count: viewModel.responses.count, loaded: viewModel.responsesLoaded)
-                responsesContent
+            if !viewModel.responsesLoaded {
+                SkeletonRows(count: 2, thumb: .circle(size: 32), horizontalPadding: 0)
+            } else if viewModel.responses.isEmpty {
+                Text("No responses yet. Each one opens a DM with you.")
+                    .font(.appCaption).foregroundStyle(Color.vText3)
+                    .padding(.vertical, 16)
             } else {
-                discussionMarker("Comments", count: viewModel.comments.count, loaded: viewModel.commentsLoaded)
-                commentsContent
-            }
-        }
-    }
-
-    /// Small muted "label · count" centred under the divider (spinner while
-    /// the list loads) — shared by the author and visitor views.
-    func discussionMarker(_ label: String, count: Int, loaded: Bool) -> some View {
-        HStack(spacing: 6) {
-            Text(label)
-                .font(.appFootnoteMedium)
-                .foregroundStyle(Color.vText2)
-            if !loaded {
-                ProgressView().tint(.white.opacity(0.35)).scaleEffect(0.6)
-            } else {
-                Text("\(count)")
-                    .font(.appFootnote)
-                    .foregroundStyle(Color.vText3)
-                    .monospacedDigit()
-            }
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-
-    func discussionPill(_ label: String, count: Int, tab: DiscussionTab) -> some View {
-        let selected = discussionTab == tab
-        return Button {
-            withAnimation(.easeInOut(duration: 0.22)) { discussionTab = tab }
-        } label: {
-            Text(count > 0 ? "\(label) · \(count)" : label)
-                .font(.appFootnoteMedium)
-                .foregroundStyle(selected ? .black : Color.vText2)
-                .padding(.horizontal, 13)
-                .padding(.vertical, 7)
-                .background(selected ? Color.white : Color.white.opacity(0.06), in: Capsule())
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Author-only: who's responded, tap to open that chat.
-    @ViewBuilder
-    var responsesContent: some View {
-        if !viewModel.responsesLoaded {
-            responsesSkeleton
-        } else if viewModel.responses.isEmpty {
-            Text("No one has responded yet.")
-                .font(.appFootnote).foregroundStyle(Color.vText3)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
-        } else {
-            VStack(spacing: 0) {
-                ForEach(Array(viewModel.responses.enumerated()), id: \.element.id) { idx, response in
-                    responseRow(response)
-                    if idx < viewModel.responses.count - 1 {
-                        Rectangle().fill(Color.white.opacity(0.05)).frame(height: 1)
-                    }
+                VStack(spacing: 0) {
+                    ForEach(viewModel.responses) { responseRow($0) }
                 }
+                .padding(.horizontal, -ViewConst.screenPaddings)
             }
         }
+        .padding(.top, 20)
+        .padding(.bottom, 8)
+        .overlay(alignment: .bottom) { hairline }
     }
 
     func responseRow(_ response: ApiListingResponse) -> some View {
         Button {
             if let convoId = response.convoId { openConversation(convoId: convoId, with: response.responder) }
         } label: {
-            HStack(spacing: 11) {
-                avatar(response.responder, size: 38)
+            HStack(alignment: .top, spacing: 12) {
+                AvatarView(urlString: response.responder.profileImageUrl, name: response.responder.username, size: 32)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("@\(response.responder.username)").font(.appSubheadlineSemibold).foregroundStyle(.white).lineLimit(1)
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text("@\(response.responder.username)")
+                            .font(.appSubheadlineSemibold).foregroundStyle(Color.vText).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(MessageTime.ago(MessageTime.parse(response.createdAt)))
+                            .font(.appCaption).foregroundStyle(Color.vText3).monospacedDigit()
+                    }
                     if let preview = response.messagePreview, !preview.isEmpty {
-                        Text(preview).font(.appCaption).foregroundStyle(Color.vText3).lineLimit(1)
+                        Text(preview)
+                            .font(.appCaption).foregroundStyle(Color.vText2)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
                     }
                 }
-                Spacer(minLength: 0)
-                LucideIcon(.messageCircle, .md).foregroundStyle(Color.vText3)
             }
-            .padding(.vertical, 9)
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .padding(.vertical, 12)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .disabled(response.convoId == nil)
     }
+}
 
-    /// Shimmer bone colour for the loading placeholders.
-    private var bone: Color { Color.white.opacity(0.08) }
+// MARK: - Comments
 
-    /// Placeholder rows shown while responses load.
-    var responsesSkeleton: some View {
-        VStack(spacing: 18) {
-            ForEach(0 ..< 2, id: \.self) { _ in
-                HStack(spacing: 11) {
-                    Circle().fill(bone).frame(width: 38, height: 38)
-                    VStack(alignment: .leading, spacing: 6) {
-                        RoundedRectangle(cornerRadius: 5).fill(bone).frame(width: 130, height: 12)
-                        RoundedRectangle(cornerRadius: 5).fill(bone).frame(width: 90, height: 10)
+private extension ListingDetailScreen {
+    var commentsSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            sectionHeading("Comments", count: listing.commentCount ?? viewModel.comments.count)
+                .padding(.bottom, -8)
+
+            if viewModel.currentUserId != nil {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        AvatarView(urlString: myAvatarUrl, name: myInitial, size: 32)
+                        composerCapsule(
+                            text: $viewModel.commentText,
+                            placeholder: "Add a comment",
+                            field: .comment
+                        ) { Task { await viewModel.postComment() } }
                     }
-                    Spacer(minLength: 0)
+                    if viewModel.replyingTo == nil, let error = viewModel.commentError {
+                        ErrorBanner(error)
+                    }
+                }
+            }
+
+            if !viewModel.commentsLoaded {
+                SkeletonRows(count: 3, thumb: .circle(size: 32), horizontalPadding: 0)
+            } else if viewModel.comments.isEmpty {
+                Text(viewModel.currentUserId != nil ? "No comments yet. Be the first." : "No comments yet.")
+                    .font(.appCaption).foregroundStyle(Color.vText3)
+            } else {
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(viewModel.comments) { commentRow($0) }
                 }
             }
         }
-        .padding(.vertical, 2)
-        .shimmering()
+        .padding(.top, 20)
+        .animation(.easeOut(duration: 0.18), value: viewModel.replyingTo?.id)
+        .animation(.easeOut(duration: 0.18), value: viewModel.commentError)
     }
 
-    /// Placeholder rows shown while comments load — they resolve in the same
-    /// concurrent pass as the responses skeleton, so both fill in together.
-    var commentsSkeleton: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            ForEach(0 ..< 3, id: \.self) { _ in
-                HStack(alignment: .top, spacing: 11) {
-                    Circle().fill(bone).frame(width: 34, height: 34)
-                    VStack(alignment: .leading, spacing: 6) {
-                        RoundedRectangle(cornerRadius: 5).fill(bone).frame(width: 110, height: 11)
-                        RoundedRectangle(cornerRadius: 5).fill(bone).frame(maxWidth: .infinity).frame(height: 11)
-                        RoundedRectangle(cornerRadius: 5).fill(bone).frame(width: 170, height: 11)
-                    }
+    /// The 40pt field capsule with the send button inside it — grey until
+    /// there's text, then the send accent.
+    func composerCapsule(
+        text: Binding<String>,
+        placeholder: String,
+        field: Field,
+        onCancel: (() -> Void)? = nil,
+        onSend: @escaping () -> Void
+    ) -> some View {
+        let hasText = !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let focused = focusedField == field
+        return HStack(spacing: 6) {
+            TextField("", text: text, prompt: Text(placeholder).foregroundColor(Color.vText3))
+                .font(.appSubheadline)
+                .foregroundStyle(Color.vText)
+                .tint(Color.vText)
+                .focused($focusedField, equals: field)
+                .submitLabel(.send)
+                .onSubmit { if hasText { onSend() } }
+                .onChange(of: text.wrappedValue) { _, new in
+                    if new.count > 1000 { text.wrappedValue = String(new.prefix(1000)) }
                 }
-            }
-        }
-        .padding(.top, 2)
-        .shimmering()
-    }
-
-    /// The comments list — the composer is pinned at the screen bottom
-    /// (`composerBar`), like the expanded player's.
-    @ViewBuilder
-    var commentsContent: some View {
-        if !viewModel.commentsLoaded {
-            commentsSkeleton
-        } else if viewModel.comments.isEmpty {
-            Text("No comments yet — start the conversation.")
-                .font(.appFootnote).foregroundStyle(Color.vText3)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
-        } else {
-            VStack(alignment: .leading, spacing: 16) {
-                ForEach(viewModel.comments) { comment in
-                    VStack(alignment: .leading, spacing: 12) {
-                        commentRow(comment)
-                        if let replies = comment.replies, !replies.isEmpty {
-                            VStack(alignment: .leading, spacing: 12) {
-                                ForEach(replies) { commentRow($0, isReply: true) }
-                            }
-                            // Indent replies under the parent's avatar + gutter.
-                            .padding(.leading, 42)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Bottom comment bar — an `.appBody` field in a rounded pill with the
-    /// gradient send circle. It's a `safeAreaInset` the system lifts over the
-    /// keyboard (so the scroll insets and every comment stays reachable), and it
-    /// clears the tab bar + mini player at rest / hugs the keyboard while typing.
-    var composerBar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // "Replying to @user" chip — shown while the composer is aimed at a
-            // thread; the ✕ clears it back to posting a new top-level comment.
-            if let replyingTo = viewModel.replyingTo {
-                HStack(spacing: 6) {
-                    LucideIcon(.reply, .xs).foregroundStyle(Color.vText3)
-                    Text("Replying to @\(replyingTo.user.username)")
-                        .font(.appCaption2Medium).foregroundStyle(Color.vText2)
-                        .lineLimit(1)
-                    Spacer(minLength: 4)
-                    Button { viewModel.replyingTo = nil } label: {
-                        LucideIcon(.x, .xs).foregroundStyle(Color.vText3)
-                            .frame(width: 24, height: 24)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 14)
-                .transition(.opacity)
-            }
-
-            composerRow
-        }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.top, 10)
-        // Clear the floating tab bar + mini player at rest; while the keyboard
-        // is up that chrome is behind it, so hug the keyboard instead. Driven by
-        // `composerActive`, which ALSO hides the tab bar + mini player — all in
-        // one keyboard-triggered transaction below, so nothing bounces.
-        .padding(.bottom, conversationState.composerActive ? 10 : bottomChromeInset)
-        .background {
-            Color.vBar
-                .overlay(alignment: .top) {
-                    Rectangle().fill(Color.vBorder).frame(height: 0.5)
-                }
-                // Bleed DOWNWARD only (behind the keyboard / home indicator),
-                // like the chat input bar — ignoring all edges made the fill
-                // fail to reach the bottom mid-dismiss, leaving a dark gap.
-                .ignoresSafeArea(edges: .bottom)
-        }
-        .animation(.easeOut(duration: 0.22), value: canPostComment)
-        .animation(.easeOut(duration: 0.2), value: viewModel.replyingTo?.id)
-        // SCOPED animation for the composer's clearance change (and, via the
-        // shared flag, the tab-bar / mini-player hide). Two rules that killed the
-        // bounce: (1) NEVER wrap `composerActive` in `withAnimation` in the
-        // keyboard handler — it merges with the system keyboard animation and
-        // overshoots; a scoped `.animation(value:)` stays decoupled. (2) Use a
-        // SLOW-START curve (easeInOut). The keyboard HIDES with a slow start
-        // (ease-in); a fast-start easeOut here grows the 60pt clearance quicker
-        // than the keyboard begins descending, so the pill hops UP ~50pt before
-        // it falls (the tiny residual spring). easeInOut keeps the padding still
-        // until the keyboard commits → monotonic both ways.
-        .animation(.easeInOut(duration: 0.25), value: conversationState.composerActive)
-        // Toggle the shared flag PLAINLY (no withAnimation). Gated on our own
-        // field so a presented sheet's keyboard never moves this page.
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            guard commentFocused else { return }
-            conversationState.composerActive = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            conversationState.composerActive = false
-        }
-    }
-
-    /// The avatar-pill field + gradient send circle (the row the "Replying to"
-    /// chip sits above).
-    var composerRow: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            // Your avatar + the field share one pill — the expanded player's
-            // composer look.
-            HStack(alignment: .center, spacing: 10) {
-                myAvatar
-
-                TextField("", text: $viewModel.commentText, prompt: Text(viewModel.replyingTo == nil ? "Add a comment…" : "Add a reply…").foregroundColor(Color.vText3), axis: .vertical)
-                    .font(.appBody)
-                    .foregroundStyle(.white)
-                    .tint(.white)
-                    .lineLimit(1 ... 4)
-                    .focused($commentFocused)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-
-            // Same send button as chat / track comments: accent-gradient circle with
-            // an up-arrow that scale-fades in once there's something to post.
-            if canPostComment || viewModel.isPostingComment {
-                Button {
-                    commentFocused = false
-                    Task { await viewModel.postComment() }
-                } label: {
-                    Group {
-                        if viewModel.isPostingComment {
-                            ProgressView().tint(.white).controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundStyle(.white)
-                        }
-                    }
-                    // Exactly the chat / track-comment send button (32pt circle).
-                    .frame(width: 32, height: 32)
-                    .background(LinearGradient.sendAccent, in: Circle())
+            if let onCancel {
+                Button(action: onCancel) {
+                    LucideIcon(.x, .sm)
+                        .foregroundStyle(Color.vText4)
+                        .frame(width: 28, height: 28)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .transition(.scale.combined(with: .opacity))
-                .padding(.bottom, 5) // optically centred against the pill's first line
             }
+            CircleIconButton(
+                icon: .send,
+                variant: hasText ? .send : .secondary,
+                busy: viewModel.isPostingComment && focused
+            ) {
+                guard hasText else { return }
+                onSend()
+            }
+            .opacity(hasText ? 1 : 0.6)
         }
+        .padding(.leading, 16)
+        .padding(.trailing, 4)
+        .frame(height: 40)
+        .background(focused ? Color.vFieldFocus : Color.vField, in: Capsule())
+        .animation(.easeOut(duration: 0.15), value: hasText)
     }
 
-    /// Clearance for the floating tab bar (+ mini player when a track plays).
-    var bottomChromeInset: CGFloat { 60 + playerController.miniPlayerAllowance }
-
-    /// Signed-in user's 28pt avatar in the composer pill — identical styling
-    /// to the player composer's (initial-letter fallback included).
-    var myAvatar: some View {
-        AvatarView(urlString: myAvatarUrl, name: myInitial, size: 28)
-    }
-
-    var canPostComment: Bool {
-        !viewModel.commentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !viewModel.isPostingComment
-    }
-
-    func commentRow(_ comment: ApiListingComment, isReply: Bool = false) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+    /// `AnyView`: the row nests its replies by calling itself, which an opaque
+    /// return type can't express.
+    func commentRow(_ comment: ApiListingComment, isReply: Bool = false) -> AnyView {
+        AnyView(HStack(alignment: .top, spacing: 12) {
             Button { router.navigateToProfile(userId: comment.user.userId) } label: {
-                avatar(comment.user, size: isReply ? 24 : 30)
+                AvatarView(urlString: comment.user.profileImageUrl, name: comment.user.username, size: 32)
             }
             .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
                     Button { router.navigateToProfile(userId: comment.user.userId) } label: {
                         Text("@\(comment.user.username)")
-                            .font(.appLabel).foregroundStyle(.white.opacity(0.7))
+                            .font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
                     }
                     .buttonStyle(.plain)
-                    Text(MessageTime.agoLong(iso: comment.createdAt))
-                        .font(.appCaption2).foregroundStyle(.white.opacity(0.3))
+                    Text(MessageTime.ago(MessageTime.parse(comment.createdAt)))
+                        .font(.appCaption).foregroundStyle(Color.vText3).monospacedDigit()
                 }
-                ExpandableText(comment.content)
-
-                // Only top-level comments carry a reply affordance (one level
-                // of nesting); tapping it aims the composer at this thread.
-                if !isReply {
-                    Button {
-                        viewModel.startReply(to: comment)
-                        commentFocused = true
-                    } label: {
-                        Text("Reply")
-                            .font(.appCaption2Medium)
-                            .foregroundStyle(.white.opacity(0.5))
-                    }
-                    .buttonStyle(.plain)
+                ExpandableText(comment.content, font: .appSubheadline, textColor: .vText2)
                     .padding(.top, 2)
+
+                commentActions(comment, isReply: isReply)
+
+                if !isReply, viewModel.replyingTo?.commentId == comment.commentId {
+                    VStack(alignment: .leading, spacing: 10) {
+                        composerCapsule(
+                            text: $viewModel.replyText,
+                            placeholder: "Reply to @\(comment.user.username)",
+                            field: .reply,
+                            onCancel: { viewModel.toggleReply(to: comment) }
+                        ) { Task { await viewModel.postReply() } }
+                        if let error = viewModel.commentError { ErrorBanner(error) }
+                    }
+                    .padding(.top, 12)
+                    .transition(.opacity)
+                }
+
+                // Replies — one level, oldest first, under the text column.
+                if !isReply, let replies = comment.replies, !replies.isEmpty {
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(replies) { commentRow($0, isReply: true) }
+                    }
+                    .padding(.top, 16)
                 }
             }
-
             Spacer(minLength: 0)
         }
         .contentShape(.rect)
-        // Lift the held comment while its options sheet is open (matches track comments).
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.white.opacity(commentOptions?.id == comment.id ? 0.09 : 0))
-                .padding(.horizontal, -10)
-                .padding(.vertical, -8)
-        )
-        .animation(.easeOut(duration: 0.05), value: commentOptions?.id)
-        // Long-press to open options (report / delete your own) — same as track.
+        // Long-press for the options sheet (copy / delete / report).
         .onLongPressGesture(minimumDuration: 0.35) {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             commentOptions = comment
+        })
+    }
+
+    /// Just Reply (top-level, signed in). Copy / Delete / Report live behind
+    /// the long-press options sheet, like track comments.
+    @ViewBuilder
+    func commentActions(_ comment: ApiListingComment, isReply: Bool) -> some View {
+        if !isReply, viewModel.currentUserId != nil {
+            Button {
+                viewModel.toggleReply(to: comment)
+                if viewModel.replyingTo != nil { focusedField = .reply }
+            } label: {
+                actionLabel(.reply, "Reply")
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
         }
     }
 
-    func avatar(_ author: ApiListingAuthor, size: CGFloat) -> some View {
-        AvatarView(urlString: author.profileImageUrl, name: author.username, size: size)
+    func actionLabel(_ icon: LucideIcon.Name, _ title: String) -> some View {
+        HStack(spacing: 5) {
+            LucideIcon(icon, .sm)
+            Text(title).font(.appCaption.weight(.semibold))
+        }
+        .foregroundStyle(Color.vText2)
+        .contentShape(.rect)
     }
 }
 
@@ -814,8 +694,9 @@ private extension ListingDetailScreen {
     }
 }
 
-/// The "Respond to @author" composer sheet.
-private struct RespondSheet: View {
+/// The "Respond to @author" composer sheet (web `ListingRespondModal`) — the
+/// listing page's Respond, and the Home cards' reply icon.
+struct RespondSheet: View {
     let author: ApiListingAuthor
     let listingTitle: String
     let isSending: Bool
@@ -827,55 +708,89 @@ private struct RespondSheet: View {
     @State private var error: String?
     @FocusState private var focused: Bool
 
+    private let maxLength = 2000
+
     var body: some View {
-        // The app's standard sheet anatomy — same header/field/CTA as the
-        // report and playlist/folder form sheets, sized to its rows.
         VStack(alignment: .leading, spacing: 0) {
-            // The author's avatar as the leading tile (SheetHeader's
-            // custom-leading form) instead of a glyph.
-            SheetHeader(title: "Respond to @\(author.username)", subtitle: listingTitle, onClose: { dismiss() }) {
-                authorAvatar
+            SheetHeader(title: "Respond to @\(author.username)", onClose: { dismiss() }) {
+                AvatarView(urlString: author.profileImageUrl, name: author.username, size: 36)
             }
 
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(listingTitle)
+                        .font(.appSubheadlineSemibold).foregroundStyle(Color.vText).lineLimit(1)
+                    Text("Your message starts a DM with the poster. Introduce yourself and what you bring.")
+                        .font(.appCaption).foregroundStyle(Color.vText3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 TextField(
                     "",
                     text: $message,
                     prompt: Text("Hey @\(author.username), I'd love to work on this…").foregroundColor(Color.vText3),
                     axis: .vertical
                 )
-                .font(.appBody)
-                .foregroundStyle(.white)
-                .tint(.white)
-                .lineLimit(4 ... 8)
+                .font(.appSubheadline)
+                .foregroundStyle(Color.vText)
+                .tint(Color.vText)
+                .lineLimit(5, reservesSpace: true)
                 .focused($focused)
+                .disabled(isSending)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 13)
-                .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.vBorder))
-
-                if let error {
-                    ErrorBanner(error)
+                .padding(.vertical, 12)
+                .background(focused ? Color.vFieldFocus : Color.vField,
+                            in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                .onChange(of: message) { _, new in
+                    if new.count > maxLength { message = String(new.prefix(maxLength)) }
                 }
 
-                PrimaryButton("Send Message", busy: isSending, enabled: canSend) {
-                    Task { error = await onSend(message) }
+                HStack {
+                    Text(error ?? "Share a link, your style, availability.")
+                        .foregroundStyle(error == nil ? Color.vText3 : Color.vError)
+                    Spacer(minLength: 8)
+                    Text("\(message.count)/\(maxLength)").monospacedDigit().foregroundStyle(Color.vText3)
                 }
-                .disabled(!canSend)
-                .animation(.easeOut(duration: 0.15), value: canSend)
+                .font(.appCaption)
+
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    Button("Cancel") { dismiss() }
+                        .font(.appSubheadlineMedium)
+                        .foregroundStyle(Color.vText2)
+                        .padding(.horizontal, 16)
+                        .frame(height: 36)
+                        .buttonStyle(.plain)
+                        .disabled(isSending)
+                    Button { Task { error = await onSend(message) } } label: {
+                        HStack(spacing: 8) {
+                            if isSending {
+                                ProgressView().tint(Color.vOnColor).controlSize(.small)
+                            } else {
+                                LucideIcon(.messageSquare, .sm)
+                            }
+                            Text("Send").font(.appSubheadlineSemibold)
+                        }
+                        .foregroundStyle(Color.vOnColor)
+                        .padding(.horizontal, 20)
+                        .frame(height: 36)
+                        .background(Color.vAccent, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
+                    .opacity(canSend ? 1 : 0.4)
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 14)
+            Spacer(minLength: 0)
         }
-        // keyboardSafe: measured once at rest then grow-only — fits the content
-        // exactly (no dead space) while keyboard compression can never re-target
-        // the detent (the AttributeGraph-cycle hang this sheet used to hit).
-        .selfSizedDetent(keyboardSafe: true)
+        // Fixed .large detent: a measured detent here hit the AttributeGraph-
+        // cycle hang, and a short .height one got stretched + sprung to the
+        // top when the keyboard opened. Full height doesn't move.
+        .presentationDetents([.large])
         .sheetBackground()
-        // Focus only after the present animation settles (the search-reveal
-        // pattern) — raising the keyboard mid-presentation stacks two layout
-        // storms into the same frames.
+        // Focus only after the present animation settles.
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focused = true }
         }
@@ -884,49 +799,15 @@ private struct RespondSheet: View {
     var canSend: Bool {
         !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSending
     }
-
-    /// 36pt author avatar — the same tile size as the glyph headers use.
-    private var authorAvatar: some View {
-        AvatarView(urlString: author.profileImageUrl, name: author.username, size: 36)
-    }
-}
-
-// MARK: - Reusable pieces
-
-private extension ListingDetailScreen {
-
-    /// Paragraph text in the app's standard body style (profile bio, legal docs).
-    /// Description in the same size as the comment text here and in the
-    /// expanded player (`appCalloutRegular`), so the page reads as one voice.
-    func bodyText(_ text: String) -> some View {
-        Text(text)
-            .font(.appCalloutRegular).foregroundStyle(Color.white.opacity(0.92))
-            .lineSpacing(3)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    func chipRow(_ items: [String]) -> some View {
-        ChipFlowLayout(spacing: 8, lineSpacing: 8) {
-            ForEach(items, id: \.self) { tag in
-                Text(tag)
-                    .font(.appLabel).foregroundStyle(.black)
-                    .padding(.horizontal, 11).padding(.vertical, 6)
-                    .background(Color.white, in: Capsule())
-            }
-        }
-    }
-
 }
 
 // MARK: - Comment options sheet
 
-/// Options for a listing comment — the same `SheetHeader` + rows as the track
-/// comment sheet (`CommentOptionsSheet`), so both read identically. (Reply is an
-/// inline affordance on the row, not a sheet option.)
+/// Long-press options for a listing comment — the same `SheetHeader` + rows as
+/// the track comment sheet.
 private struct ListingCommentOptionsSheet: View {
     let comment: ApiListingComment
-    let isOwn: Bool
+    let canDelete: Bool
     let onReport: () -> Void
     let onDelete: () -> Void
 
@@ -945,13 +826,13 @@ private struct ListingCommentOptionsSheet: View {
                     UIPasteboard.general.string = comment.content
                     dismiss()
                 }
-                if isOwn {
+                if canDelete {
                     OptionSheetRow(icon: .trash2, title: "Delete comment", tint: .vError) {
                         dismiss()
                         onDelete()
                     }
                 } else {
-                    OptionSheetRow(icon: .triangleAlert, title: "Report") {
+                    OptionSheetRow(icon: .flag, title: "Report") {
                         dismiss()
                         onReport()
                     }
@@ -964,3 +845,89 @@ private struct ListingCommentOptionsSheet: View {
     }
 }
 
+/// Close / Reopen confirmation: what it means, Cancel + the action. The
+/// action button spins while the request runs; success closes the sheet
+/// (with a success haptic), failure stays here with the reason.
+private struct ListingStatusSheet: View {
+    /// Captured when opened, so the copy can't flip mid-request.
+    let closing: Bool
+    let onConfirm: () async -> Bool
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var busy = false
+    @State private var failed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(
+                icon: closing ? .lock : .lockOpen,
+                title: closing ? "Close this listing?" : "Reopen this listing?",
+                subtitle: nil
+            ) { dismiss() }
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text(closing
+                     ? "People won't be able to respond anymore. Existing conversations stay, and you can reopen it anytime."
+                     : "It goes back on the board and people can respond to it again.")
+                    .font(.appSubheadline)
+                    .foregroundStyle(Color.vText2)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if failed {
+                    Text(closing ? "Couldn't close the listing. Try again." : "Couldn't reopen the listing. Try again.")
+                        .font(.appFootnoteMedium)
+                        .foregroundStyle(Color.vError)
+                        .transition(.opacity)
+                }
+
+                HStack(spacing: 10) {
+                    SecondaryButton("Cancel", size: .inline) { dismiss() }
+                        .disabled(busy)
+                    actionButton
+                }
+                .padding(.top, 4)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 20)
+        }
+        .animation(.smooth(duration: 0.25), value: failed)
+        .selfSizedDetent()
+        .sheetBackground()
+        .interactiveDismissDisabled(busy)
+    }
+
+    /// Close = danger-soft red; Reopen = the ink primary.
+    private var actionButton: some View {
+        Button {
+            guard !busy else { return }
+            busy = true
+            failed = false
+            Task {
+                let ok = await onConfirm()
+                busy = false
+                if ok {
+                    Haptics.success()
+                    dismiss()
+                } else {
+                    failed = true
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                if busy {
+                    ProgressView().tint(closing ? Color.vError : Color.vOnInverse).controlSize(.small)
+                } else {
+                    LucideIcon(closing ? .lock : .lockOpen, .sm)
+                }
+                Text(closing ? "Close listing" : "Reopen listing").font(.appSubheadlineSemibold)
+            }
+            .foregroundStyle(closing ? Color.vError : Color.vOnInverse)
+            .frame(maxWidth: .infinity)
+            .frame(height: 42)
+            .background(closing ? Color.vDangerSoft : Color.vInverse, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}

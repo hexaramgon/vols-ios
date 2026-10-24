@@ -12,7 +12,6 @@ import SwiftUI
 
 struct PlayerControls: View {
     @Environment(PlayerController.self) var model
-    @Environment(Dependencies.self) private var dependencies
     /// Opens (toggles) the comments panel — wired from the now-playing pager.
     var onComment: () -> Void = {}
     /// Shared comments state — the action row morphs into this comment input bar.
@@ -21,28 +20,21 @@ struct PlayerControls: View {
     var composerNamespace: Namespace.ID?
     /// True while comments are open — swaps the action row for the input bar.
     var commentsOpen: Bool = false
-    /// True for a full-bleed portrait video: drops the transport down to sit just
-    /// above the bottom bar (TikTok-style). Off (default) keeps it floating up
-    /// under the artwork for audio / landscape video. Animated when it changes.
-    var fullBleed: Bool = false
-    /// Minimized (immersive video) — drops the title, and the bottom action row,
-    /// leaving just a compact transport (scrubber + playback buttons) at the bottom.
+    /// Full-screen mode — drops the transport buttons and the bottom action row,
+    /// leaving the title + scrubber at the bottom.
     var minimized: Bool = false
+    /// Reports how far the title drops when minimized (see `titleDrop`).
+    var onTitleDrop: (CGFloat) -> Void = { _ in }
 
-    /// Displayed comment count. Holds the last known value through a track switch
-    /// (when `trackDetail` briefly goes nil) so the pill doesn't blank out and
-    /// resize — it just rolls to the new count.
     /// Measured transport height, so the "raised" (non-full-bleed) inset can be
     /// computed as "fill the rest of the space above the bottom bar".
     @State private var transportHeight: CGFloat = 190
     /// Debounces the height measurement — see `transportStack`.
     @State private var measureWork: DispatchWorkItem?
-    // Track "…" options (share / report song / report + block artist) — App Store 1.2.
+    /// Track "…" options sheet (see PlayerTrackOptions.swift).
     @State private var showTrackOptions = false
-    @State private var showReportSong = false
-    @State private var showReportArtist = false
-    @State private var showBlockArtist = false
-    @State private var pendingPlayerAction: PlayerTrackAction?
+    /// Measured transport-buttons height (they leave the stack when minimized).
+    @State private var buttonsHeight: CGFloat = 0
 
     var body: some View {
         GeometryReader { geo in
@@ -58,7 +50,11 @@ struct PlayerControls: View {
                         // frame, and writing the height back mid-flight retargets
                         // the position animation each frame — visible hitching.
                         measureWork?.cancel()
-                        guard h > 0, abs(h - transportHeight) > 1 else { return }
+                        // Only the FULL transport's height feeds the raised
+                        // inset — the compact (minimized) one is shorter, and
+                        // recording it made the restore aim too high, then
+                        // re-measure and jump. Minimized uses a fixed inset.
+                        guard !minimized, h > 0, abs(h - transportHeight) > 1 else { return }
                         let work = DispatchWorkItem { transportHeight = h }
                         measureWork = work
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
@@ -75,8 +71,11 @@ struct PlayerControls: View {
                     .opacity(minimized ? 0 : 1)
                     .allowsHitTesting(!minimized)
             }
-            .animation(.smooth(duration: 0.4), value: fullBleed)
             .animation(.easeInOut(duration: 0.3), value: minimized)
+            .onChange(of: titleDrop(controlsHeight: geo.size.height, spacing: spacing), initial: true) { _, drop in
+                guard !minimized, !commentsOpen, buttonsHeight > 0 else { return }
+                onTitleDrop(drop)
+            }
         }
         .sheet(isPresented: Bindable(model).showingEffectsSheet) {
             AudioEffectsSheet()
@@ -91,13 +90,23 @@ struct PlayerControls: View {
             trackInfo
 
             TimingIndicator(spacing: spacing, minimized: minimized)
+                // Timed comments: a dot on the track at each one.
+                .overlay(alignment: .topLeading) {
+                    TimedCommentsOverlay(model: commentsModel)
+                }
                 .padding(.top, spacing)
                 .padding(.horizontal, ViewConst.playerCardPaddings)
                 .padding(.horizontal, -ElasticSliderConfig.playbackProgress.growth)
 
-            // Smaller transport buttons when minimized.
-            PlayerButtons(compact: minimized)
-                .padding(.horizontal, ViewConst.playerCardPaddings)
+            // Minimized (full-screen video): the transport buttons go — tracks
+            // change by swiping, tap restores the controls. They fade while the
+            // title + scrubber glide down into the space they leave.
+            if !minimized {
+                PlayerButtons()
+                    .padding(.horizontal, ViewConst.playerCardPaddings)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { buttonsHeight = $0 }
+                    .transition(.opacity)
+            }
         }
     }
 }
@@ -108,15 +117,23 @@ private extension CGSize {
 
 private extension PlayerControls {
     /// How far the transport sits from the bottom.
-    /// - Low (full-bleed video, or comments open): reserve just the bottom-bar
+    /// - Low (comments open): reserve just the bottom-bar
     ///   footprint so it sits right above it.
     /// - High (default): fill the space below so it pins up under the artwork.
     func transportInset(controlsHeight: CGFloat) -> CGFloat {
         // Minimized: no bottom bar, so the compact transport sits a touch above the
         // home indicator (tighter than the full layout).
         if minimized { return max(ViewConst.safeAreaInsets.bottom, 12) + 2 }
-        if fullBleed || commentsOpen { return bottomBarFootprint }
+        if commentsOpen { return bottomBarFootprint }
         return max(bottomBarFootprint, controlsHeight - transportHeight)
+    }
+
+    /// How far the title moves down between the full and minimized layouts:
+    /// the change in bottom inset plus the buttons (and their gap) leaving.
+    func titleDrop(controlsHeight: CGFloat, spacing: CGFloat) -> CGFloat {
+        let fullInset = max(bottomBarFootprint, controlsHeight - transportHeight)
+        let minimizedInset = max(ViewConst.safeAreaInsets.bottom, 12) + 2
+        return fullInset - minimizedInset + buttonsHeight + spacing
     }
 
     /// Collapsed comment-composer footprint (top pad + avatar pill + bottom inset).
@@ -183,7 +200,7 @@ private extension PlayerControls {
     var commentsButton: some View {
         Button { onComment() } label: {
             Text("Comments")
-                .font(.appCallout)
+                .font(.appSubheadlineMedium)
                 .foregroundStyle(Color(palette.opaque))
                 .padding(.horizontal, 20)
                 .padding(.vertical, 9)
@@ -203,15 +220,20 @@ private extension PlayerControls {
                     let cfg = MarqueeText.Config(leftFade: 0, rightFade: fade)
                     let title = model.display.title.isEmpty ? " " : model.display.title
                     let subtitle = model.display.subtitle.isEmpty ? " " : model.display.subtitle
+                    // The app's title + byline: page-title type, then the
+                    // artist as "@handle" in the secondary ink (as on every
+                    // row and card, and the web player's hero).
                     MarqueeText(title, config: cfg)
                         .transformEffect(.identity)
                         .font(.appTitle2)
-                        .foregroundStyle(Color(palette.opaque))
+                        .foregroundStyle(Color.vText)
                         .playerOverlayShadow(overlayShadow)
-                    MarqueeText(subtitle, config: cfg)
+                    MarqueeText(handle(subtitle), config: cfg)
                         .transformEffect(.identity)
-                        .font(.appBodyLarge)
-                        .foregroundStyle(.white)
+                        .font(.appSubheadline)
+                        // Same secondary ink in both modes (the overlay shadow
+                        // keeps it readable over bare video).
+                        .foregroundStyle(Color.vText2)
                         .playerOverlayShadow(overlayShadow)
                         .contentShape(.rect)
                         .onTapGesture {
@@ -223,9 +245,10 @@ private extension PlayerControls {
                         }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                // Cross-fade title + artist together with the cover on track change.
+                // Title + artist fade up (6pt) on track change, with the cover's
+                // cross-fade — the web hero's 0.3s title entrance.
                 .id(model.display)
-                .transition(.opacity)
+                .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 6)), removal: .opacity))
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .animation(.smooth(duration: 0.3), value: model.display)
@@ -236,38 +259,25 @@ private extension PlayerControls {
             // them re-flowed the title as a folder queue stepped from a track to a
             // file, which is exactly the movement this player is trying not to make.
             HStack(spacing: 18) {
-                saveButton
+                PlayerCreditsFacepile()
                 fxButton
             }
-            .padding(.trailing, ViewConst.playerCardPaddings)
+            // The fx glyph is centred in a 32pt circle; pull the pair in so its
+            // centre lands on the same column as the strip's Playlist /
+            // Workspace icons and the repeat button (26pt glyphs on the inset).
+            .padding(.trailing, ViewConst.playerCardPaddings - 3)
             .opacity(model.currentFileId == nil ? 1 : 0)
             .allowsHitTesting(model.currentFileId == nil)
         }
-        .sheet(isPresented: $showTrackOptions, onDismiss: runPendingPlayerAction) { trackOptionsSheet }
-        .sheet(isPresented: $showReportSong) {
-            if let id = optionsTrackId {
-                ReportSheet(targetType: .track, targetId: id, subject: model.display.title)
-            }
-        }
-        .sheet(isPresented: $showReportArtist) {
-            if let id = optionsArtistId {
-                ReportSheet(targetType: .user, targetId: id, subject: "@\(optionsArtistName)")
-            }
-        }
-        .blockUserDialog(username: optionsArtistName, isPresented: $showBlockArtist) {
-            blockCurrentArtist()
-        }
+        .playerTrackOptions(isPresented: $showTrackOptions)
     }
 
-    /// Save (bookmark) button — to the left of the effects button.
-    var saveButton: some View {
-        Button {
-            Task { await model.toggleSave() }
-        } label: {
-            LucideIcon(model.isSaved ? .bookmarkFill : .bookmark, .xl)
-                .foregroundStyle(.white)
-                .playerOverlayShadow(overlayShadow)
-        }
+    /// "@name" for a username (they never contain spaces); anything else
+    /// (a stream label, the blank placeholder) as-is.
+    func handle(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.contains(" "), !trimmed.hasPrefix("@") else { return name }
+        return "@\(trimmed)"
     }
 
     /// Audio-effects button — same `SlidersHorizontal` icon the web app uses.
@@ -276,66 +286,14 @@ private extension PlayerControls {
         return Button {
             model.showingEffectsSheet = true
         } label: {
-            LucideIcon(.slidersHorizontal, .xl)
-                .foregroundStyle(isActive ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(Color.white))
-                .playerOverlayShadow(overlayShadow)
-        }
-    }
-
-    // MARK: - Track options ("…")
-
-    private enum PlayerTrackAction { case viewArtist, share, reportSong, reportArtist, block }
-
-    private var optionsTrackId: String? { model.state.currentMediaID?.value }
-    private var optionsArtistId: String? { model.trackDetail?.artist?.userId }
-    private var optionsArtistName: String {
-        model.trackDetail?.artist?.username ?? (model.display.subtitle.isEmpty ? "artist" : model.display.subtitle)
-    }
-
-    /// Slide-up options sheet — matches the folder / listing / track sheets.
-    private var trackOptionsSheet: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SheetHeader(icon: .music, title: model.display.title, subtitle: "@\(optionsArtistName)") {
-                showTrackOptions = false
-            }
-            VStack(spacing: 0) {
-                if optionsArtistId != nil {
-                    OptionSheetRow(icon: .user, title: "View artist") { pendingPlayerAction = .viewArtist; showTrackOptions = false }
-                }
-                OptionSheetRow(icon: .share2, title: "Share track") { pendingPlayerAction = .share; showTrackOptions = false }
-                OptionSheetRow(icon: .flag, title: "Report song") { pendingPlayerAction = .reportSong; showTrackOptions = false }
-                if optionsArtistId != nil {
-                    OptionSheetRow(icon: .flag, title: "Report artist") { pendingPlayerAction = .reportArtist; showTrackOptions = false }
-                    OptionSheetRow(icon: .ban, title: "Block artist", tint: .vDestructive) { pendingPlayerAction = .block; showTrackOptions = false }
-                }
-            }
-            .padding(.top, 6)
-        }
-        .selfSizedDetent()
-        .sheetBackground()
-    }
-
-    private func runPendingPlayerAction() {
-        guard let action = pendingPlayerAction else { return }
-        pendingPlayerAction = nil
-        switch action {
-        case .viewArtist:   if let id = optionsArtistId { model.pendingProfileNavigation = id }
-        case .share:        ShareActions.shareTrack(title: model.display.title, trackId: model.state.currentMediaID?.value)
-        case .reportSong:   showReportSong = true
-        case .reportArtist: showReportArtist = true
-        case .block:        showBlockArtist = true
-        }
-    }
-
-    private func blockCurrentArtist() {
-        guard let id = optionsArtistId else { return }
-        Task {
-            try? await dependencies.supabaseService.blockUser(id)
-            // The playing track belongs to the artist just blocked — stop and
-            // clear the player entirely (same teardown as sign-out; the player
-            // overlay unmounts once the display empties).
-            dependencies.mediaPlayer.reset()
-            model.resetForSignOut()
+            // Engaged (any non-default edit) = the web hero pills' selected
+            // state: white with a black glyph, not an accent tint.
+            LucideIcon(.slidersHorizontal, isActive ? .lg : .xl)
+                .foregroundStyle(isActive ? Color.black : Color.white)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(.white).opacity(isActive ? 1 : 0))
+                .playerOverlayShadow(isActive ? .off : overlayShadow)
+                .animation(.easeInOut(duration: 0.18), value: isActive)
         }
     }
 }

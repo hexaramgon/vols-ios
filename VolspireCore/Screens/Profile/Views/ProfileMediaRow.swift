@@ -45,28 +45,34 @@ struct ProfileMediaRow<Trailing: View>: View {
         HStack(spacing: 14) {
             ArtworkView(.placeholder(coverURL, name: title), cornerRadius: 8)
                 .frame(width: 44, height: 44)
+                .coverShadow()
                 .grayscale(dimmed ? 1 : 0)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
+                    // Same type as the Home chart rows (`ChartRow`).
                     Text(title)
-                        .font(.appFont.trackTitle)
-                        .foregroundStyle(isActive ? .white : .white.opacity(0.92))
+                        .font(.appSubheadlineMedium)
+                        .foregroundStyle(Color.vText)
                         .lineLimit(1)
                     if lock {
-                        Image(systemName: "lock.fill").font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
+                        LucideIcon(.lock, .xs).foregroundStyle(Color.vText3)
                     }
                 }
                 Text(subtitle)
-                    .font(.appFont.trackSubtitle)
-                    .foregroundStyle(Color.vText3)
+                    .font(.appFootnote)
+                    .foregroundStyle(Color.vText2)
                     .lineLimit(1)
             }
 
             Spacer(minLength: 8)
 
             if isActive {
-                EqualizerBars(heights: [7, 13, 9], barWidth: 2.5, spacing: 2, tint: .white.opacity(0.9))
+                // Loops only while actually playing; `.id` tears the
+                // repeatForever down on pause (repeatForever identity rule).
+                let playing = viewModel.mediaActivity(MediaID(id)) == .playing
+                EqualizerBars(heights: [7, 13, 9], barWidth: 2.5, spacing: 2, tint: Color.vText, isAnimating: playing)
+                    .id(playing)
                     .frame(width: 14, height: 13)
                     .padding(.trailing, 2)
             }
@@ -76,7 +82,7 @@ struct ProfileMediaRow<Trailing: View>: View {
         .padding(.trailing, 4)
         .padding(.vertical, 10)
         .background(
-            isActive ? Color.white.opacity(0.05) : .clear,
+            isActive ? Color.vRowActive : .clear,
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .contentShape(.rect)

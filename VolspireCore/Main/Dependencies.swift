@@ -69,6 +69,7 @@ extension Dependencies {
         mediaPlayer.reset()
         playerController.resetForSignOut()
         Task { await mediaState.removeAll() }
+        Task { await StorageService.clearSignedUrlMemo() }
         libraryStore.resetForSignOut()
         workspaceStore.resetForSignOut()
         socialStore.resetForSignOut()

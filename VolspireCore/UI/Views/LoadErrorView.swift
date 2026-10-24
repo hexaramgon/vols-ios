@@ -18,15 +18,19 @@ struct LoadErrorView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            LucideIcon(icon, .hero).foregroundStyle(Color.vText3).padding(.bottom, 2)
-            Text(title).font(.appHeadline).foregroundStyle(.white)
+            LucideIcon(icon, .xxl)
+                .foregroundStyle(Color.vText3)
+                .frame(width: 64, height: 64)
+                .background(Color.vSurface, in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+                .padding(.bottom, 2)
+            Text(title).font(.appHeadline).foregroundStyle(Color.vText)
             Text(message)
                 .font(.appCalloutRegular).foregroundStyle(Color.vText2).multilineTextAlignment(.center)
             Button(action: retry) {
                 Text("Try Again")
-                    .font(.appFootnoteSemibold).foregroundStyle(.black)
+                    .font(.appFootnoteSemibold).foregroundStyle(Color.vOnInverse)
                     .padding(.horizontal, 20).padding(.vertical, 10)
-                    .background(Color.white, in: Capsule())
+                    .background(Color.vInverse, in: Capsule())
             }
             .buttonStyle(.plain)
             .padding(.top, 4)
@@ -37,7 +41,7 @@ struct LoadErrorView: View {
 }
 
 /// The app-standard **inline** error banner — a triangle-alert icon + message in
-/// a soft red-950 card. Use for form / sheet / field errors instead of ad-hoc
+/// a soft red-950 card (`vErrorFill`). Use for form / sheet / field errors instead of ad-hoc
 /// red `Text`. (Full-screen "couldn't load" failures use `LoadErrorView`.)
 struct ErrorBanner: View {
     let message: String
@@ -54,11 +58,8 @@ struct ErrorBanner: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .foregroundStyle(Color.vError)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(
-            Color(red: 0.27, green: 0.04, blue: 0.04).opacity(0.45),
-            in: RoundedRectangle(cornerRadius: 12)
-        )
+        .background(Color.vErrorFill, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 }

@@ -9,7 +9,11 @@ import Services
 import SwiftUI
 
 enum Route: Hashable, Equatable {
-    case mediaList(_ items: [Media], listMeta: MediaList.Meta?, showSave: Bool = true)
+    /// `compactHeader`: Library's Saved tracks — the playlist page's header
+    /// with the Saved sleeve instead of the cover-tinted hero.
+    /// `savedTracks`: the user's own Saved tracks (Saved sleeve, @you);
+    /// otherwise a compact header is one of Volspire's own lists (@volspire).
+    case mediaList(_ items: [Media], listMeta: MediaList.Meta?, showSave: Bool = true, compactHeader: Bool = false, savedTracks: Bool = false)
     case profile(_ userId: String)
     case search(_ query: String)
     case notifications
@@ -17,7 +21,9 @@ enum Route: Hashable, Equatable {
     case settings
     case playlists
     case playlist(playlistId: String, title: String)
-    case folderContents(folderId: String, folderName: String)
+    /// `highlight`: an item to scroll to and briefly highlight on arrival
+    /// (an Activity row about a file in this folder).
+    case folderContents(folderId: String, folderName: String, highlight: FolderHighlight? = nil)
     case marketplacePack(ApiMarketplacePack)
     case marketplaceService(ApiMarketplaceService)
     case collabListing(ApiListing)
@@ -27,66 +33,82 @@ enum Route: Hashable, Equatable {
 
 @Observable
 class Router {
-    var path = NavigationPath()
+    /// The tab's back-stack. A typed array (not `NavigationPath`) so the
+    /// router can see what's already open — see `push(_:)`.
+    var path: [Route] = []
 
-    func navigateToMedia(items: [Media], listMeta: MediaList.Meta?, showSave: Bool = true) {
-        path.append(Route.mediaList(items, listMeta: listMeta, showSave: showSave))
+    /// Opens `route` — unless that same screen (same listing, chat, profile,
+    /// folder…) is already in the back-stack, in which case it goes BACK to
+    /// it instead of stacking a copy. Stops loops like chat → listing → chat
+    /// → listing… from growing forever (the Instagram / Marketplace pattern).
+    private func push(_ route: Route) {
+        if let key = route.identity,
+           let existing = path.lastIndex(where: { $0.identity == key }) {
+            let extra = path.count - 1 - existing
+            if extra > 0 { path.removeLast(extra) }
+            return
+        }
+        path.append(route)
+    }
+
+    func navigateToMedia(items: [Media], listMeta: MediaList.Meta?, showSave: Bool = true, compactHeader: Bool = false, savedTracks: Bool = false) {
+        push(Route.mediaList(items, listMeta: listMeta, showSave: showSave, compactHeader: compactHeader, savedTracks: savedTracks))
     }
 
     func navigateToProfile(userId: String) {
-        path.append(Route.profile(userId))
+        push(Route.profile(userId))
     }
 
     func navigateToSearch(query: String) {
-        path.append(Route.search(query))
+        push(Route.search(query))
     }
 
     func navigateToNotifications() {
-        path.append(Route.notifications)
+        push(Route.notifications)
     }
 
     func navigateToMessages() {
-        path.append(Route.messages)
+        push(Route.messages)
     }
 
     func navigateToSettings() {
-        path.append(Route.settings)
+        push(Route.settings)
     }
 
     func navigateToPlaylists() {
-        path.append(Route.playlists)
+        push(Route.playlists)
     }
 
     func navigateToPlaylist(playlistId: String, title: String) {
-        path.append(Route.playlist(playlistId: playlistId, title: title))
+        push(Route.playlist(playlistId: playlistId, title: title))
     }
 
-    func navigateToFolder(folderId: String, folderName: String) {
-        path.append(Route.folderContents(folderId: folderId, folderName: folderName))
+    func navigateToFolder(folderId: String, folderName: String, highlight: FolderHighlight? = nil) {
+        push(Route.folderContents(folderId: folderId, folderName: folderName, highlight: highlight))
     }
 
     func navigateToMarketplacePack(_ pack: ApiMarketplacePack) {
-        path.append(Route.marketplacePack(pack))
+        push(Route.marketplacePack(pack))
     }
 
     func navigateToMarketplaceService(_ service: ApiMarketplaceService) {
-        path.append(Route.marketplaceService(service))
+        push(Route.marketplaceService(service))
     }
 
     func navigateToCollabListing(_ listing: ApiListing) {
-        path.append(Route.collabListing(listing))
+        push(Route.collabListing(listing))
     }
 
     func navigateToConversation(_ conversation: ActiveConversation) {
-        path.append(Route.conversation(conversation))
+        push(Route.conversation(conversation))
     }
 
     func navigateToMessageCategory(title: String, bucket: MessageBucket) {
-        path.append(Route.messageCategory(title: title, bucket: bucket))
+        push(Route.messageCategory(title: title, bucket: bucket))
     }
 
     func popToRoot() {
-        path.removeLast(path.count)
+        path.removeAll()
         rootResetTick += 1
     }
 
@@ -130,6 +152,27 @@ extension View {
 }
 
 extension Route {
+    /// "The same screen" for de-duplicating the back-stack: one key per
+    /// entity (or per singleton screen). nil = always push (lists built from
+    /// arbitrary items, searches).
+    var identity: String? {
+        switch self {
+        case let .profile(userId): "profile:\(userId.lowercased())"
+        case let .playlist(playlistId, _): "playlist:\(playlistId.lowercased())"
+        case let .folderContents(folderId, _, _): "folder:\(folderId.lowercased())"
+        case let .collabListing(listing): "listing:\(listing.listingId.lowercased())"
+        case let .conversation(convo): "conversation:\(convo.convoId.lowercased())"
+        case let .marketplacePack(pack): "pack:\(pack.packId.lowercased())"
+        case let .marketplaceService(service): "service:\(service.serviceId.lowercased())"
+        case let .messageCategory(_, bucket): "messages:\(bucket)"
+        case .notifications: "notifications"
+        case .messages: "messages"
+        case .settings: "settings"
+        case .playlists: "playlists"
+        case .mediaList, .search: nil
+        }
+    }
+
     /// Logical screen name for analytics `page_view` events — the iOS analogue of
     /// the web's pathname.
     var analyticsName: String {
@@ -157,9 +200,21 @@ extension Route {
         case let .profile(userId): userId
         case let .search(query): query
         case let .playlist(playlistId, _): playlistId
-        case let .folderContents(folderId, _): folderId
+        case let .folderContents(folderId, _, _): folderId
         case let .conversation(convo): convo.convoId
         default: nil
         }
     }
+}
+
+/// What a folder page should point at when it opens.
+enum FolderHighlight: Hashable {
+    /// A file in the folder (an upload).
+    case file(String)
+    /// A track added to the folder.
+    case track(String)
+    /// A comment on one of its files — the file is looked up from it.
+    case fileComment(String)
+    /// A file known only by name (the Workspace activity rail's events).
+    case fileNamed(String)
 }

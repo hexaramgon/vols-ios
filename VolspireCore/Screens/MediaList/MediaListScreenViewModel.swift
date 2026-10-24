@@ -15,8 +15,10 @@ import SwiftUI
 
 @Observable @MainActor
 class MediaListScreenViewModel {
-    let items: [Media]
-    let listMeta: MediaList.Meta?
+    /// Settable so a page can fill in after its first frame (the playlist
+    /// page renders its layout immediately, then its tracks land here).
+    private(set) var items: [Media]
+    private(set) var listMeta: MediaList.Meta?
     var playerState: MediaPlayerState = .paused(media: .none)
     var cancellables = Set<AnyCancellable>()
 
@@ -36,6 +38,11 @@ class MediaListScreenViewModel {
     var artwork: URL? { listMeta?.artwork ?? items.first?.meta.artwork }
 
     init(items: [Media], listMeta: MediaList.Meta?) {
+        self.items = items
+        self.listMeta = listMeta
+    }
+
+    func update(items: [Media], listMeta: MediaList.Meta?) {
         self.items = items
         self.listMeta = listMeta
     }
@@ -90,10 +97,6 @@ class MediaListScreenViewModel {
             debugLog("[MediaListVM] artistUserId: \(error)")
             return nil
         }
-    }
-
-    var footer: LocalizedStringKey {
-        "^[\(items.count) track](inflect: true)"
     }
 }
 

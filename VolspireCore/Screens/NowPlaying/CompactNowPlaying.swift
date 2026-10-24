@@ -11,10 +11,6 @@ import SwiftUI
 struct CompactNowPlaying: View {
     @Environment(PlayerController.self) var model
     @Binding var expanded: Bool
-    /// When false (workspace file with no cover, or the comments panel is up) the
-    /// cover doesn't glide into the expanded player — it just fades with the mini bar.
-    var coverMatchEnabled: Bool = true
-    var animationNamespace: Namespace.ID
     @State var forwardAnimationTrigger: PlayerButtonTrigger = .one(bouncing: false)
     @State var viewWidth: CGFloat = .zero
 
@@ -37,31 +33,13 @@ struct CompactNowPlaying: View {
 }
 
 private extension CompactNowPlaying {
-    @ViewBuilder
+    /// The cover fades with the mini bar on expand / collapse.
     func artwork(cornerRadius: CGFloat) -> some View {
-        if coverMatchEnabled {
-            // Hidden once expanded so the matched-geometry source lives in the
-            // expanded player — the cover glides between the two on expand/collapse.
-            if !expanded {
-                ArtworkView(
-                    model.display.artwork,
-                    cornerRadius: cornerRadius,
-                    background: Color(.systemGray4)
-                )
-                .matchedGeometryEffect(
-                    id: PlayerMatchedGeometry.artwork,
-                    in: animationNamespace
-                )
-            }
-        } else {
-            // No expanded cover to glide to (file / comments panel) — keep it
-            // rendered and let it fade with the mini bar's opacity.
-            ArtworkView(
-                model.display.artwork,
-                cornerRadius: cornerRadius,
-                background: Color(.systemGray4)
-            )
-        }
+        ArtworkView(
+            model.display.artwork,
+            cornerRadius: cornerRadius,
+            background: Color(.systemGray4)
+        )
     }
 
     var inlinedBottomAccessory: Bool {
@@ -107,7 +85,7 @@ private extension CompactNowPlaying {
                         }
                         .font(.system(size: 21, weight: .medium))
                         // Dimmed + non-interactive while the track loads.
-                        .foregroundStyle(model.isLoadingTrack ? Color.white.opacity(0.3) : .white)
+                        .foregroundStyle(model.isLoadingTrack ? Color.vText4 : Color.vText)
                     },
                     onEnded: {
                         guard !model.isLoadingTrack else { return }
@@ -155,10 +133,7 @@ extension PlayerButtonConfig {
     @Previewable @State var dependencies = Dependencies.stub
     @Previewable @State var playerController = PlayerController.stub
 
-    CompactNowPlaying(
-        expanded: .constant(false),
-        animationNamespace: Namespace().wrappedValue
-    )
+    CompactNowPlaying(expanded: .constant(false))
     .background(.gray)
     .environment(playerController)
     .onAppear {

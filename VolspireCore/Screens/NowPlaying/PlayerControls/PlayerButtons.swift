@@ -10,51 +10,43 @@ import SwiftUI
 struct PlayerButtons: View {
     @Environment(PlayerController.self) var model
 
-    /// Compact (minimized immersive video): slightly smaller icons + play circle.
-    var compact: Bool = false
-
-    private var sideSize: CGFloat { compact ? 22 : 26 }
-    private var skipSize: IconSize { compact ? .xxl : .hero }
-    /// Bright transport tint (matches the skip buttons) for the inactive state.
-    private var opaque: Color { Color(Palette.PlayerCard.opaque) }
-    private var playGlyphSize: IconSize { compact ? .xxl : .hero }
-    private var playCircle: CGFloat { compact ? 56 : 72 }
-    /// Compact IS the minimized/immersive state, where the blurred backdrop is
-    /// gone and these glyphs sit on bare video. In the default player the blur
-    /// behind them is enough, which is how they shipped.
-    private var glyphShadow: PlayerOverlayShadow { compact ? .strong : .off }
+    // The web player's transport (track-detail-bottom-bar.tsx): stroke
+    // shuffle/repeat, filled skips, an outline play/pause glyph in a white
+    // circle — sized up a touch from the web's 20/24 for the phone player.
+    private let toggleSize: CGFloat = 26
+    private let skipSize: CGFloat = 32
+    private let playGlyphSize: CGFloat = 28
+    private let playCircle: CGFloat = 64
+    /// Shuffle / repeat sit in a frame as wide as the old 26pt glyphs, so the
+    /// repeat button stays centred on the right-hand icon column.
+    private let toggleColumn: CGFloat = 26
+    /// The web's resting tier for every side control: white at 64%, applied
+    /// to the finished glyph (element opacity) so a filled skip's rim and
+    /// body don't composite into an outline.
+    private let restingOpacity = 0.64
 
     var body: some View {
         let switchDisabled = !model.commandProfile.isSwitchTrackEnabled
 
-        // shuffle · skip-back · big white play circle · skip-forward · repeat —
+        // shuffle · skip-back · white play circle · skip-forward · repeat —
         // spread evenly across the width.
         HStack(spacing: 0) {
             Button { model.toggleShuffle() } label: {
-                LucideIcon(.shuffle, size: sideSize)
-                    .foregroundStyle(model.isShuffleOn ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(opaque))
-                    .playerOverlayShadow(glyphShadow)
-                    // Declared-instant tint. Same value-scoped idiom as the action-row
-                    // like/save icons (which declare a 0.18s ease) — owning the toggle's
-                    // animation means no ambient transaction can leak in, while layout
-                    // changes (resize/move when minimizing) still animate.
-                    .animation(nil, value: model.isShuffleOn)
+                toggleGlyph(.shuffle, on: model.isShuffleOn)
             }
 
             Spacer(minLength: 0)
 
             Button { model.onBackward() } label: {
-                LucideIcon(.skipBack, skipSize)
-                    .foregroundStyle(Color(Palette.PlayerCard.opaque))
-                    .playerOverlayShadow(glyphShadow)
+                skipGlyph(.skipBack, disabled: switchDisabled)
             }
             .disabled(switchDisabled)
-            .opacity(switchDisabled ? 0.4 : 1)
 
             Spacer(minLength: 0)
 
-            // Play/Pause — big white circle with a thick black glyph (the web's center button).
-            // While the track is loading, the button is disabled + dimmed grey.
+            // Play/Pause — white circle with the outline glyph in black (the
+            // web's centre button). While the track is loading, the button is
+            // disabled + dimmed.
             Button { model.onPlayPause() } label: {
                 ZStack {
                     Circle()
@@ -62,14 +54,12 @@ struct PlayerButtons: View {
                         .frame(width: playCircle, height: playCircle)
                         // Deliberately NOT `playerOverlayShadow()`: that's tuned
                         // for thin glyphs, and its tight near-black layer would
-                        // draw a hard rim around a solid 56–72pt disc. This one
-                        // reads as depth — deepened only on bare video, where
-                        // the circle has no blur to separate it.
-                        .shadow(color: .black.opacity(compact ? 0.45 : 0.25),
-                                radius: compact ? 10 : 8, y: 4)
-                    LucideIcon(model.state.isPlaying ? .pauseFill : .playFill, playGlyphSize)
+                        // draw a hard rim around a solid disc. This one reads as
+                        // depth (the web's shadow-lg).
+                        .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+                    LucideIcon(model.state.isPlaying ? .pause : .play, size: playGlyphSize)
                         .foregroundStyle(.black)
-                        .offset(x: model.state.isPlaying ? 0 : 2) // nudge the play triangle to optical center
+                        .offset(x: model.state.isPlaying ? 0 : 2) // the web's ml-0.5 optical nudge
                         .contentTransition(.identity)
                         .animation(nil, value: model.state.isPlaying) // swap instantly, no animation
                 }
@@ -82,24 +72,39 @@ struct PlayerButtons: View {
             Spacer(minLength: 0)
 
             Button { model.onForward() } label: {
-                LucideIcon(.skipForward, skipSize)
-                    .foregroundStyle(Color(Palette.PlayerCard.opaque))
-                    .playerOverlayShadow(glyphShadow)
+                skipGlyph(.skipForward, disabled: switchDisabled)
             }
             .disabled(switchDisabled)
-            .opacity(switchDisabled ? 0.4 : 1)
 
             Spacer(minLength: 0)
 
             Button { model.toggleRepeat() } label: {
-                LucideIcon(.`repeat`, size: sideSize)
-                    .foregroundStyle(model.isRepeatOn ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(opaque))
-                    .playerOverlayShadow(glyphShadow)
-                    // Declared-instant tint (see shuffle above).
-                    .animation(nil, value: model.isRepeatOn)
+                toggleGlyph(.`repeat`, on: model.isRepeatOn)
             }
         }
         .buttonStyle(.plain)
+    }
+
+    /// Shuffle / repeat: resting white at 64%, the accent at full when on.
+    private func toggleGlyph(_ icon: LucideIcon.Name, on: Bool) -> some View {
+        LucideIcon(icon, size: toggleSize)
+            .foregroundStyle(on ? AnyShapeStyle(LinearGradient.sendAccent) : AnyShapeStyle(Color.white))
+            .opacity(on ? 1 : restingOpacity)
+            .frame(width: toggleColumn, height: toggleColumn)
+            .contentShape(.rect)
+            // Declared-instant tint — owning the toggle's animation means no
+            // ambient transaction can leak in, while layout changes
+            // (resize/move when minimizing) still animate.
+            .animation(nil, value: on)
+    }
+
+    /// Filled skip glyph: 64% at rest, the web's 25% when there's nothing to skip to.
+    private func skipGlyph(_ icon: LucideIcon.Name, disabled: Bool) -> some View {
+        LucideIcon(icon, size: skipSize)
+            .foregroundStyle(.white)
+            .opacity(disabled ? 0.25 : restingOpacity)
+            .padding(8)
+            .contentShape(.rect)
     }
 }
 

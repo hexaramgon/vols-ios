@@ -32,19 +32,27 @@ private struct AppNavBar<Trailing: View>: ViewModifier {
     /// visible — for screens that already show the title in a hero block, so the
     /// nav title only appears once the hero scrolls away (App Store / X style).
     let fadeTitle: Bool
-    let onBack: () -> Void
+    /// The page runs up under the bar (a full-bleed hero): no page-coloured
+    /// base layer and no content inset — the bar is see-through until it
+    /// fades in on scroll.
+    let overlaysContent: Bool
+    /// nil on a tab root (nothing to go back to): no back button.
+    let onBack: (() -> Void)?
     /// Optional trailing bar item (e.g. an options "…" button) — what used to be
     /// a `ToolbarItem(placement: .topBarTrailing)`.
     let trailing: Trailing
 
     @State private var scrollY: CGFloat = 0
+    @Environment(\.colorScheme) private var colorScheme
 
     private var barHeight: CGFloat { ViewConst.safeAreaInsets.top + 44 }
 
     private var barOpacity: Double {
         guard collapsing else { return 1 }
-        let start: CGFloat = 8
-        let end: CGFloat = 48
+        // Over a full-bleed hero, wait until it's actually scrolling away
+        // (the folder page's curve: 40 → 120pt); otherwise fade in quickly.
+        let start: CGFloat = overlaysContent ? 40 : 8
+        let end: CGFloat = overlaysContent ? 120 : 48
         return Double(min(1, max(0, (scrollY - start) / (end - start))))
     }
 
@@ -54,9 +62,9 @@ private struct AppNavBar<Trailing: View>: ViewModifier {
         content
             .ignoresSafeArea(edges: .top)
             .background(Color.vBase.ignoresSafeArea())
-            .preferredColorScheme(.dark)
-            // Inset the scroll content so the first row clears the fixed bar.
-            .contentMargins(.top, barHeight + 8, for: .scrollContent)
+            // Inset the scroll content so the first row clears the fixed bar
+            // (unless the page is meant to run up under it).
+            .contentMargins(.top, overlaysContent ? 0 : barHeight + 8, for: .scrollContent)
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
                 if collapsing { scrollY = y }
             }
@@ -69,23 +77,37 @@ private struct AppNavBar<Trailing: View>: ViewModifier {
         ZStack(alignment: .bottom) {
             // Base layer matches the page background so the bar is the
             // same colour as the content behind it at the top.
-            Color.vBase
-            // The solid bar fades in over it as the user scrolls.
-            Color.vBar.opacity(barOpacity)
-            Rectangle().fill(Color.vBorder).frame(height: 0.5).opacity(barOpacity)
+            Color.vBase.opacity(overlaysContent ? 0 : 1)
+            if overlaysContent {
+                // Over a hero: the folder page's translucent canvas (blur +
+                // page tint), kept mounted and faded — materials never unmount.
+                Group {
+                    Rectangle().fill(.ultraThinMaterial)
+                    Color.vBase.opacity(0.7)
+                }
+                .opacity(barOpacity)
+            } else {
+                // The solid bar fades in over it as the user scrolls.
+                Color.vBar.opacity(barOpacity)
+            }
+            Rectangle().fill(Color.vDivider).frame(height: 0.5).opacity(barOpacity)
 
             // The 44pt control row where the system bar used to draw its items:
             // leading back chevron, absolutely-centred title, trailing slot.
+            // Over an always-dark hero (`overlaysContent`), the controls stay
+            // white until the bar has faded in, then follow the theme.
             ZStack {
                 HStack(spacing: 0) {
-                    Button(action: onBack) {
-                        LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .contentShape(.rect)
+                    if let onBack {
+                        Button(action: onBack) {
+                            LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
+                                .foregroundStyle(Color.vText)
+                                .frame(width: 44, height: 44)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, 4)
                     }
-                    .buttonStyle(.plain)
-                    .padding(.leading, 4)
 
                     Spacer(minLength: 0)
 
@@ -96,7 +118,7 @@ private struct AppNavBar<Trailing: View>: ViewModifier {
                 VStack(spacing: 1) {
                     Text(title)
                         .font(subtitle == nil ? .appHeadline : .appCalloutSemibold)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
                         .lineLimit(1)
                     if let subtitle {
                         Text(subtitle)
@@ -110,6 +132,7 @@ private struct AppNavBar<Trailing: View>: ViewModifier {
                 .padding(.horizontal, 64)
             }
             .frame(height: 44)
+            .environment(\.colorScheme, overlaysContent && barOpacity < 0.5 ? .dark : colorScheme)
         }
         .frame(height: barHeight)
         .ignoresSafeArea(edges: .top)
@@ -129,11 +152,12 @@ extension View {
         subtitle: String? = nil,
         collapsing: Bool = false,
         fadeTitle: Bool = false,
-        onBack: @escaping () -> Void
+        overlaysContent: Bool = false,
+        onBack: (() -> Void)?
     ) -> some View {
         modifier(AppNavBar(
             title: title, subtitle: subtitle, collapsing: collapsing,
-            fadeTitle: fadeTitle, onBack: onBack, trailing: EmptyView()
+            fadeTitle: fadeTitle, overlaysContent: overlaysContent, onBack: onBack, trailing: EmptyView()
         ))
     }
 
@@ -144,12 +168,13 @@ extension View {
         subtitle: String? = nil,
         collapsing: Bool = false,
         fadeTitle: Bool = false,
-        onBack: @escaping () -> Void,
+        overlaysContent: Bool = false,
+        onBack: (() -> Void)?,
         @ViewBuilder trailing: () -> Trailing
     ) -> some View {
         modifier(AppNavBar(
             title: title, subtitle: subtitle, collapsing: collapsing,
-            fadeTitle: fadeTitle, onBack: onBack, trailing: trailing()
+            fadeTitle: fadeTitle, overlaysContent: overlaysContent, onBack: onBack, trailing: trailing()
         ))
     }
 }

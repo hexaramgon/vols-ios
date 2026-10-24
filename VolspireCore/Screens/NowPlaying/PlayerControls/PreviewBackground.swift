@@ -33,6 +33,10 @@ struct PreviewBackground: View {
         @State var white: CGFloat = 0.784
         @State var alpha: CGFloat = 0.816
         @State var hidden: Bool = false
+        var color: UIColor {
+            .init(white: white, alpha: alpha)
+        }
+
         var body: some View {
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
@@ -55,10 +59,6 @@ struct PreviewBackground: View {
                     ColorView(uiColor: color)
                 }
                 .blendMode(.overlay)
-
-                var color: UIColor {
-                    .init(white: white, alpha: alpha)
-                }
 
                 VStack(spacing: 30) {
                     Slider(value: $white, in: 0 ... 1)

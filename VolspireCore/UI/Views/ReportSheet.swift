@@ -58,9 +58,9 @@ struct ReportSheet: View {
 
     private var confirmation: some View {
         VStack(spacing: 14) {
-            LucideIcon(.circleCheck, .hero).foregroundStyle(Color.green)
+            LucideIcon(.circleCheck, .hero).foregroundStyle(Color.vSuccess)
             Text("Thanks for letting us know")
-                .font(.appHeadline).foregroundStyle(.white)
+                .font(.appHeadline).foregroundStyle(Color.vText)
             Text("We review every report and act on violations within 24 hours.")
                 .font(.appSubheadline).foregroundStyle(Color.vText2)
                 .multilineTextAlignment(.center)
@@ -93,11 +93,11 @@ struct ReportSheet: View {
                     prompt: Text("What happened?").foregroundStyle(Color.vText3),
                     axis: .vertical
                 )
-                .font(.appCallout).foregroundStyle(.white).tint(.white)
+                .font(.appCallout).foregroundStyle(Color.vText).tint(Color.vText)
                 .lineLimit(2 ... 4)
                 .focused($detailsFocused)
                 .padding(12)
-                .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .background(detailsFocused ? Color.vFieldFocus : Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
             }
             .padding(.horizontal, 20).padding(.top, 18)
 
@@ -115,14 +115,14 @@ struct ReportSheet: View {
             withAnimation(.snappy(duration: 0.15)) { selected = reason }
         } label: {
             HStack(spacing: 12) {
-                Text(reason.label).font(.appBody).foregroundStyle(.white)
+                Text(reason.label).font(.appBody).foregroundStyle(Color.vText)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 8)
                 if selected == reason {
-                    Circle().fill(Color.white)
+                    Circle().fill(Color.vText)
                         .frame(width: 20, height: 20)
                 } else {
-                    Circle().strokeBorder(Color.white.opacity(0.2), lineWidth: 1.5)
+                    Circle().strokeBorder(Color.ink(0.2), lineWidth: 1.5)
                         .frame(width: 20, height: 20)
                 }
             }

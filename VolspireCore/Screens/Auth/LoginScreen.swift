@@ -18,7 +18,10 @@ struct LoginScreen: View {
     /// The pushed destinations — the welcome landing is the stack's root, so it
     /// isn't one of them. A real `NavigationStack` path rather than a flag per
     /// screen, so sign-in gets the system's interactive pop for free.
-    private enum Route: Hashable { case signIn, register, forgot }
+    /// `signIn(existingEmail:)` carries the email when sign-up found it already
+    /// has an account — in the route, not `@State`, because this destination
+    /// closure is captured and would read a stale flag.
+    private enum Route: Hashable { case signIn(existingEmail: String? = nil), register, forgot }
 
     @Environment(Dependencies.self) var dependencies
     @State private var email = ""
@@ -33,28 +36,23 @@ struct LoginScreen: View {
         dependencies.authManager
     }
 
-    private var canSubmit: Bool {
-        !email.trimmingCharacters(in: .whitespaces).isEmpty && !password.isEmpty
-    }
-
     var body: some View {
         NavigationStack(path: $path) {
             WelcomeScreen(
                 onCreateAccount: startRegister,
-                onSignIn: startSignIn
+                onSignIn: { startSignIn() }
             )
             .background(AuthCanvas())
             .authNavigationChrome()
             .navigationDestination(for: Route.self, destination: destination)
         }
-        .preferredColorScheme(.dark)
     }
 
     @ViewBuilder
     private func destination(_ route: Route) -> some View {
         switch route {
-        case .signIn:
-            loginForm
+        case let .signIn(existingEmail):
+            loginForm(existingEmail: existingEmail)
                 .background(AuthCanvas())
                 .authNavigationChrome()
         case .register:
@@ -75,6 +73,7 @@ struct LoginScreen: View {
                 switch exit {
                 case .back: pop()
                 case .signIn: startSignIn()
+                case let .existingAccount(email): startSignIn(prefill: email)
                 }
             }
             .authNavigationChrome(allowsSystemBack: false)
@@ -104,27 +103,81 @@ struct LoginScreen: View {
     /// Same contract for sign-in: a fresh page (fields cleared — they live on
     /// this stack host, so they'd otherwise survive a round-trip through
     /// register) and a REPLACED path, so back goes to the welcome landing.
-    private func startSignIn() {
+    /// `prefill`: sign-up found an existing account for this email.
+    private func startSignIn(prefill: String? = nil) {
         authManager.setError(nil)
-        email = ""
+        email = prefill ?? ""
         password = ""
         loginFailed = false
-        path = [.signIn]
+        path = [.signIn(existingEmail: prefill)]
     }
 
-    /// Sign-in runs through the wizards' own `AuthStepPage`, so its heading,
-    /// spacing and scroll behaviour are register's by construction rather than
-    /// by hand-matched numbers. The wordmark is gone — the welcome screen one
-    /// push back already carries the brand, and register never had one.
-    private var loginForm: some View {
+    /// The sign-in page. Its own view (fed live bindings) rather than a
+    /// builder on this struct: the navigation destination closure is captured,
+    /// so a form built here read stale state — Sign In stayed disabled after
+    /// typing the password on the prefilled "Welcome back" page.
+    private func loginForm(existingEmail: String?) -> some View {
+        SignInForm(
+            email: $email,
+            password: $password,
+            isLoading: $isLoading,
+            loginFailed: $loginFailed,
+            existingEmail: existingEmail,
+            onBack: pop,
+            onForgot: {
+                authManager.setError(nil)
+                path.append(.forgot)
+            },
+            onRegister: startRegister,
+            onSwipeBack: {
+                if case .signIn = path.last { pop() }
+            }
+        )
+    }
+}
+
+// MARK: - Sign-in form
+
+/// Sign-in runs through the wizards' own `AuthStepPage`, so its heading,
+/// spacing and scroll behaviour are register's by construction rather than
+/// by hand-matched numbers. The wordmark is gone — the welcome screen one
+/// push back already carries the brand, and register never had one.
+private struct SignInForm: View {
+    @Environment(Dependencies.self) private var dependencies
+
+    @Binding var email: String
+    @Binding var password: String
+    @Binding var isLoading: Bool
+    /// Flips true after a failed email sign-in — only then does the
+    /// "Forgot password?" link appear.
+    @Binding var loginFailed: Bool
+    /// Sent here by sign-up because this email already has an account — the
+    /// form says so ("Welcome back") and the cursor starts in the password
+    /// field, since the email is filled in.
+    let existingEmail: String?
+    let onBack: () -> Void
+    let onForgot: () -> Void
+    let onRegister: () -> Void
+    let onSwipeBack: () -> Void
+
+    private var authManager: AuthManager { dependencies.authManager }
+
+    private var canSubmit: Bool {
+        !email.trimmingCharacters(in: .whitespaces).isEmpty && !password.isEmpty
+    }
+
+    var body: some View {
         VStack(spacing: 0) {
             // Same chevron the wizards use — sign-in is pushed from the landing
             // now, so it needs the way back out.
-            AuthWizardBackBar(disabled: isLoading, onBack: pop)
+            AuthWizardBackBar(disabled: isLoading, onBack: onBack)
 
             AuthStepPage(
-                title: "Sign in",
-                subtitle: "Welcome back — pick up where you left off.",
+                title: "Welcome back",
+                // Just the title — except when sign-up sent you here, where
+                // the one line explains why you're on sign-in at all.
+                subtitle: existingEmail.map { "You already have an account with \($0). Enter your password to sign in." }
+                    ?? "",
                 error: authManager.errorMessage
             ) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -137,14 +190,13 @@ struct LoginScreen: View {
                             contentType: .emailAddress
                         )
                         AuthRowDivider()
-                        AuthSecureRow(placeholder: "Password", text: $password)
+                        AuthSecureRow(placeholder: "Password", text: $password, autoFocus: existingEmail != nil)
                     }
 
                     // Appears only once a sign-in attempt has failed.
                     if loginFailed {
                         Button {
-                            authManager.setError(nil)
-                            path.append(.forgot)
+                            onForgot()
                         } label: {
                             Text("Forgot password?")
                                 .font(.appFootnote)
@@ -160,7 +212,6 @@ struct LoginScreen: View {
             } footer: {
                 AuthCTA(
                     title: "Sign In",
-                    loadingTitle: "Signing in…",
                     isLoading: isLoading,
                     isDisabled: !canSubmit
                 ) {
@@ -198,7 +249,7 @@ struct LoginScreen: View {
                     }
                 }
 
-                AuthBottomLink(prompt: "New to Volspire?", action: "Create account", onTap: startRegister)
+                AuthBottomLink(prompt: "New to Volspire?", action: "Create account", onTap: onRegister)
                     .padding(.top, 8)
             }
         }
@@ -211,9 +262,7 @@ struct LoginScreen: View {
         // The `path.last` check keeps it a no-op if a future iOS revives the
         // system gesture; sign-in only ever sits at depth 1, so even both firing
         // together can't pop past the landing.
-        .authSwipeBack(isEnabled: !isLoading) {
-            if path.last == .signIn { pop() }
-        }
+        .authSwipeBack(isEnabled: !isLoading, action: onSwipeBack)
     }
 }
 
@@ -302,7 +351,6 @@ private struct ForgotPasswordFlow: View {
 
                 AuthCTA(
                     title: "Send Code",
-                    loadingTitle: "Sending…",
                     isLoading: isLoading,
                     isDisabled: email.trimmingCharacters(in: .whitespaces).isEmpty
                 ) {
@@ -331,7 +379,6 @@ private struct ForgotPasswordFlow: View {
 
                 AuthCTA(
                     title: "Verify",
-                    loadingTitle: "Verifying…",
                     isLoading: isLoading,
                     isDisabled: code.count != 6
                 ) {
@@ -378,7 +425,6 @@ private struct ForgotPasswordFlow: View {
 
                 AuthCTA(
                     title: "Update Password",
-                    loadingTitle: "Saving…",
                     isLoading: isLoading,
                     isDisabled: !passwordsOK
                 ) {

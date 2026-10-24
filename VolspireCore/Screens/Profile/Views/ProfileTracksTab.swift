@@ -2,7 +2,7 @@
 //  ProfileTracksTab.swift
 //  Volspire
 //
-//  "Recently Released" featured card + the rest of the artist's tracks.
+//  The artist's tracks as one list, newest first.
 //
 
 import DesignSystem
@@ -15,97 +15,29 @@ struct ProfileTracksTab: View {
 
     var body: some View {
         if viewModel.tracks.isEmpty {
-            ProfileEmptyState(
-                icon: .music,
-                title: "No tracks uploaded yet",
-                subtitle: isOwnProfile ? "Your uploads will show up here." : nil
-            )
+            ProfileEmptyState(icon: .music, title: "No tracks yet")
         } else {
-            VStack(alignment: .leading, spacing: 24) {
-                // Other artists' profiles spotlight their newest drop up top; on your
-                // own profile skip that and just list every track (latest included).
-                if !isOwnProfile, let latest = viewModel.latestRelease {
-                    VStack(alignment: .leading, spacing: 12) {
-                        sectionHeader("Recently Released")
-                        latestReleaseCard(latest)
-                    }
-                    .padding(.horizontal, ViewConst.screenPaddings)
-                }
-
-                // Own profile lists the full set (nothing hidden behind the spotlight);
-                // others list everything after that featured latest release.
-                let listedTracks = isOwnProfile ? viewModel.tracks : viewModel.curatedTracks
-                if !listedTracks.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        // Your own profile is just the list — no section header.
-                        if !isOwnProfile {
-                            sectionHeader("All Tracks")
-                                .padding(.horizontal, ViewConst.screenPaddings)
+            LazyVStack(spacing: 4) {
+                ForEach(Array(viewModel.tracks.enumerated()), id: \.element.id) { i, track in
+                    ProfileMediaRow(
+                        viewModel: viewModel,
+                        id: track.id,
+                        title: track.title,
+                        subtitle: "@\(viewModel.username)",
+                        coverURL: track.coverURL,
+                        lock: isOwnProfile && track.isPrivate
+                    ) {
+                        HStack(spacing: 6) {
+                            streamsTrailing(track.streams)
+                            if isOwnProfile { trackOptionsButton(track) }
                         }
-                        LazyVStack(spacing: 4) {
-                            ForEach(listedTracks) { track in
-                                ProfileMediaRow(
-                                    viewModel: viewModel,
-                                    id: track.id,
-                                    title: track.title,
-                                    subtitle: "@\(viewModel.username)",
-                                    coverURL: track.coverURL,
-                                    lock: isOwnProfile && track.isPrivate
-                                ) {
-                                    HStack(spacing: 6) {
-                                        streamsTrailing(track.streams)
-                                        if isOwnProfile { trackOptionsButton(track) }
-                                    }
-                                }
-                                .onTapGesture { viewModel.play(track) }
-                            }
-                        }
-                        .padding(.horizontal, ViewConst.screenPaddings - 6)
                     }
+                    .onTapGesture { viewModel.play(track) }
+                    .staggeredAppear(i, in: "profile.tracks-\(ObjectIdentifier(viewModel).hashValue)")
                 }
             }
+            .padding(.horizontal, ViewConst.screenPaddings - 6)
         }
-    }
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.appFont.sectionTitle)
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Prominent "latest drop" card featuring the most recent track.
-    private func latestReleaseCard(_ track: ProfileTrack) -> some View {
-        let isActive = viewModel.mediaActivity(MediaID(track.id)) != nil
-        return HStack(spacing: 14) {
-            ArtworkView(.placeholder(track.coverURL, name: track.title), cornerRadius: 10)
-                .frame(width: 64, height: 64)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(track.title)
-                    .font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
-                HStack(spacing: 4) {
-                    Image(systemName: "play.fill").font(.system(size: 9))
-                    Text("\(track.streams.formatted()) streams").font(.appFont.trackSubtitle)
-                }
-                .foregroundStyle(Color.vText3)
-            }
-            Spacer(minLength: 8)
-            if isOwnProfile { trackOptionsButton(track) }
-            if isActive {
-                EqualizerBars(heights: [7, 13, 9], barWidth: 2.5, spacing: 2, tint: .white.opacity(0.9))
-                    .frame(width: 14, height: 13)
-                    .padding(.trailing, 4)
-            } else {
-                ZStack {
-                    Circle().fill(.white.opacity(0.12)).frame(width: 34, height: 34)
-                    LucideIcon(.playFill, .sm).foregroundStyle(.white)
-                }
-            }
-        }
-        .padding(12)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 14))
-        .contentShape(.rect)
-        .onTapGesture { viewModel.play(track) }
     }
 
     /// Opens the Delete/Hide/Edit options sheet for an owned track.
@@ -124,7 +56,7 @@ struct ProfileTracksTab: View {
     /// Trailing play-count for a track row (e.g. "▶ 1.2K").
     private func streamsTrailing(_ streams: Int) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: "play.fill").font(.system(size: 8))
+            LucideIcon(.playFill, .xs)
             Text(streams.compactCount)
         }
         .font(.appCaption)

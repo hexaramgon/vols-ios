@@ -42,7 +42,7 @@ struct MediaActivityIndicator: View {
         MediaActivityIndicator(state: .buffering)
         MediaActivityIndicator(state: .playing)
     }
-    .foregroundStyle(.white)
+    .foregroundStyle(Color.vText)
     .padding(10)
     .background(Color.gray)
 }

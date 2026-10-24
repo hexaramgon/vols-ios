@@ -19,8 +19,6 @@ struct TrackListRow<Accessory: View>: View {
     /// Playing/paused marker over the artwork (nil = not the active track).
     private let activity: MediaActivity?
     private let artworkSize: CGFloat
-    /// Hairline under the row, aligned with the text column (skip on last rows).
-    private let showsSeparator: Bool
     /// Row-level horizontal padding, for lists whose container doesn't pad rows.
     private let horizontalPadding: CGFloat
     private let onTap: () -> Void
@@ -32,7 +30,6 @@ struct TrackListRow<Accessory: View>: View {
         subtitle: String? = nil,
         activity: MediaActivity? = nil,
         artworkSize: CGFloat = 50,
-        showsSeparator: Bool = false,
         horizontalPadding: CGFloat = 0,
         onTap: @escaping () -> Void,
         @ViewBuilder accessory: () -> Accessory
@@ -42,7 +39,6 @@ struct TrackListRow<Accessory: View>: View {
         self.subtitle = subtitle
         self.activity = activity
         self.artworkSize = artworkSize
-        self.showsSeparator = showsSeparator
         self.horizontalPadding = horizontalPadding
         self.onTap = onTap
         self.accessory = accessory()
@@ -50,8 +46,9 @@ struct TrackListRow<Accessory: View>: View {
 
     var body: some View {
         HStack(spacing: 13) {
-            ArtworkView(artwork, cornerRadius: 9)
+            ArtworkView(artwork, cornerRadius: Radius.tile)
                 .frame(width: artworkSize, height: artworkSize)
+                .coverShadow()
                 // Covers load/re-decode on their own schedule; without this a
                 // container's entrance/loading animation catches that change and
                 // slides the image in out of sync with its row. Clearing the
@@ -61,17 +58,18 @@ struct TrackListRow<Accessory: View>: View {
                 .overlay {
                     if let activity {
                         ZStack {
-                            Color.black.opacity(0.45)
-                            MediaActivityIndicator(state: activity).foregroundStyle(.white)
+                            Color.vShade.opacity(0.45)
+                            MediaActivityIndicator(state: activity).foregroundStyle(Color.vOnColor)
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
                     }
                 }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.appFont.trackTitle)
-                    .foregroundStyle(activity != nil ? .white : .white.opacity(0.95))
+                    // Row titles rest at `vTextRow`; the playing row lifts to full ink.
+                    .foregroundStyle(activity != nil ? Color.vText : Color.vTextRow)
                     .lineLimit(1)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle).font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
@@ -83,15 +81,7 @@ struct TrackListRow<Accessory: View>: View {
             accessory
         }
         .padding(.horizontal, horizontalPadding)
-        .padding(.vertical, 9)
-        .overlay(alignment: .bottom) {
-            if showsSeparator {
-                Rectangle()
-                    .fill(Color.white.opacity(0.06))
-                    .frame(height: 0.5)
-                    .padding(.leading, horizontalPadding + 63) // align under the title (artwork + spacing)
-            }
-        }
+        .padding(.vertical, 10)
         .contentShape(.rect)
         .onTapGesture(perform: onTap)
     }
@@ -105,7 +95,6 @@ extension TrackListRow where Accessory == EmptyView {
         subtitle: String? = nil,
         activity: MediaActivity? = nil,
         artworkSize: CGFloat = 50,
-        showsSeparator: Bool = false,
         horizontalPadding: CGFloat = 0,
         onTap: @escaping () -> Void
     ) {
@@ -115,7 +104,6 @@ extension TrackListRow where Accessory == EmptyView {
             subtitle: subtitle,
             activity: activity,
             artworkSize: artworkSize,
-            showsSeparator: showsSeparator,
             horizontalPadding: horizontalPadding,
             onTap: onTap
         ) {
@@ -131,7 +119,6 @@ extension TrackListRow where Accessory == EmptyView {
             title: "Midnight Drive",
             subtitle: "@wavelord",
             activity: .playing,
-            showsSeparator: true,
             onTap: {}
         ) {
             LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize).foregroundStyle(Color.vText3)
@@ -144,5 +131,5 @@ extension TrackListRow where Accessory == EmptyView {
         )
     }
     .padding()
-    .background(Color.black)
+    .background(Color.vBase)
 }

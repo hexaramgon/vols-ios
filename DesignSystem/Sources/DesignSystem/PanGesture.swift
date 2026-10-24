@@ -40,7 +40,12 @@ public struct PanGesture: UIGestureRecognizerRepresentable {
         let state = recognizer.state
         let translation = recognizer.translation(in: recognizer.view).toSize()
         let velocity = recognizer.velocity(in: recognizer.view).toSize()
-        let value = Value(translation: translation, velocity: velocity)
+        let location = recognizer.location(in: nil)
+        let value = Value(
+            translation: translation,
+            velocity: velocity,
+            startLocation: CGPoint(x: location.x - translation.width, y: location.y - translation.height)
+        )
 
         if state == .began || state == .changed {
             onChange(value)
@@ -52,6 +57,8 @@ public struct PanGesture: UIGestureRecognizerRepresentable {
     public struct Value {
         public var translation: CGSize
         public var velocity: CGSize
+        /// Where the drag began, in window coordinates.
+        public var startLocation: CGPoint
     }
 
     public final class Coordinator: NSObject, UIGestureRecognizerDelegate {

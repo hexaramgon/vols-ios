@@ -62,24 +62,6 @@ public final class SupabaseService: Sendable {
         return try await cachedRpc("get_home_tracks", params: nil, ttl: CacheTTL.long)
     }
 
-    /// Tracks from artists the current user follows (Explore "Following" tab).
-    public func getFollowingFeed() async throws -> [ApiHomeTrack] {
-        return try await cachedRpc("get_following_feed", params: ["p_limit": 30, "p_offset": 0], ttl: CacheTTL.short)
-    }
-
-    /// General track feed (Explore "Tracks" tab). `seed` shuffles the ordering
-    /// server-side — mirror the web by passing a fresh random seed per session
-    /// so the recommendations vary instead of returning the same order forever.
-    /// Cached per-seed, so the same seed reuses results but a new seed refetches.
-    public func getExploreTracksFeed(seed: Int) async throws -> [ApiHomeTrack] {
-        return try await cachedRpc("get_home_feed", params: ["p_seed": seed, "p_limit": 30, "p_offset": 0], ttl: CacheTTL.medium)
-    }
-
-    /// Artists to explore (Explore "Artists" tab).
-    public func getExploreArtists() async throws -> [ApiExploreArtist] {
-        return try await cachedRpc("get_explore_artists", params: ["p_limit": 30, "p_offset": 0], ttl: CacheTTL.medium)
-    }
-
     /// Drops the cached home-surface responses (rails, following, artists,
     /// folders) so a pull-to-refresh refetches fresh data instead of serving
     /// the TTL cache. The explore feed re-rolls its seed (new cache key) and
@@ -87,13 +69,14 @@ public final class SupabaseService: Sendable {
     public func invalidateHomeCaches() async {
         await cache.removeAll(matching: "rpc:get_home_tracks")
         await cache.removeAll(matching: "rpc:get_following_feed")
+        await cache.removeAll(matching: "rpc:get_collab_tracks")
         await cache.removeAll(matching: "rpc:get_explore_artists")
         await cache.removeAll(matching: "rpc:get_user_folders")
     }
 
     /// Drops the cached library response so a user-initiated refresh refetches
     /// fresh data inside the TTL window (mutations already invalidate this key
-    /// themselves; playlists are uncached).
+    /// themselves; playlist mutations invalidate via `invalidatePlaylists`).
     public func invalidateLibraryCaches() async {
         await cache.removeAll(matching: "rpc:get_user_library")
     }
@@ -185,6 +168,7 @@ public final class SupabaseService: Sendable {
         await cache.remove(APICache.key("get_user_profile", params: ["profile_id": userId]))
         await cache.remove(APICache.key("get_tracks_credited_to_user", params: ["p_user_id": userId]))
         await cache.remove(APICache.key("get_user_packs", params: ["p_user_id": userId]))
+        await cache.remove(APICache.key("get_user_listings", params: ["p_user_id": userId]))
     }
 
     /// Fetches every publicly-visible track where `userId` is credited, with the
@@ -240,9 +224,14 @@ public final class SupabaseService: Sendable {
     }
 
     /// In-app unread indicator counts (`get_unread_counts` — the same RPC the
-    /// web uses for its dots). Never cached: it drives live badges.
-    public func getUnreadCounts() async throws -> ApiUnreadCounts {
-        return try await performRpc("get_unread_counts")
+    /// web uses for its dots). Coalesced with a 5s window: launch and
+    /// tab-switch clusters used to fire 3-4 duplicate badge fetches within a
+    /// second. `force` bypasses the window — required after a mark-read, where
+    /// a pre-mark cached count would strand the dot.
+    public func getUnreadCounts(force: Bool = false) async throws -> ApiUnreadCounts {
+        let key = APICache.key("get_unread_counts")
+        if force { await cache.remove(key) }
+        return try await cachedRpc("get_unread_counts", ttl: 5)
     }
 
     /// Flips a single notification toggle (the RPC coalesces every other column
@@ -272,6 +261,28 @@ public final class SupabaseService: Sendable {
         return try await cachedRpc("get_explore_data", params: nil, ttl: CacheTTL.short)
     }
 
+    /// The cheapest paid, available license per track — the Marketplace
+    /// tab's "Beats for sale" (the web's `useForSaleTracks`: a plain
+    /// `track_licenses` read; track details come from `getTracksByIds`).
+    public func getForSaleTrackPrices(limit: Int = 300) async throws -> [ApiTrackPrice] {
+        do {
+            let rows: [ApiTrackPrice] = try await client.from("track_licenses")
+                .select("track_id, price, currency")
+                .eq("available", value: true)
+                .gt("price", value: 0)
+                .limit(limit)
+                .execute()
+                .value
+            var cheapest: [String: ApiTrackPrice] = [:]
+            for r in rows where (cheapest[r.trackId]?.price ?? .infinity) > r.price {
+                cheapest[r.trackId] = r
+            }
+            return Array(cheapest.values)
+        } catch {
+            throw mapError(error)
+        }
+    }
+
     /// The public collab-board feed (`get_listings`). `category` nil = all.
     public func getListings(category: String?, limit: Int = 100, offset: Int = 0) async throws -> [ApiListing] {
         return try await performRpc("get_listings", params: [
@@ -290,7 +301,7 @@ public final class SupabaseService: Sendable {
     /// A specific user's collab-board listings (`get_user_listings`) — same shape as
     /// the board feed. Includes the owner's non-open listings when they're viewing.
     public func getUserListings(userId: String) async throws -> [ApiListing] {
-        return try await performRpc("get_user_listings", params: ["p_user_id": userId])
+        return try await cachedRpc("get_user_listings", params: ["p_user_id": userId], ttl: CacheTTL.medium)
     }
 
     /// Full listing detail with viewer flags (`get_listing`).
@@ -317,9 +328,13 @@ public final class SupabaseService: Sendable {
     }
 
     public func postListingComment(listingId: String, content: String, parentId: String? = nil) async throws -> ApiListingComment {
-        var params: [String: Any] = ["p_listing_id": listingId, "p_content": content]
-        // Omit when nil — the RPC defaults p_parent_id to null (a top-level comment).
-        if let parentId { params["p_parent_id"] = parentId }
+        // Always send p_parent_id (NULL for a top-level comment): omitting it makes
+        // the call ambiguous between the two `post_listing_comment` overloads.
+        let params: [String: Any] = [
+            "p_listing_id": listingId,
+            "p_content": content,
+            "p_parent_id": parentId ?? NSNull()
+        ]
         return try await performRpc("post_listing_comment", params: params)
     }
 
@@ -335,28 +350,38 @@ public final class SupabaseService: Sendable {
     /// Author-only: open/close a listing (`update_listing`; other fields keep).
     public func updateListingStatus(listingId: String, status: String) async throws {
         try await executeRpc("update_listing", params: ["p_listing_id": listingId, "p_status": status])
+        await invalidateUserListings()
     }
 
     /// Author-only: permanently delete a listing (`delete_listing`).
     public func deleteListing(listingId: String) async throws {
         try await executeRpc("delete_listing", params: ["p_listing_id": listingId])
+        await invalidateUserListings()
+    }
+
+    /// Drops every cached `get_user_listings` page (the profile Listings tab)
+    /// after a create/edit/status change/delete, so it doesn't serve a stale list.
+    public func invalidateUserListings() async {
+        await cache.removeAll(matching: "rpc:get_user_listings")
     }
 
     /// Full detail for a marketplace sound pack (`get_pack`).
     public func getPack(packId: String) async throws -> ApiPackDetail {
-        return try await performRpc("get_pack", params: ["p_pack_id": packId])
+        return try await cachedRpc("get_pack", params: ["p_pack_id": packId], ttl: CacheTTL.medium)
     }
 
     /// Full detail for a marketplace service (`get_service_detail`).
     public func getServiceDetail(serviceId: String) async throws -> ApiServiceDetail {
-        return try await performRpc("get_service_detail", params: ["p_service_id": serviceId])
+        return try await cachedRpc("get_service_detail", params: ["p_service_id": serviceId], ttl: CacheTTL.medium)
     }
 
     // MARK: - Playlists
 
     /// The signed-in user's playlists (`get_user_playlists`).
+    /// Cached 1 min — the Add-to-Playlist sheet refetched it on every open.
+    /// Mutations invalidate via `invalidatePlaylists`.
     public func getUserPlaylists() async throws -> [ApiPlaylist] {
-        return try await performRpc("get_user_playlists")
+        return try await cachedRpc("get_user_playlists", ttl: CacheTTL.short)
     }
 
     /// A single playlist with its ordered tracks (`get_playlist`).
@@ -374,6 +399,7 @@ public final class SupabaseService: Sendable {
             params["p_description"] = description
         }
         let created: CreatedPlaylist = try await performRpc("create_playlist", params: params)
+        await invalidatePlaylists()
         return created.playlistId
     }
 
@@ -397,6 +423,7 @@ public final class SupabaseService: Sendable {
             params["p_cover_url"] = coverUrl
         }
         try await executeRpc("update_playlist", params: params)
+        await invalidatePlaylists()
     }
 
     /// Uploads a playlist cover to the public `post-uploads` bucket and returns its public URL.
@@ -419,22 +446,36 @@ public final class SupabaseService: Sendable {
     /// Deletes a playlist (`delete_playlist`).
     public func deletePlaylist(playlistId: String) async throws {
         try await executeRpc("delete_playlist", params: ["p_playlist_id": playlistId])
+        await invalidatePlaylists()
     }
 
     /// Adds a track to a playlist (`add_track_to_playlist`).
     public func addTrackToPlaylist(playlistId: String, trackId: String) async throws {
         try await executeRpc("add_track_to_playlist", params: ["p_playlist_id": playlistId, "p_track_id": trackId])
+        await invalidatePlaylists(trackId: trackId)
     }
 
     /// Removes a track from a playlist (`remove_track_from_playlist`).
     public func removeTrackFromPlaylist(playlistId: String, trackId: String) async throws {
         try await executeRpc("remove_track_from_playlist", params: ["p_playlist_id": playlistId, "p_track_id": trackId])
+        await invalidatePlaylists(trackId: trackId)
     }
 
     /// Ids of the caller's playlists that already contain the given track
     /// (`get_playlists_for_track`) — used to pre-check the "Add to playlist" rows.
     public func getPlaylistsForTrack(trackId: String) async throws -> [String] {
-        return try await performRpc("get_playlists_for_track", params: ["p_track_id": trackId])
+        return try await cachedRpc("get_playlists_for_track", params: ["p_track_id": trackId], ttl: CacheTTL.short)
+    }
+
+    /// Drops the playlist caches — call after any playlist mutation.
+    public func invalidatePlaylists(trackId: String? = nil) async {
+        await cache.remove(APICache.key("get_user_playlists"))
+        if let trackId {
+            await cache.remove(APICache.key("get_playlists_for_track", params: ["p_track_id": trackId]))
+        } else {
+            // A create/rename/delete can change any track's membership list.
+            await cache.removeAll(matching: "rpc:get_playlists_for_track")
+        }
     }
 
     /// Fetches files in a folder from Supabase RPC function (cached 1 min)
@@ -767,6 +808,10 @@ public final class SupabaseService: Sendable {
         assets: [TrackAssetUpload],
         lookingForCollab: Bool
     ) async throws -> String {
+        // Reject mislabeled / streaming-format media before anything uploads
+        // (see MediaSniffer — the web runs the same check).
+        try MediaSniffer.validate(mediaData, fileName: mediaFileName)
+
         let uid = userId.lowercased()
 
         let coverPath = try await uploadCoverIfPicked(coverData, fileName: coverFileName) {
@@ -1343,6 +1388,7 @@ public final class SupabaseService: Sendable {
             let listingId: String
         }
         let created: Created = try await performRpc("create_listing", params: params)
+        await invalidateUserListings()
         return created.listingId
     }
 
@@ -1384,6 +1430,7 @@ public final class SupabaseService: Sendable {
             "p_attachments": attachmentRows,
         ]
         try await executeRpc("update_listing", params: params)
+        await invalidateUserListings()
     }
 
     private static func audioMimeType(forExt ext: String) -> String {
@@ -1551,6 +1598,12 @@ public final class SupabaseService: Sendable {
         return try await cachedRpc("get_file_comments", params: ["p_file_id": fileId], ttl: CacheTTL.short)
     }
 
+    /// The workspace file a file comment (or reply) is on — nil if it's gone
+    /// or the caller can't see its folder. (`get_file_for_comment`)
+    public func getFileForComment(commentId: String) async throws -> String? {
+        try await performRpc("get_file_for_comment", params: ["p_comment_id": commentId])
+    }
+
     public func postFileComment(content: String, fileId: String, parentId: String? = nil, timestampSeconds: Double? = nil, timestampEndSeconds: Double? = nil) async throws {
         let params: [String: Any?] = [
             "p_file_id": fileId,
@@ -1567,6 +1620,133 @@ public final class SupabaseService: Sendable {
     public func deleteFileComment(commentId: String, fileId: String) async throws {
         try await executeRpc("delete_file_comment", params: ["p_comment_id": commentId])
         await cache.remove(APICache.key("get_file_comments", params: ["p_file_id": fileId]))
+    }
+
+    // MARK: - Social: open to collab + collab responses
+
+    private struct OpenToCollabRow: Decodable {
+        let openToCollab: Bool?
+        enum CodingKeys: String, CodingKey { case openToCollab = "open_to_collab" }
+    }
+
+    /// Whether the signed-in user is listed on the Collab map
+    /// (`users.open_to_collab`). False when signed out or the row is missing.
+    public func getOpenToCollab() async throws -> Bool {
+        guard let uid = currentUserId else { return false }
+        do {
+            let rows: [OpenToCollabRow] = try await client.from("users")
+                .select("open_to_collab")
+                .eq("user_id", value: uid)
+                .limit(1)
+                .execute()
+                .value
+            return rows.first?.openToCollab ?? false
+        } catch {
+            throw mapError(error)
+        }
+    }
+
+    /// Opts the signed-in user in/out of the Collab map (`set_open_to_collab`).
+    public func setOpenToCollab(_ open: Bool) async throws {
+        try await executeRpc("set_open_to_collab", params: ["p_open": open])
+        if let uid = currentUserId { await invalidateProfile(userId: uid) }
+        // The Collab map's artist list filters on this flag.
+        await cache.removeAll(matching: "rpc:get_explore_artists")
+    }
+
+    /// Accepts or declines a pending collaborator relationship
+    /// (`respond_to_collaborator`) — the inline actions on a notification.
+    /// Returns the resulting status ("accepted" / "rejected").
+    @discardableResult
+    public func respondToCollaborator(relationshipId: String, accept: Bool) async throws -> String {
+        struct Result: Decodable { let status: String? }
+        let result: Result = try await performRpc(
+            "respond_to_collaborator",
+            params: ["p_relationship_id": relationshipId, "p_accept": accept]
+        )
+        return result.status ?? (accept ? "accepted" : "rejected")
+    }
+
+    // MARK: - Social: sign-in methods + password (Settings → Security)
+
+    /// Which ways the account can sign in, from the auth user's identities
+    /// (fetched fresh, so a just-set password shows up).
+    public func signInMethods() async throws -> SignInMethods {
+        do {
+            let identities = try await client.auth.user().identities ?? []
+            return SignInMethods(
+                hasPassword: identities.contains { $0.provider == "email" },
+                providers: identities.map(\.provider).filter { $0 != "email" }
+            )
+        } catch {
+            throw mapError(error)
+        }
+    }
+
+    /// Changes (or, for OAuth-only accounts, sets) the account password —
+    /// mirrors the web's security section. The current password is verified
+    /// with a direct token request that never touches the live session; on a
+    /// true change every other session is signed out.
+    public func changePassword(email: String?, currentPassword: String?, newPassword: String) async throws {
+        if let currentPassword, let email {
+            guard try await verifyPassword(email: email, password: currentPassword) else {
+                throw PasswordChangeError.incorrectCurrentPassword
+            }
+        }
+        do {
+            try await client.auth.update(user: UserAttributes(password: newPassword))
+            if currentPassword != nil {
+                try? await client.auth.signOut(scope: .others)
+            }
+        } catch {
+            throw mapError(error)
+        }
+    }
+
+    /// Does a CONFIRMED account already use this email? Asks the web app's
+    /// `/api/auth/email-status` (it holds the admin key the app can't), the
+    /// same check the web's sign-up runs on its first step. Unconfirmed
+    /// sign-ups and any failure report false, so sign-up just carries on (its
+    /// own existing-account detection still catches the rest).
+    public func emailHasAccount(_ email: String) async -> Bool {
+        guard let url = URL(string: "https://www.volspire.com/api/auth/email-status") else { return false }
+        var request = URLRequest(url: url, timeoutInterval: 8)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["email": email])
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return false }
+            return json["exists"] as? Bool ?? false
+        } catch {
+            return false
+        }
+    }
+
+    /// True when `password` signs `email` in — a bare GoTrue password grant,
+    /// so the app's own session and tokens are left alone.
+    private func verifyPassword(email: String, password: String) async throws -> Bool {
+        guard let url = URL(string: "\(SupabaseConfig.baseURL)/auth/v1/token?grant_type=password") else {
+            throw SupabaseError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(SupabaseConfig.apiKey, forHTTPHeaderField: "apikey")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["email": email, "password": password])
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if (200 ..< 300).contains(status) { return true }
+            if status == 400 || status == 401 { return false }
+            throw SupabaseError.unknown(status)
+        } catch let error as SupabaseError {
+            throw error
+        } catch {
+            throw mapError(error)
+        }
     }
 
     /// Generic RPC call with caching

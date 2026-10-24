@@ -6,9 +6,8 @@
 //  orchestration — each section lives in its own file under `Views/`.
 //
 //  Architecture notes (the previous version stuttered and drifted hitboxes):
-//  • Per-frame scroll numbers live in `ProfileScrollState`, observed ONLY by
-//    the mini header — scrolling never re-renders this screen's body (same
-//    isolation Home uses for its header).
+//  • The header is the shared Settings-style bar (`appNavBar`), see-through
+//    over the hero until you scroll, then the bar + centred name fade in.
 //  • The hero's parallax stretch is scoped INSIDE the hero's decorative
 //    backdrop; no interactive view sits under a per-frame GeometryReader or
 //    offset, so tap targets can't drift.
@@ -21,22 +20,6 @@ import MediaLibrary
 import Services
 import SwiftUI
 
-/// Scroll-driven chrome state, isolated from the page body: per-frame writes
-/// land here and only `ProfileMiniHeader` observes them.
-@Observable @MainActor
-final class ProfileScrollState {
-    /// 0→1 crossfade for the mini header as the hero scrolls past.
-    private(set) var miniOpacity: Double = 0
-
-    func update(offsetY: CGFloat) {
-        // Fade the bar in early — about a third of the way into the hero.
-        let start = ProfileLayout.heroHeight * 0.32
-        let end = ProfileLayout.heroHeight * 0.5
-        let next = Double(min(1, max(0, (offsetY - start) / (end - start))))
-        if next != miniOpacity { miniOpacity = next }
-    }
-}
-
 struct ProfileScreen: View {
     @Environment(Router.self) private var router
     @Environment(Dependencies.self) private var dependencies
@@ -47,7 +30,6 @@ struct ProfileScreen: View {
     @Environment(FeedStore.self) private var feedStore
 
     @State private var viewModel = ProfileScreenViewModel()
-    @State private var scrollState = ProfileScrollState()
     @State private var selectedTab: ProfileTab = .tracks
     @State private var showEditProfile = false
     @State private var showShareSheet = false
@@ -99,33 +81,21 @@ struct ProfileScreen: View {
         .animation(.easeInOut(duration: 0.35), value: isInitialLoading)
         .animation(.easeInOut(duration: 0.35), value: isError)
         .animation(.easeInOut(duration: 0.35), value: viewModel.isUnavailable)
-        .background(Color.vBase.ignoresSafeArea())
-        .preferredColorScheme(.dark)
-        .ignoresSafeArea(edges: .top)
-        .navigationBarBackButtonHidden(true)
-        .toolbarBackground(.hidden, for: .navigationBar)
-        .toolbar {
-            // Show the back chevron whenever this profile was pushed (has an explicit
-            // userId) — including your *own* profile opened from elsewhere (e.g. a
-            // shared-track card). Only the Profile tab root (userId == nil) omits it.
-            if userId != nil {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    BackButton()
-                }
-            }
-            // Report / Block — only on other people's profiles.
+        // The Settings-style bar: nothing over the hero at rest; the bar and
+        // the centred @username fade in together once you scroll. A back
+        // chevron only when this profile was pushed (the Profile tab is a
+        // main screen); "…" (report / block) only on other people's.
+        .appNavBar(
+            title: viewModel.username,
+            collapsing: true,
+            fadeTitle: true,
+            overlaysContent: true,
+            onBack: userId != nil ? { dismiss() } : nil
+        ) {
             if !isOwnProfile {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HeaderIconButton(icon: .ellipsis, shadow: true, size: ViewConst.heroOverlayIconSize) { showUserOptions = true }
-                }
+                HeaderIconButton(icon: .ellipsis, size: ViewConst.heroOverlayIconSize) { showUserOptions = true }
             }
         }
-        // The scrolled-past bar (background + centred username) fades in over
-        // the content; it never hit-tests, so the toolbar buttons stay live.
-        .overlay(alignment: .top) {
-            ProfileMiniHeader(state: scrollState, viewModel: viewModel)
-        }
-        .enableSwipeBack()
         .navigationDestination(isPresented: $showEditProfile) {
             EditProfileScreen(viewModel: viewModel, userId: resolvedUserId)
         }
@@ -237,6 +207,12 @@ struct ProfileScreen: View {
         // The own-profile tab stays mounted (the tab bar keeps tabs alive), so a
         // fresh upload otherwise sat invisible until relaunch even though the
         // API cache was dropped — refetch in place when the user posts content.
+        // Edit Profile saved (from here, or from Settings → Profile with its
+        // own model): refetch so the hero shows the new photo / banner / bio.
+        .onReceive(NotificationCenter.default.publisher(for: .ownProfileUpdated)) { _ in
+            guard isOwnProfile, didLoad else { return }
+            Task { await viewModel.refreshProfile(userId: resolvedUserId) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .ownContentPosted)) { _ in
             guard isOwnProfile, didLoad else { return }
             Task {
@@ -275,9 +251,6 @@ struct ProfileScreen: View {
             }
         }
         .scrollIndicators(.hidden)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
-            scrollState.update(offsetY: y)
-        }
     }
 }
 
@@ -392,7 +365,9 @@ private extension ProfileScreen {
     }
 
     func select(_ tab: ProfileTab) {
-        withAnimation(.easeInOut(duration: 0.2)) { selectedTab = tab }
+        // Home's tab switch: content crossfades (opacity only — see
+        // ProfileTabContent) while the tab bar's underline slides.
+        withAnimation(.smooth(duration: 0.3)) { selectedTab = tab }
     }
 
     /// Blocks this profile's user, then pops back — their content is now hidden.

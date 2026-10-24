@@ -2,9 +2,9 @@
 //  ConversationRow.swift
 //  Volspire
 //
-//  A single conversation thread row — avatar, name, last-message preview, unread
-//  dot. Shared by the inbox (MessagesScreen) and the per-category list
-//  (MessageCategoryScreen). Tapping opens the conversation.
+//  A single conversation thread row — avatar, name, time, last-message
+//  preview, unread dot. Shared by the inbox (MessagesScreen) and the
+//  per-category list (MessageCategoryScreen). Tapping opens the conversation.
 //
 
 import DesignSystem
@@ -25,12 +25,12 @@ struct ConversationRow: View {
             ))
         } label: {
             HStack(spacing: 12) {
-                avatar
-                VStack(alignment: .leading, spacing: 3) {
+                AvatarView(url: item.avatarURL, name: item.username, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
                         Text(item.username)
-                            .font(item.hasUnread ? .appCalloutSemibold : .appCallout)
-                            .foregroundStyle(.white)
+                            .font(item.hasUnread ? .appSubheadlineSemibold : .appSubheadlineMedium)
+                            .foregroundStyle(item.hasUnread ? Color.vText : Color.vTextRow)
                             .lineLimit(1)
                         Spacer(minLength: 4)
                         Text(MessageTime.ago(item.lastMessageAt))
@@ -40,26 +40,21 @@ struct ConversationRow: View {
                     }
                     HStack(spacing: 6) {
                         Text(item.preview)
-                            .font(.appFootnote)
-                            .foregroundStyle(item.hasUnread ? .white.opacity(0.9) : Color.vText3)
+                            .font(.appCaption)
+                            .foregroundStyle(item.hasUnread ? Color.vText : Color.vText3)
                             .lineLimit(1)
                         Spacer(minLength: 0)
                         if item.hasUnread {
-                            // One dot color app-wide (the web's row dots are white,
-                            // but iOS standardizes every unread dot on vUnread).
-                            Circle().fill(Color.vUnread).frame(width: 7, height: 7)
+                            // Red unread dot (the app's shared unread colour).
+                            Circle().fill(Color.vUnread).frame(width: 8, height: 8)
                         }
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .padding(.vertical, 12)
             .contentShape(.rect)
         }
-        .buttonStyle(RowHighlightButtonStyle())
-    }
-
-    private var avatar: some View {
-        AvatarView(url: item.avatarURL, name: item.username, size: 46)
+        .buttonStyle(RowHighlightButtonStyle(cornerRadius: 0))
     }
 }

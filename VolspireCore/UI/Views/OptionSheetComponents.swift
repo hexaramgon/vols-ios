@@ -5,8 +5,9 @@
 //  Shared anatomy for the slide-up "…" option sheets, lifted out of
 //  `TrackOptionsSheet` (the canonical example) so every sheet reads — and
 //  stays — identical:
-//  - `OptionSheetRow`: the icon + title action row. `tint` drives both the
-//    glyph and the label (destructive rows pass a red tint); an optional
+//  - `OptionSheetRow`: the icon + title action row. By default the glyph is
+//    `vText2` and the label `vText`; a `tint` drives both (destructive rows
+//    pass a red tint); an optional
 //    subtitle and trailing accessory cover the track sheet's spinner rows.
 //  - `selfSizedDetent()`: the measured-detent scaffold — the sheet detents to
 //    exactly fit its content instead of a fixed `.medium` or hand-computed
@@ -26,7 +27,7 @@ struct OptionSheetRow<Trailing: View>: View {
     private let icon: LucideIcon.Name
     private let title: String
     private let subtitle: String?
-    private let tint: Color
+    private let tint: Color?
     private let action: () -> Void
     private let trailing: Trailing
 
@@ -36,7 +37,7 @@ struct OptionSheetRow<Trailing: View>: View {
         icon: LucideIcon.Name,
         title: String,
         subtitle: String? = nil,
-        tint: Color = .white,
+        tint: Color? = nil,
         action: @escaping () -> Void,
         @ViewBuilder trailing: () -> Trailing
     ) {
@@ -52,17 +53,17 @@ struct OptionSheetRow<Trailing: View>: View {
         Button(action: action) {
             HStack(spacing: 14) {
                 LucideIcon(icon, .lg)
-                    .foregroundStyle(tint)
+                    .foregroundStyle(tint ?? Color.vText2)
                     .frame(width: 24)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(.appBody)
-                        .foregroundStyle(tint)
+                        .foregroundStyle(tint ?? Color.vText)
                     if let subtitle {
                         Text(subtitle)
                             .font(.appFootnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.vText3)
                     }
                 }
 
@@ -84,7 +85,7 @@ extension OptionSheetRow where Trailing == EmptyView {
         icon: LucideIcon.Name,
         title: String,
         subtitle: String? = nil,
-        tint: Color = .white,
+        tint: Color? = nil,
         action: @escaping () -> Void
     ) {
         self.init(icon: icon, title: title, subtitle: subtitle, tint: tint, action: action) {
@@ -145,5 +146,116 @@ extension View {
     /// the present animation settles — see RespondSheet.)
     func selfSizedDetent(keyboardSafe: Bool = false) -> some View {
         modifier(SelfSizedDetentModifier(keyboardSafe: keyboardSafe))
+    }
+}
+
+// MARK: - Pop mark (the app's animated check / cross)
+
+/// The one "it worked / it didn't" mark: a disc that pops in on a spring while
+/// its check (or cross) draws itself stroke by stroke; turning off eases back
+/// to the resting state. Picker rows (`AddedCheck`), sign-up's password rules
+/// and username availability all use it, so they feel the same.
+struct PopMark: View {
+    enum Mark { case check, cross }
+    /// What shows while off: the picker's outlined "+", a soft dot, or nothing.
+    enum Rest { case plus, dot, none }
+
+    let isOn: Bool
+    var mark: Mark = .check
+    var rest: Rest = .plus
+    var tint: Color = .green
+    var size: CGFloat = 26
+
+    @State private var drawn: CGFloat = 0
+
+    var body: some View {
+        ZStack {
+            switch rest {
+            case .plus:
+                Circle()
+                    .strokeBorder(Color.vText3, lineWidth: 1.6)
+                    .overlay { LucideIcon(.plus, .sm).foregroundStyle(Color.vText3) }
+                    .scaleEffect(isOn ? 0.5 : 1)
+                    .opacity(isOn ? 0 : 1)
+            case .dot:
+                Circle()
+                    .fill(Color.ink(0.08))
+                    .scaleEffect(isOn ? 0.5 : 1)
+                    .opacity(isOn ? 0 : 1)
+            case .none:
+                EmptyView()
+            }
+
+            Circle()
+                .fill(tint)
+                .overlay {
+                    Group {
+                        switch mark {
+                        case .check: CheckShape().trim(from: 0, to: drawn)
+                            .stroke(.white, style: stroke)
+                        case .cross: CrossShape().trim(from: 0, to: drawn)
+                            .stroke(.white, style: stroke)
+                        }
+                    }
+                    .padding(size * 0.27)
+                }
+                .scaleEffect(isOn ? 1 : 0.4)
+                .opacity(isOn ? 1 : 0)
+        }
+        .frame(width: size, height: size)
+        .animation(.spring(response: 0.35, dampingFraction: 0.55), value: isOn)
+        .onAppear { drawn = isOn ? 1 : 0 }
+        .onChange(of: isOn) { _, on in
+            if on {
+                drawn = 0
+                withAnimation(.easeOut(duration: 0.28).delay(0.08)) { drawn = 1 }
+            } else {
+                withAnimation(.easeIn(duration: 0.15)) { drawn = 0 }
+            }
+        }
+    }
+
+    private var stroke: StrokeStyle {
+        StrokeStyle(lineWidth: max(1.6, size * 0.085), lineCap: .round, lineJoin: .round)
+    }
+}
+
+/// The spring the marks pop on — for the text that changes alongside them.
+extension Animation {
+    static let popMark = Animation.spring(response: 0.35, dampingFraction: 0.55)
+}
+
+/// A picker row's add / added control (Add to playlist, Add to Workspace): an
+/// outlined "+" that, once added, becomes the green pop mark.
+struct AddedCheck: View {
+    let isOn: Bool
+
+    var body: some View {
+        PopMark(isOn: isOn)
+            .accessibilityLabel(isOn ? "Added" : "Add")
+    }
+}
+
+/// An ✕ path in its rect (one stroke, then the other).
+struct CrossShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let i = rect.width * 0.1
+        p.move(to: CGPoint(x: rect.minX + i, y: rect.minY + i))
+        p.addLine(to: CGPoint(x: rect.maxX - i, y: rect.maxY - i))
+        p.move(to: CGPoint(x: rect.maxX - i, y: rect.minY + i))
+        p.addLine(to: CGPoint(x: rect.minX + i, y: rect.maxY - i))
+        return p
+    }
+}
+
+/// A checkmark path in its rect (short leg, then the long one).
+struct CheckShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX + rect.width * 0.05, y: rect.midY + rect.height * 0.02))
+        p.addLine(to: CGPoint(x: rect.minX + rect.width * 0.38, y: rect.maxY - rect.height * 0.12))
+        p.addLine(to: CGPoint(x: rect.maxX - rect.width * 0.02, y: rect.minY + rect.height * 0.14))
+        return p
     }
 }

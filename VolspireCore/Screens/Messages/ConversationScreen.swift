@@ -2,9 +2,10 @@
 //  ConversationScreen.swift
 //  Volspire
 //
-//  A single chat thread — sleek header, grouped message bubbles (accent for the
-//  current user, dark surface for the other) with tails + time dividers, and a
-//  modern keyboard-aware input bar with photo/file attachments.
+//  A single chat thread — header (avatar, name, context subtitle, request
+//  actions, "…"), the listing strip for listing threads, grouped bubbles
+//  (outgoing vSurface2, incoming vSurface) with time dividers, and the
+//  capsule composer with photo/file attachments.
 //
 
 import AVFoundation
@@ -24,10 +25,6 @@ func attachmentCacheKey(_ url: URL) -> String {
     comps?.query = nil
     return comps?.string ?? url.absoluteString
 }
-
-/// Accent fill for the current user's bubbles + send button — the shared
-/// send-accent gradient, so chat and player comments match.
-let accentGradient = LinearGradient.sendAccent
 
 struct ConversationScreen: View {
     @Environment(\.dismiss) private var dismiss
@@ -51,6 +48,9 @@ struct ConversationScreen: View {
     /// LIVE collaborator state — the thread's request card keeps its historical
     /// "accepted" after a removal, so the menu option can't be gated on it.
     @State private var isActiveCollaborator = false
+    /// The other participant's profile (roles, location, collaborator status)
+    /// for the header subtitle — `get_user_profile`, cached.
+    @State private var otherProfile: ApiUserProfile?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -83,6 +83,9 @@ struct ConversationScreen: View {
                 vm.draft = inboxStore.draft(for: conversation.convoId)
             }
             viewModel = vm
+            if otherProfile == nil, let otherId = conversation.otherUserId {
+                Task { otherProfile = try? await dependencies.supabaseService.getUserProfile(userId: otherId) }
+            }
             // Opening reads the thread — zero the list row immediately.
             inboxStore.conversationOpened(conversation.convoId)
             // Fetch runs concurrently with the push; the thread renders only
@@ -144,55 +147,45 @@ struct ConversationScreen: View {
 
     // MARK: Listing context banner
 
-    /// Whether the listing context strip is showing — the header hands its
-    /// bottom hairline to the strip so the two read as one header block.
-    private var showsListingBanner: Bool { viewModel?.linkedListing != nil }
 
-    /// "About this listing" strip — one compact line under the header: a small
-    /// brand "Listing" tag, the title, and a chevron. Tap anywhere to open the
-    /// listing. Sits on the vBar chrome fill and carries the header's hairline.
+    /// The listing strip — which Collab Board listing this thread came from:
+    /// an accent tile with the category glyph, the title, "Category · N
+    /// responses" (or "· Closed"), and a chevron. The whole band opens it.
     private func listingBanner(_ listing: ApiListing) -> some View {
         Button { router.navigateToCollabListing(listing) } label: {
             HStack(spacing: 12) {
-                // Reply-quote treatment: a thin brand bar marks this as
-                // referenced context, no tag chrome needed.
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.brand)
-                    .frame(width: 3, height: 30)
+                LucideIcon(listing.categoryIcon, .lg)
+                    .foregroundStyle(Color.vOnColor)
+                    .frame(width: 40, height: 40)
+                    .background(Color.vAccent, in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Listing")
-                        .font(.appCaption)
-                        .foregroundStyle(Color.vText3)
                     Text(listing.title)
                         .font(.appSubheadlineSemibold)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
+                        .lineLimit(1)
+                    Text(listingMeta(listing))
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
                         .lineLimit(1)
                 }
 
                 Spacer(minLength: 8)
-
-                if listing.status != "open" {
-                    Text("Closed")
-                        .font(.appCaptionMedium)
-                        .foregroundStyle(Color.vText3)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Color.white.opacity(0.06), in: Capsule())
-                }
-                LucideIcon(.chevronRight, .sm).foregroundStyle(Color.vText3)
+                LucideIcon(.chevronRight, .md).foregroundStyle(Color.vText3)
             }
             .padding(.horizontal, ViewConst.screenPaddings)
             .padding(.vertical, 12)
             .contentShape(.rect)
         }
-        .buttonStyle(.plain)
-        .background {
-            // A shade apart from the header's vBase so the listing context
-            // reads as its own slim band within the header block.
-            Color.vBar
-                .overlay(alignment: .bottom) { Rectangle().fill(Color.vBorder).frame(height: 1) }
-        }
+        .buttonStyle(ListingStripButtonStyle())
+        .overlay(alignment: .bottom) { Rectangle().fill(Color.vDivider).frame(height: 1) }
         .transition(.opacity)
+    }
+
+    private func listingMeta(_ listing: ApiListing) -> String {
+        if (listing.status ?? "open") != "open" { return "\(listing.categoryLabel) · Closed" }
+        let n = listing.responseCount ?? 0
+        return "\(listing.categoryLabel) · \(n) response\(n == 1 ? "" : "s")"
     }
 
     // MARK: Header
@@ -209,7 +202,7 @@ struct ConversationScreen: View {
                 // screen's chevron reads identically (the old SF symbol rendered
                 // ~25% larger at the same point size).
                 LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .frame(width: 36, height: 40)
                     .contentShape(.rect)
             }
@@ -220,26 +213,14 @@ struct ConversationScreen: View {
                 guard let otherUserId = conversation.otherUserId else { return }
                 router.navigateToProfile(userId: otherUserId)
             } label: {
-                HStack(spacing: 11) {
+                HStack(spacing: 12) {
                     avatar
-                    VStack(alignment: .leading, spacing: 1) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(conversation.username)
-                            .font(.appBodyLargeSemibold)
-                            .foregroundStyle(.white)
+                            .font(.appSubheadlineSemibold)
+                            .foregroundStyle(Color.vText)
                             .lineLimit(1)
-                        // Context line for the ✕/✓ (or the grey Pending chip) next
-                        // to it — only while a request is awaiting a response.
-                        if pendingCollabRequest != nil {
-                            Text("Wants to collaborate")
-                                .font(.appCaption2Medium)
-                                .foregroundStyle(Color.vText3)
-                                .lineLimit(1)
-                        } else if awaitingCollabRequest != nil {
-                            Text("Collab request sent")
-                                .font(.appCaption2Medium)
-                                .foregroundStyle(Color.vText3)
-                                .lineLimit(1)
-                        }
+                        headerSubtitle
                     }
                 }
                 .contentShape(.rect)
@@ -252,40 +233,72 @@ struct ConversationScreen: View {
             // A pending collab request the other person sent → decline / accept
             // right here in the header (✕ / ✓), instead of buttons in the thread.
             // One I sent → a grey Pending chip in the same spot until they respond.
+            // (A request I sent needs no chip — the subtitle already says so.)
             if let request = pendingCollabRequest {
                 collabResponseButtons(request)
-            } else if awaitingCollabRequest != nil {
-                pendingChip
-            } else if conversation.otherUserId != nil {
+            }
+            if conversation.otherUserId != nil {
                 conversationMenu
             }
         }
         .padding(.leading, 6)
         .padding(.trailing, ViewConst.screenPaddings)
         .padding(.top, 4)
-        .padding(.bottom, 10)
+        .padding(.bottom, 12)
         .background {
             Color.vBase
                 .overlay(alignment: .bottom) {
-                    // When the listing strip is showing it carries the hairline
-                    // instead, so header + strip read as one block.
-                    if !showsListingBanner {
-                        Rectangle().fill(Color.vBorder).frame(height: 1)
-                    }
+                    Rectangle().fill(Color.vDivider).frame(height: 1)
                 }
                 .ignoresSafeArea(edges: .top)
         }
     }
 
-    /// Trailing "…" — report or block the other participant.
-    private var conversationMenu: some View {
-        Button { showUserOptions = true } label: {
-            LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
-                .foregroundStyle(.white)
-                .frame(width: 40, height: 40)
-                .contentShape(.rect)
+    /// The header's context line: a pending request's state, otherwise
+    /// "⑂ Collaborator · Producer, Vocalist · Austin, TX" from the profile.
+    @ViewBuilder
+    private var headerSubtitle: some View {
+        if pendingCollabRequest != nil {
+            subtitleText("Wants to collaborate")
+        } else if awaitingCollabRequest != nil {
+            subtitleText("Collab request sent")
+        } else if let profile = otherProfile {
+            let tags = (profile.tags ?? []).prefix(2).joined(separator: ", ")
+            let location = profile.location ?? ""
+            let rest = [tags, location].filter { !$0.isEmpty }.joined(separator: " · ")
+            let isCollaborator = socialStore.collabStatus(
+                conversation.otherUserId ?? "", fallback: profile.collaboratorStatus
+            ) == "accepted"
+            if isCollaborator || !rest.isEmpty {
+                HStack(spacing: 4) {
+                    if isCollaborator {
+                        LucideIcon(.gitMerge, .xs)
+                        Text("Collaborator")
+                        if !rest.isEmpty { Text("·").foregroundStyle(Color.vText3) }
+                    }
+                    if !rest.isEmpty {
+                        Text(rest).foregroundStyle(Color.vText3)
+                    }
+                }
+                .font(.appCaption)
+                .foregroundStyle(Color.vText2)
+                .lineLimit(1)
+            }
         }
-        .buttonStyle(.plain)
+    }
+
+    private func subtitleText(_ text: String) -> some View {
+        Text(text)
+            .font(.appCaption)
+            .foregroundStyle(Color.vText3)
+            .lineLimit(1)
+    }
+
+    /// Trailing "…" — report or block the other participant.
+    /// The plain, larger header "…", matching the folder / profile / listing headers.
+    private var conversationMenu: some View {
+        HeaderIconButton(icon: .ellipsis, size: ViewConst.heroOverlayIconSize) { showUserOptions = true }
+            .accessibilityLabel("Conversation options")
     }
 
     /// Blocks the other participant, then pops back to the message list.
@@ -324,38 +337,25 @@ struct ConversationScreen: View {
         viewModel?.messages.first { $0.isCollabRequest && $0.isFromMe && $0.isPendingRequest }
     }
 
-    /// Sender-side counterpart of the ✕/✓ buttons: nothing to act on, so an
-    /// all-grey chip holds the spot until the other party accepts or declines
-    /// (the 4s poll clears it live).
-    private var pendingChip: some View {
-        HStack(spacing: 6) {
-            LucideIcon(.clock, .sm)
-            Text("Pending").font(.appFootnoteSemibold)
-        }
-        .foregroundStyle(Color.vText2)
-        .padding(.horizontal, 12)
-        .frame(height: 36)
-        .background(Color.white.opacity(0.08), in: Capsule())
-        .transition(.scale.combined(with: .opacity))
-    }
-
     private func collabResponseButtons(_ request: ChatMessage) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button { Task { await viewModel?.respondToRequest(request, accept: false) } } label: {
-                LucideIcon(.x, .lg)
-                    .foregroundStyle(Color.vError)
-                    .frame(width: 36, height: 36)
-                    .background(Color.white.opacity(0.08), in: Circle())
+                LucideIcon(.x, .md)
+                    .foregroundStyle(Color.vControlLabel)
+                    .frame(width: 32, height: 32)
+                    .background(Color.vControl, in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Decline")
 
             Button { Task { await viewModel?.respondToRequest(request, accept: true) } } label: {
-                LucideIcon(.check, .lg)
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.green, in: Circle())
+                LucideIcon(.check, .md)
+                    .foregroundStyle(Color.vOnInverse)
+                    .frame(width: 32, height: 32)
+                    .background(Color.vInverse, in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Accept")
         }
         .transition(.scale.combined(with: .opacity))
     }
@@ -365,3 +365,10 @@ struct ConversationScreen: View {
     }
 }
 
+/// The listing strip's band: `vCardSolid`, highlighting to `vSurface` on press.
+private struct ListingStripButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color.vSurface : Color.vCardSolid)
+    }
+}

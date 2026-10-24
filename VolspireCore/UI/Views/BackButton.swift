@@ -14,15 +14,19 @@ import SwiftUI
 struct BackButton: View {
     @Environment(\.dismiss) private var dismiss
     /// A subtle shadow keeps the chevron legible over hero art; turn it off for plain
-    /// dark-background headers (search / analytics / edit-profile).
+    /// headers (search / analytics / edit-profile).
     var shadow: Bool = true
     var action: (() -> Void)? = nil
+
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Button { (action ?? { dismiss() })() } label: {
             LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(shadow ? 0.5 : 0), radius: 2, y: 1)
+                .foregroundStyle(Color.vText)
+                // Shadow only for the light (dark-scheme) glyph — over hero art
+                // pin the button dark with `.alwaysDark()`.
+                .shadow(color: .black.opacity(shadow && colorScheme == .dark ? 0.5 : 0), radius: 2, y: 1)
                 // Grow the hit area to ~44pt without moving any pixels (an
                 // explicit frame would shift the chevron's leading alignment
                 // at every call site).

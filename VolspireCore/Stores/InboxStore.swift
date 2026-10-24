@@ -154,8 +154,8 @@ final class InboxStore {
     /// Refreshes both dots AND the app-icon badge from one RPC — the single
     /// `get_unread_counts` path (previously fetched independently by the tab
     /// bar, the badge refresher, and per-screen counters).
-    func refreshUnread() async {
-        guard let counts = try? await service.getUnreadCounts() else { return }
+    func refreshUnread(force: Bool = false) async {
+        guard let counts = try? await service.getUnreadCounts(force: force) else { return }
         unreadMessages = counts.messages
         unreadNotifications = counts.notifications
         PushNotificationManager.shared.setBadge(counts.notifications + counts.messages)
@@ -188,7 +188,9 @@ final class InboxStore {
         if let i = conversations.firstIndex(where: { $0.id == convoId }) {
             conversations[i].unreadCount = 0
         }
-        Task { await refreshUnread() }
+        // force: the mark-read just changed the truth — a coalesced count from
+        // seconds ago would strand the dot.
+        Task { await refreshUnread(force: true) }
     }
 
     /// Opening a thread reads it — zero the row immediately so the list behind
@@ -262,7 +264,7 @@ final class InboxStore {
         case "message":
             switch c.lastMessageAttachmentType?.lowercased() {
             case let t? where t.hasPrefix("image"): return "Image"
-            case let t? where t.hasPrefix("audio"): return "Voice message"
+            case let t? where t.hasPrefix("audio"): return "Audio"
             case let t? where t.hasPrefix("video"): return "Video"
             default: return "Attachment"
             }

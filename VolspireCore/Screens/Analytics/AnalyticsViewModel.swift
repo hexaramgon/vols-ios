@@ -2,8 +2,9 @@
 //  AnalyticsViewModel.swift
 //  Volspire
 //
-//  Loads the creator's per-track analytics (get_my_track_analytics) and derives
-//  the summary aggregates shown on the dashboard.
+//  Loads the creator's per-track analytics (get_my_track_analytics) for the
+//  web-matched "Your tracks" list + selected-track detail, and the selected
+//  track's listening heatmap (get_track_heatmap) on demand.
 //
 
 import Foundation
@@ -22,25 +23,41 @@ struct TrackAnalyticsItem: Identifiable {
     let dailyPlays: [ApiTrackAnalytics.DailyPlay]
     let sources: [String: Int]
     let genre: String?
+    let createdAt: Date?
 
     /// This track's plays per day over the last 30 days (oldest → today).
-    var dailyPlaysSeries: [Int] { AnalyticsViewModel.dailySeries(from: dailyPlays) }
+    let dailyPlaysSeries: [Int]
 
-    /// This track's source breakdown (label, count), highest first.
-    var sortedSources: [(label: String, count: Int)] {
-        sources.sorted { $0.value > $1.value }.map { (AnalyticsViewModel.sourceLabel($0.key), $0.value) }
+    /// Plays in the last 7 days.
+    var thisWeek: Int { dailyPlaysSeries.suffix(7).reduce(0, +) }
+    /// Plays in days 8–14.
+    var lastWeek: Int { dailyPlaysSeries.dropLast(7).suffix(7).reduce(0, +) }
+    /// Week-over-week change, as the web's `weekDelta`.
+    var weekDelta: Int { AnalyticsViewModel.weekDelta(thisWeek: thisWeek, lastWeek: lastWeek) }
+
+    /// This track's source breakdown as (label, count), highest first —
+    /// keys that share a label ("home_board" + "home_feed" → "Home") merged
+    /// into one bar.
+    var sortedSources: [(key: String, count: Int)] {
+        var byLabel: [String: Int] = [:]
+        for (key, count) in sources {
+            byLabel[AnalyticsViewModel.sourceLabel(key), default: 0] += count
+        }
+        return byLabel.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .map { ($0.key, $0.value) }
     }
 }
 
 @Observable @MainActor
 final class AnalyticsViewModel {
     private(set) var tracks: [TrackAnalyticsItem] = []
-    /// Audience engagement (followers / likes / saves / comments + 30d deltas).
-    /// Optional: the dashboard still renders without it if the RPC fails.
-    private(set) var engagement: ApiEngagementStats?
     private(set) var loaded = false
     /// The last load got no response (used as an offline indicator).
     private(set) var loadFailed = false
+    /// The track shown in the detail — nil falls back to the first (top) track.
+    var selectedId: String?
+    /// Per-second listen counts per track id, once its heatmap has loaded.
+    private(set) var heatmaps: [String: [Int]] = [:]
 
     private let supabaseService: SupabaseService
     private let storageService: StorageService
@@ -51,10 +68,11 @@ final class AnalyticsViewModel {
         self.storageService = storageService
     }
 
+    var selected: TrackAnalyticsItem? {
+        tracks.first { $0.id == selectedId } ?? tracks.first
+    }
+
     func load() async {
-        // Engagement loads alongside the track analytics; it's additive, so a
-        // failure there never blocks the dashboard.
-        async let engagementResult = supabaseService.getMyEngagementStats()
         do {
             tracks = try await supabaseService.getMyTrackAnalytics().map { row in
                 TrackAnalyticsItem(
@@ -67,7 +85,9 @@ final class AnalyticsViewModel {
                     avgSeekCount: row.avgSeekCount,
                     dailyPlays: row.dailyPlays,
                     sources: row.sources,
-                    genre: row.genre
+                    genre: row.genre,
+                    createdAt: MessageTime.parse(row.createdAt),
+                    dailyPlaysSeries: Self.dailySeries(from: row.dailyPlays)
                 )
             }
             loadFailed = false
@@ -75,51 +95,37 @@ final class AnalyticsViewModel {
             debugLog("[AnalyticsVM] Failed to load analytics: \(error)")
             loadFailed = true
         }
-        engagement = try? await engagementResult
         loaded = true
     }
 
-    // MARK: - Aggregates
+    /// Fetches a track's heatmap once (cached by the service afterwards). A
+    /// failure leaves it unloaded, so the chart keeps its skeleton rather than
+    /// claiming "No listening data yet."
+    func loadHeatmap(trackId: String) async {
+        guard heatmaps[trackId] == nil else { return }
+        do {
+            let sessions = try await supabaseService.getTrackHeatmap(trackId: trackId)
+            heatmaps[trackId] = SupabaseService.heatmapCounts(sessions)
+        } catch {
+            debugLog("[AnalyticsVM] Failed to load heatmap: \(error)")
+        }
+    }
 
-    var totalStreams: Int { tracks.reduce(0) { $0 + $1.streams } }
-    var totalListeners: Int { tracks.reduce(0) { $0 + $1.uniqueListeners } }
+    // MARK: - Aggregates (Profile's dashboard card)
 
-    /// Stream-weighted average listen time, in whole seconds.
-    var avgListenSeconds: Int {
-        let streams = totalStreams
-        guard streams > 0 else { return 0 }
-        let weighted = tracks.reduce(0.0) { $0 + $1.avgListenTime * Double($1.streams) }
-        return Int((weighted / Double(streams)).rounded())
+    /// Total plays per day over the last 30 days (oldest → today), all tracks.
+    private var dailyPlays: [Int] {
+        Self.dailySeries(from: tracks.flatMap { $0.dailyPlays })
     }
 
     /// Total plays counted in the last 30 days.
     var playsLast30: Int { dailyPlays.reduce(0, +) }
 
-    /// Week-over-week change (last 7 days vs the 7 before), as a percentage.
-    var weekTrend: Int { Self.weekTrend(from: dailyPlays) }
-
-    /// The plays series for the selected window (7 or 30 days, oldest → today).
-    func plays(last days: Int) -> [Int] { Array(dailyPlays.suffix(days)) }
-
-    /// Trend for a window: its most recent half vs the half before it, as a
-    /// percentage (so the pill stays meaningful for both 7D and 30D).
-    func trend(days: Int) -> Int {
-        let series = Array(dailyPlays.suffix(days))
-        let half = max(days / 2, 1)
-        let recent = series.suffix(half).reduce(0, +)
-        let prior = series.dropLast(half).suffix(half).reduce(0, +)
-        if prior == 0 { return recent > 0 ? 100 : 0 }
-        return Int(((Double(recent) - Double(prior)) / Double(prior) * 100).rounded())
-    }
-
-    /// Total source-attributed plays (denominator for source percentages).
-    var totalSourcePlays: Int {
-        tracks.reduce(0) { $0 + $1.sources.values.reduce(0, +) }
-    }
-
-    /// Total plays per day over the last 30 days (oldest → today), all tracks.
-    var dailyPlays: [Int] {
-        Self.dailySeries(from: tracks.flatMap { $0.dailyPlays })
+    /// Week-over-week change across all tracks (last 7 days vs the 7 before).
+    var weekTrend: Int {
+        let series = dailyPlays
+        return Self.weekDelta(thisWeek: series.suffix(7).reduce(0, +),
+                              lastWeek: series.dropLast(7).suffix(7).reduce(0, +))
     }
 
     /// Builds a 30-day (oldest → today) plays series from raw daily-play rows.
@@ -141,37 +147,37 @@ final class AnalyticsViewModel {
         }
     }
 
-    /// Week-over-week % change from a 30-day series.
-    nonisolated static func weekTrend(from series: [Int]) -> Int {
-        let thisWeek = series.suffix(7).reduce(0, +)
-        let lastWeek = series.dropLast(7).suffix(7).reduce(0, +)
+    /// round((tw − lw) / lw · 100); a zero prior week reads 100 (or 0 when
+    /// both are empty) — the web's `weekDelta`.
+    nonisolated static func weekDelta(thisWeek: Int, lastWeek: Int) -> Int {
         if lastWeek == 0 { return thisWeek > 0 ? 100 : 0 }
         return Int(((Double(thisWeek) - Double(lastWeek)) / Double(lastWeek) * 100).rounded())
     }
 
-    /// Top play sources across all tracks (label, count), highest first.
-    var topSources: [(label: String, count: Int)] {
-        var agg: [String: Int] = [:]
-        for track in tracks {
-            for (source, count) in track.sources {
-                agg[source, default: 0] += count
-            }
-        }
-        return agg.sorted { $0.value > $1.value }
-            .prefix(5)
-            .map { (Self.sourceLabel($0.key), $0.value) }
-    }
-
+    /// A play source key as a readable label. Known keys get a name; any
+    /// other ("home_insight", "profile-credits") is humanized — separators
+    /// to spaces, first letter capitalized — so no raw key ever shows.
     nonisolated static func sourceLabel(_ key: String) -> String {
         switch key {
-        case "explore": "Explore"
+        case "explore", "explore_details": "Explore"
+        case "explore_billboard": "Explore spotlight"
+        case "home_board", "home_feed", "home_default", "home_insight": "Home"
         case "profile": "Profile"
+        case "profile-credits", "profile_credits": "Profile credits"
         case "library": "Library"
         case "direct_link": "Direct link"
         case "search": "Search"
-        case "home_feed": "Home"
-        case "profile-credits": "Credits"
-        default: key.capitalized
+        case "following": "Following"
+        case "collab": "Collab"
+        case "workspace": "Workspace"
+        case "seed", "": "Other"
+        default:
+            {
+                let words = key.replacingOccurrences(of: "_", with: " ")
+                    .replacingOccurrences(of: "-", with: " ")
+                    .lowercased()
+                return words.prefix(1).uppercased() + words.dropFirst()
+            }()
         }
     }
 }

@@ -12,13 +12,16 @@ struct AppView: View {
     @Environment(Dependencies.self) var dependencies
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Minimum time the splash stays up so the logo is actually seen.
+    /// Minimum time the splash holds before its exit, so the logo is seen.
     @State private var minSplashElapsed = false
+    /// The splash's exit animation has finished — it's removed.
+    @State private var splashFinished = false
 
-    /// Splash covers the launch + auth restore; it stays until the logo's had its
-    /// moment AND auth has resolved (so the loading spinner never flashes through).
-    private var showSplash: Bool {
-        !minSplashElapsed || dependencies.authManager.state == .loading
+    /// The splash covers the launch + auth restore; its spear-thrust exit
+    /// starts once the logo's had its moment AND auth has resolved (so the
+    /// loading state never flashes through).
+    private var splashReady: Bool {
+        minSplashElapsed && dependencies.authManager.state != .loading
     }
 
     var body: some View {
@@ -44,7 +47,7 @@ struct AppView: View {
                     LoginScreen()
                 }
             }
-            .preferredColorScheme(.dark)
+            .appAppearance()
             .environment(\.font, .geist(17, relativeTo: .body))
             // App-wide: tapping inert space drops the keyboard (fields/buttons
             // still win their taps). Sheets get it via sheetBackground();
@@ -53,13 +56,12 @@ struct AppView: View {
             // Smooth launch/auth transition (loading → app). Doesn't affect tab switching.
             .animation(.easeInOut(duration: 0.3), value: dependencies.authManager.state)
 
-            if showSplash {
-                SplashView()
-                    .transition(.opacity)
+            // Runs its own exit (thrust + fade); removed once it's done.
+            if !splashFinished {
+                VolspireSplashView(isReady: splashReady) { splashFinished = true }
                     .zIndex(10)
             }
         }
-        .animation(.easeOut(duration: 0.45), value: showSplash)
         // Sign-out teardown: whenever an authenticated session ends (explicit
         // sign-out OR a server-revoked session), stop playback and drop all
         // per-user in-memory state so the next session starts clean.
@@ -89,7 +91,7 @@ struct AppView: View {
             await dependencies.authManager.listenForAuthChanges()
         }
         .task {
-            try? await Task.sleep(for: .seconds(1.1))
+            try? await Task.sleep(for: .seconds(0.6))
             minSplashElapsed = true
         }
     }

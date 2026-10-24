@@ -9,14 +9,11 @@ import Player
 import Services
 import SwiftUI
 
-/// A row below the Now Playing artwork: the About panel (description, tags,
-/// and the credit facepile — tap it for the credits sheet) plus the action
-/// column.
+/// A row below the Now Playing artwork: the About panel (description) plus
+/// the action column. The credit facepile lives beside the effects button.
 struct NowPlayingInfoStrip: View {
     @Environment(PlayerController.self) var controller
-    @State private var showFolderPicker = false
     @State private var showAddToPlaylist = false
-    @State private var showCredits = false
     /// Height of the last CONFIRMED description — the in-flight skeleton holds
     /// this exact height so nothing moves until the next response arrives;
     /// the layout then animates to the new track's real height.
@@ -40,20 +37,9 @@ struct NowPlayingInfoStrip: View {
         // Resolve the strip's geometry as one unit so it tracks the drag-to-dismiss
         // rigidly with the rest of the player (otherwise it "moves first").
         .geometryGroup()
-        .sheet(isPresented: $showCredits) {
-            PlayerCreditsSheet(people: creditPeople) { userId in
-                // Collapse the player and push the person's profile.
-                controller.pendingProfileNavigation = userId
-            }
-        }
-        .sheet(isPresented: $showFolderPicker) {
-            if let id = currentTrackId {
-                WorkspaceFolderPicker(trackId: id)
-            }
-        }
         .sheet(isPresented: $showAddToPlaylist) {
             if let id = currentTrackId {
-                AddToPlaylistSheet(trackId: id)
+                AddToPlaylistSheet(trackId: id, alwaysDark: true)
             }
         }
     }
@@ -63,11 +49,14 @@ struct NowPlayingInfoStrip: View {
 
 private extension NowPlayingInfoStrip {
     /// Two compact circular icon actions on the right: Add to playlist on top,
-    /// Workspace (add to workspace) below — saves the horizontal space the labels took.
+    /// Save (bookmark) below — saves the horizontal space the labels took.
     var actionsColumn: some View {
         VStack(spacing: 12) {
-            circleAction(.listMusic, label: "Add to playlist") { showAddToPlaylist = true }
-            circleAction(.folder, label: "Workspace") { showFolderPicker = true }
+            iconAction(.listMusic, label: "Add to playlist") { showAddToPlaylist = true }
+            iconAction(controller.isSaved ? .bookmarkFill : .bookmark,
+                       label: controller.isSaved ? "Saved" : "Save") {
+                Task { await controller.toggleSave() }
+            }
         }
         .frame(maxHeight: .infinity, alignment: .center)
     }
@@ -89,7 +78,7 @@ private extension NowPlayingInfoStrip {
     }
 
     /// True once the fetched detail actually belongs to the playing track —
-    /// only then may "No description provided." (or the tag row) render.
+    /// only then may the description (or its absence) render.
     /// Workspace files have no track detail and count as loaded (defensive
     /// empty states: never claim "nothing" mid-fetch).
     var detailLoaded: Bool {
@@ -132,7 +121,8 @@ private extension NowPlayingInfoStrip {
                     artwork: controller.display.albumArtwork,
                     title: controller.display.title,
                     description: controller.trackDetail?.description,
-                    tags: controller.trackDetail?.metadata?.tags ?? []
+                    tags: controller.trackDetail?.metadata?.tags ?? [],
+                    duration: controller.progress?.duration
                 )
             } label: {
                 VStack(alignment: .leading, spacing: 8) {
@@ -150,36 +140,24 @@ private extension NowPlayingInfoStrip {
                         Text(desc)
                             .font(.appFootnote)
                             .lineLimit(2)
-                            .foregroundStyle(Theme.body)
-                            .playerOverlayShadow()
-                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { descHeight = $0 })
-                            .transition(.opacity)
-                    } else {
-                        Text("No description provided.")
-                            .font(.appFootnote)
-                            .italic()
-                            .foregroundStyle(Theme.muted)
+                            .foregroundStyle(Color.vText)
                             .playerOverlayShadow()
                             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { descHeight = $0 })
                             .transition(.opacity)
                     }
+                    // No description: nothing at all (no placeholder line).
 
                 }
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .disabled(!detailLoaded)
-
-            Spacer(minLength: 8)
-
-            if !creditPeople.isEmpty {
-                creditsFacepile
-                    .transition(.opacity)
-            }
+            // The description gets the whole width up to the action column
+            // (the credits facepile that used to sit here moved out).
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.trailing, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // One soft crossfade as the detail lands (desc, tags, facepile together).
+        // One soft crossfade as the detail lands.
         .animation(.easeInOut(duration: 0.3), value: detailLoaded)
     }
 
@@ -189,314 +167,20 @@ private extension NowPlayingInfoStrip {
             .shimmering()
     }
 
-    /// Overlapping credit avatars with a "Credits" label — the labelled tap
-    /// target (bottom row of the panel) that opens the credits sheet.
-    var creditsFacepile: some View {
-        Button { showCredits = true } label: {
-            HStack(spacing: 7) {
-                HStack(spacing: -8) {
-                    ForEach(creditPeople.prefix(3)) { person in
-                        AvatarView(urlString: person.avatarUrl, name: person.username, size: 24)
-                    }
-                }
-                Text(creditPeople.count > 3 ? "Credits · \(creditPeople.count)" : "Credits")
-                    .font(.appCaption2Semibold)
-                    .foregroundStyle(Theme.body)
-                    .playerOverlayShadow()
-                LucideIcon(.chevronRight, .xs)
-                    .foregroundStyle(Theme.muted)
-                    .playerOverlayShadow()
-            }
-            .padding(.vertical, 2)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// A credited person the panel can link to.
-    struct CreditPerson: Identifiable {
-        let id: String
-        let username: String
-        let userId: String?
-        let avatarUrl: String?
-        let role: String
-    }
-
-    /// The artist first, then the track's credited collaborators with their roles.
-    /// Empty while the detail is in flight — the facepile fades in on load.
-    var creditPeople: [CreditPerson] {
-        guard detailLoaded else { return [] }
-        var people: [CreditPerson] = []
-        if let artist = controller.trackDetail?.artist, let name = artist.username {
-            people.append(CreditPerson(
-                id: "artist-\(artist.userId)", username: name, userId: artist.userId,
-                avatarUrl: artist.profileImageUrl, role: "Artist"
-            ))
-        } else if let name = controller.nowPlayingMeta?.artist, !name.isEmpty {
-            people.append(CreditPerson(id: "artist-\(name)", username: name, userId: nil, avatarUrl: nil, role: "Artist"))
-        }
-        for credit in controller.trackDetail?.credits ?? [] {
-            if let name = credit.username {
-                let role = credit.role?.trimmingCharacters(in: .whitespaces) ?? ""
-                people.append(CreditPerson(
-                    id: "credit-\(credit.id)", username: name, userId: credit.userId,
-                    avatarUrl: credit.profileImageUrl,
-                    role: role.isEmpty ? "Collaborator" : role.capitalized
-                ))
-            }
-        }
-        return people
-    }
-
-    /// Collapses the player and navigates to the person's profile — the same
-    /// path as tapping the artist name or a commenter avatar.
-    func openProfile(_ person: CreditPerson) {
-        guard let userId = person.userId else { return }
-        controller.pendingProfileNavigation = userId
-    }
-
-    /// A circular icon action — a see-through blurred fill so the background
-    /// behind it (incl. a bright full-bleed video) shows through, blurred.
-    func circleAction(_ icon: LucideIcon.Name, label: String, action: @escaping () -> Void = {}) -> some View {
+    /// A bare icon action, sized and tinted like the transport's shuffle /
+    /// repeat glyphs. Its trailing edge sits on the player inset, so the
+    /// column lines up with the repeat button below.
+    func iconAction(_ icon: LucideIcon.Name, label: String, action: @escaping () -> Void = {}) -> some View {
         Button(action: action) {
-            LucideIcon(icon, .lg)
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
-                .background(.ultraThinMaterial, in: Circle())
+            LucideIcon(icon, size: 26)
+                .foregroundStyle(Color(Palette.PlayerCard.opaque))
+                .frame(width: 44, height: 44, alignment: .trailing)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
     }
 
-}
-
-/// How hard `playerOverlayShadow()` works, which depends on what's behind the
-/// element. The minimized/immersive transport sits on BARE video; the default
-/// player keeps a blurred backdrop that already does most of the separating.
-enum PlayerOverlayShadow {
-    /// On bare video, body size or larger — title, artist, transport glyphs.
-    case strong
-    /// On bare video, small type (the scrubber's time labels). `.strong`'s tight
-    /// layer visibly fattens glyphs at that size — it read as a bolder weight
-    /// rather than a shadow — so this is one soft pool with no hard edge.
-    case light
-    /// Over the blurred player: the long-standing gentle shadow. Enough to keep
-    /// white text off a busy backdrop without darkening the whole panel.
-    case subtle
-    /// No shadow — the blur behind it is doing the work.
-    case off
-}
-
-extension View {
-    /// Dark drop shadow so white content stays legible over video or artwork.
-    /// Shared by everything that floats over the player surface. Applied
-    /// per-element (not to a whole panel) so white-backed pieces — the tag
-    /// chips, the play circle — are left untouched.
-    ///
-    /// `.strong` is two layers rather than one: a tight, near-opaque shadow
-    /// hugging the glyphs gives the letterforms a hard edge, and a wide soft one
-    /// pools darkness behind the whole line. A single shadow can only do one of
-    /// those — pushing one radius far enough to darken the backdrop turns the
-    /// text into a grey halo, which is why the description washed out over
-    /// bright artwork at radius 3.
-    @ViewBuilder
-    func playerOverlayShadow(_ weight: PlayerOverlayShadow = .strong) -> some View {
-        switch weight {
-        case .strong:
-            shadow(color: .black.opacity(0.75), radius: 2, y: 1)
-                .shadow(color: .black.opacity(0.45), radius: 8)
-        case .light:
-            shadow(color: .black.opacity(0.5), radius: 4, y: 1)
-        case .subtle:
-            shadow(color: .black.opacity(0.55), radius: 3, y: 1)
-        case .off:
-            self
-        }
-    }
-}
-
-
-// MARK: - About modal
-
-/// The full About as a centered dialog card over a dimmed backdrop, styled
-/// like the system AirPlay route picker (bright frosted glass). Rendered as an
-/// IN-HIERARCHY overlay by OverlaidRootView — never present it in a
-/// fullScreenCover: a material can't blur through a presentation boundary and
-/// the glass goes flat.
-struct PlayerAboutModal: View {
-    let payload: PlayerController.AboutModalPayload
-    /// Clears `PlayerController.aboutModal` once the close animation lands.
-    var onClose: () -> Void
-    @State private var shown = false
-
-    private var title: String { payload.title }
-    private var description: String? { payload.description }
-    private var tags: [String] { payload.tags }
-
-    var body: some View {
-        ZStack {
-            // Barely-there dim (the system picker hardly dims) — a heavy
-            // scrim darkens what the glass samples and kills the see-through.
-            Color.black.opacity(shown ? 0.15 : 0)
-                .ignoresSafeArea()
-                .onTapGesture { close() }
-
-            card
-                .opacity(shown ? 1 : 0)
-                .scaleEffect(shown ? 1 : 0.93)
-                .offset(y: shown ? 0 : 14)
-        }
-        .onAppear {
-            withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) { shown = true }
-        }
-    }
-
-    private var card: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Cover-led header: the album art anchors the card to the player.
-            HStack(alignment: .center, spacing: 12) {
-                ArtworkView(payload.artwork, cornerRadius: 10)
-                    .frame(width: 44, height: 44)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.appCalloutSemibold)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text("About")
-                        .font(.appCaption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 8)
-                Button(action: close) {
-                    LucideIcon(.x, .md)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 30, height: 30)
-                        .background(Color.white.opacity(0.1), in: Circle())
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.bottom, 12)
-
-            // Edge-to-edge hairline, like the sheets' header divider.
-            Divider()
-                .overlay(Color.white.opacity(0.1))
-                .padding(.horizontal, -20)
-                .padding(.bottom, 14)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let description, !description.isEmpty {
-                        Text(description)
-                            .font(.appCalloutRegular)
-                            .foregroundStyle(.primary)
-                            .lineSpacing(3)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Text("No description provided.")
-                            .font(.appCalloutRegular)
-                            .italic()
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if !tags.isEmpty {
-                        // The shared wrapping layout (Profile chips) — one value
-                        // for both gaps, like the old private InfoTagFlow.
-                        ChipFlowLayout(spacing: 6, lineSpacing: 6) {
-                            ForEach(tags, id: \.self) { tag in
-                                Text("#\(tag)")
-                                    .font(.appCaption2Medium)
-                                    .foregroundStyle(.primary)
-                                    .padding(.horizontal, 9)
-                                    .padding(.vertical, 4)
-                                    .background(Color.white.opacity(0.12), in: Capsule())
-                            }
-                        }
-                    }
-                }
-            }
-            .scrollIndicators(.hidden)
-            .frame(maxHeight: UIScreen.size.height * 0.4)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .playerGlassCard()
-    }
-
-    private func close() {
-        withAnimation(.easeIn(duration: 0.16)) { shown = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { onClose() }
-    }
-}
-
-// MARK: - Credits sheet
-
-/// Everyone on the track — avatar, @name, and what they worked on. Rows open
-/// the person's profile (collapsing the player, like the old credit chips);
-/// measured-height detent + shared header, the app's standard sheet anatomy.
-private struct PlayerCreditsSheet: View {
-    let people: [NowPlayingInfoStrip.CreditPerson]
-    var onOpenProfile: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(spacing: 0) {
-            SheetHeader(icon: .users, title: "Credits", subtitle: "Everyone on this track", onClose: { dismiss() })
-
-            VStack(spacing: 2) {
-                ForEach(people) { row($0) }
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-        }
-        .selfSizedDetent()
-        .sheetBackground()
-    }
-
-    private func row(_ person: NowPlayingInfoStrip.CreditPerson) -> some View {
-        Button {
-            guard let userId = person.userId else { return }
-            dismiss()
-            onOpenProfile(userId)
-        } label: {
-            HStack(spacing: 12) {
-                AvatarView(urlString: person.avatarUrl, name: person.username, size: 44)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("@\(person.username)")
-                        .font(.appFont.trackTitle)
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(person.role)
-                        .font(.appFont.trackSubtitle)
-                        .foregroundStyle(Color.vText3)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                if person.userId != nil {
-                    LucideIcon(.chevronRight, .sm).foregroundStyle(Color.vText3)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .disabled(person.userId == nil)
-    }
-}
-
-// MARK: - Glass card chrome
-
-extension View {
-    /// The player's centered glass-dialog card (About, Credits): thin dark
-    /// glass so the player shows through, big continuous corners, no border.
-    func playerGlassCard() -> some View {
-        padding(20)
-            .background(.thinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-            .environment(\.colorScheme, .dark)
-            .padding(.horizontal, 28)
-    }
 }
 
 #Preview {

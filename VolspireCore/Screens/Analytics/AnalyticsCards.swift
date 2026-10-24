@@ -2,218 +2,280 @@
 //  AnalyticsCards.swift
 //  Volspire
 //
-//  Shared pieces of the analytics dashboard and the per-track detail screen:
-//  section label, trend pill, stat tile, chart footer, the sources card, and
-//  the trend chart (scrubbable on the dashboard, static on the detail page).
+//  Building blocks of the track analytics page, matching the web's
+//  `track-analytics-view.tsx`: titled blocks, stat tiles, the labelled source
+//  bars, and the single-series line chart. Charts are drawn in the app's ink
+//  (theme-aware), never an accent colour; no border rings — surfaces separate
+//  by fill.
 //
 
 import DesignSystem
 import SwiftUI
 
-// MARK: - Section label
+// MARK: - Block
 
-/// Uppercase tracked micro-label above analytics cards ("TOP TRACKS").
-struct AnalyticsSectionLabel: View {
-    let text: String
-
-    init(_ text: String) { self.text = text }
+/// A titled block of the detail pane (14 semibold heading, not a section
+/// title) with an optional caption on the right.
+struct AnalyticsBlock<Content: View>: View {
+    let title: String
+    var aside: String?
+    @ViewBuilder var content: Content
 
     var body: some View {
-        Text(text.uppercased())
-            .font(.appLabel)
-            .tracking(0.8)
-            .foregroundStyle(Color.vText3)
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(title).font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
+                Spacer(minLength: 0)
+                if let aside {
+                    Text(aside).font(.appCaptionCompact).foregroundStyle(Color.vText3).monospacedDigit()
+                }
+            }
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-// MARK: - Trend pill
-
-/// Green/red percentage capsule with an up/down arrow (the Lucide up-right
-/// glyph, rotated for down).
-struct AnalyticsTrendPill: View {
-    let trend: Int
+/// The "No … data yet." placeholder card inside a block.
+struct AnalyticsEmptyNote: View {
+    let text: String
 
     var body: some View {
-        let up = trend >= 0
-        let tint = up ? Color.green : Color.red
-        HStack(spacing: 3) {
-            LucideIcon(.arrowUpRight, .xs)
-                .rotationEffect(.degrees(up ? 0 : 90))
-            Text("\(abs(trend))%").font(.appCaption).fontWeight(.semibold)
-        }
-        .foregroundStyle(tint)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(tint.opacity(0.16), in: Capsule())
+        Text(text)
+            .font(.appSubheadline)
+            .foregroundStyle(Color.vText3)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 32)
+            .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 }
 
 // MARK: - Stat tile
 
-/// Brand-tinted icon + big value + caption, on the card fill (streams,
-/// unique listeners, avg listen time, …).
+/// Icon + label, a big tabular value, and a caption — the web's neutral
+/// `StatTile`.
 struct AnalyticsStatTile: View {
-    let value: String
-    let label: String
     let icon: LucideIcon.Name
+    let label: String
+    let value: String
+    let sub: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LucideIcon(icon, .sm).foregroundStyle(Color.brand)
-            Text(value).font(.appTitle).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.6)
-            Text(label).font(.appCaption).foregroundStyle(Color.vText3)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 16))
-    }
-}
-
-// MARK: - Chart footer
-
-/// The "N days ago … Today" axis row under a trend chart.
-struct AnalyticsChartFooter: View {
-    let days: Int
-
-    var body: some View {
-        HStack {
-            Text("\(days) days ago").font(.appCaption).foregroundStyle(Color.vText3)
-            Spacer()
-            Text("Today").font(.appCaption).foregroundStyle(Color.vText3)
-        }
-    }
-}
-
-// MARK: - Sources card
-
-/// "Where plays come from" — labelled percentage bars for the play-source
-/// breakdown (dashboard: all tracks; detail: a single track).
-struct AnalyticsSourcesCard: View {
-    let subtitle: String
-    let sources: [(label: String, count: Int)]
-    /// Denominator for the percentages (clamped to ≥ 1).
-    let totalPlays: Int
-
-    var body: some View {
-        let total = max(totalPlays, 1)
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                AnalyticsSectionLabel("Where plays come from")
-                Text(subtitle)
-                    .font(.appCaption).foregroundStyle(Color.vText3)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                LucideIcon(icon, .sm).foregroundStyle(Color.vText3)
+                Text(label).font(.appLabelCompact).foregroundStyle(Color.vText3).lineLimit(1)
             }
-            ForEach(sources, id: \.label) { source in
-                let pct = Int((Double(source.count) / Double(total) * 100).rounded())
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(source.label).font(.appFootnote).foregroundStyle(.white)
-                        Spacer()
-                        Text("\(pct)%").font(.appCaption).foregroundStyle(Color.vText2).monospacedDigit()
+            .padding(.bottom, 10)
+            Text(value)
+                .font(.appLargeTitle)
+                .foregroundStyle(Color.vText)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            Text(sub)
+                .font(.appCaptionCompact)
+                .foregroundStyle(Color.vText3)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 6)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(16)
+        .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+    }
+}
+
+// MARK: - Sources
+
+/// "How people found it": one labelled bar per source, longest first. A
+/// single ink — the label carries identity, the length carries share.
+struct AnalyticsSourceBars: View {
+    let sources: [(key: String, count: Int)]
+
+    var body: some View {
+        let total = max(sources.reduce(0) { $0 + $1.count }, 1)
+        VStack(spacing: 12) {
+            ForEach(Array(sources.enumerated()), id: \.element.key) { index, source in
+                let pct = Double(source.count) / Double(total) * 100
+                VStack(spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(source.key)
+                            .font(.appSubheadline).foregroundStyle(Color.vText)
+                        Spacer(minLength: 0)
+                        Text("\(Int(pct.rounded()))%")
+                            .font(.appSubheadline).foregroundStyle(Color.vText2).monospacedDigit()
                     }
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
-                            Capsule().fill(.white.opacity(0.06))
-                            Capsule().fill(Color.brand.opacity(0.85))
-                                .frame(width: max(6, geo.size.width * CGFloat(source.count) / CGFloat(total)))
+                            Capsule().fill(Color.ink(0.06))
+                            Capsule()
+                                .fill(index == 0 ? Color.vText : Color.ink(0.42))
+                                .frame(width: geo.size.width * max(pct, 2) / 100)
                         }
                     }
-                    .frame(height: 6)
+                    .frame(height: 8)
                 }
             }
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.vCard, in: RoundedRectangle(cornerRadius: 18))
     }
 }
 
-// MARK: - Trend chart (filled area + line, optional scrubbing)
+// MARK: - Line chart
 
-/// The analytics trend chart. Pass a `scrubIndex` binding to enable touch
-/// scrubbing — dragging pins a day (dashed rule + dot) and reports its index
-/// up; release clears it. Without a binding the chart is static: no gesture
-/// is installed, so it never eats scrolls or fires haptics.
-struct ScrubbableTrendChart: View {
-    let values: [Int]
-    @Binding var scrubIndex: Int?
-    private let scrubEnabled: Bool
+/// One series as a smooth line over a soft fill, three recessive guide lines,
+/// the peak marked with a dot, and a scrub crosshair with a readout. The max
+/// value sits top-left, three x labels underneath.
+struct AnalyticsLineChart: View {
+    let values: [Double]
+    var height: CGFloat = 140
+    /// Labels under the x axis: start, middle, end.
+    let xLabels: (String, String, String)
+    /// Readout for the scrubbed point: a heading and a value line.
+    let readout: (Int) -> (label: String, value: String)
 
-    init(values: [Int], scrubIndex: Binding<Int?>? = nil) {
-        self.values = values
-        self._scrubIndex = scrubIndex ?? .constant(nil)
-        self.scrubEnabled = scrubIndex != nil
-    }
+    @State private var scrubIndex: Int?
 
     var body: some View {
-        GeometryReader { geo in
-            let maxValue = max(values.max() ?? 0, 1)
-            let size = geo.size
-            let points = points(in: size, maxValue: maxValue)
-
-            ZStack {
-                if let first = points.first, let last = points.last {
-                    // Filled area under the line.
-                    Path { path in
-                        path.move(to: CGPoint(x: first.x, y: size.height))
-                        path.addLine(to: first)
-                        for point in points.dropFirst() { path.addLine(to: point) }
-                        path.addLine(to: CGPoint(x: last.x, y: size.height))
-                        path.closeSubpath()
-                    }
-                    .fill(LinearGradient(
-                        colors: [Color.brand.opacity(0.35), Color.brand.opacity(0)],
-                        startPoint: .top, endPoint: .bottom
-                    ))
-
-                    // The line itself.
-                    Path { path in
-                        path.move(to: first)
-                        for point in points.dropFirst() { path.addLine(to: point) }
-                    }
-                    .stroke(Color.brand, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-
-                    // Scrub rule + pinned-day dot.
-                    if let index = scrubIndex, points.indices.contains(index) {
-                        let point = points[index]
-                        Path { path in
-                            path.move(to: CGPoint(x: point.x, y: 0))
-                            path.addLine(to: CGPoint(x: point.x, y: size.height))
-                        }
-                        .stroke(Color.white.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                        Circle()
-                            .fill(Color.brand)
-                            .frame(width: 9, height: 9)
-                            .overlay(Circle().stroke(.white, lineWidth: 2))
-                            .position(point)
-                    }
-                }
+        VStack(spacing: 8) {
+            Text(maxValue.compactCountLabel)
+                .font(.appCaptionCompact).foregroundStyle(Color.vText3).monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, -4)
+            GeometryReader { geo in
+                plot(in: geo.size)
             }
-            .contentShape(Rectangle())
-            .gesture(scrubEnabled ? scrubGesture(in: size) : nil)
+            .frame(height: height)
+            HStack {
+                Text(xLabels.0)
+                Spacer()
+                Text(xLabels.1)
+                Spacer()
+                Text(xLabels.2)
+            }
+            .font(.appCaptionCompact)
+            .foregroundStyle(Color.vText3)
+            .monospacedDigit()
         }
     }
 
-    private func scrubGesture(in size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { gesture in
-                guard values.count > 1 else { return }
-                let fraction = min(max(gesture.location.x / max(size.width, 1), 0), 1)
-                let index = Int((fraction * CGFloat(values.count - 1)).rounded())
-                if index != scrubIndex {
-                    scrubIndex = index
-                    Haptics.impact(.soft)
-                }
-            }
-            .onEnded { _ in scrubIndex = nil }
+    private var maxValue: Double { max(values.max() ?? 0, 1) }
+
+    private func xAt(_ i: Int) -> CGFloat {
+        values.count <= 1 ? 0.5 : CGFloat(i) / CGFloat(values.count - 1)
     }
 
-    private func points(in size: CGSize, maxValue: Int) -> [CGPoint] {
-        guard values.count > 1 else { return [] }
-        return values.enumerated().map { index, value in
-            CGPoint(
-                x: size.width * CGFloat(index) / CGFloat(values.count - 1),
-                y: size.height - (CGFloat(value) / CGFloat(maxValue)) * size.height
-            )
+    private func point(_ i: Int, in size: CGSize) -> CGPoint {
+        CGPoint(x: xAt(i) * size.width, y: (1 - CGFloat(values[i] / maxValue)) * size.height)
+    }
+
+    /// Smooth path through every point (cubic segments with mid-x control
+    /// points — the web's curve).
+    private func linePath(in size: CGSize) -> Path {
+        Path { path in
+            for i in values.indices {
+                let p = point(i, in: size)
+                if i == 0 {
+                    path.move(to: p)
+                } else {
+                    let prev = point(i - 1, in: size)
+                    let cx = (prev.x + p.x) / 2
+                    path.addCurve(to: p, control1: CGPoint(x: cx, y: prev.y), control2: CGPoint(x: cx, y: p.y))
+                }
+            }
         }
     }
+
+    @ViewBuilder
+    private func plot(in size: CGSize) -> some View {
+        ZStack(alignment: .topLeading) {
+            // Guide lines: top and middle dashed, a solid baseline.
+            ForEach([0.0, 0.5, 1.0], id: \.self) { f in
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: f * size.height))
+                    p.addLine(to: CGPoint(x: size.width, y: f * size.height))
+                }
+                .stroke(
+                    f == 1 ? Color.ink(0.12) : Color.ink(0.06),
+                    style: StrokeStyle(lineWidth: 1, dash: f == 1 ? [] : [3, 3])
+                )
+            }
+
+            if !values.isEmpty {
+                let line = linePath(in: size)
+                // Soft fill under the line.
+                Path { p in
+                    p.addPath(line)
+                    p.addLine(to: CGPoint(x: point(values.count - 1, in: size).x, y: size.height))
+                    p.addLine(to: CGPoint(x: point(0, in: size).x, y: size.height))
+                    p.closeSubpath()
+                }
+                .fill(LinearGradient(colors: [Color.ink(0.14), Color.ink(0)], startPoint: .top, endPoint: .bottom))
+                line.stroke(Color.ink(0.72), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+
+                // Peak: a 10pt ink dot with a 2pt canvas ring.
+                if let peak = values.indices.max(by: { values[$0] < values[$1] }), values[peak] > 0 {
+                    Circle()
+                        .fill(Color.vText)
+                        .frame(width: 10, height: 10)
+                        .background(Circle().fill(Color.vBase).padding(-2))
+                        .position(point(peak, in: size))
+                }
+
+                if let i = scrubIndex, values.indices.contains(i) {
+                    scrubOverlay(index: i, in: size)
+                }
+            }
+        }
+        .contentShape(.rect)
+        // A small minimum distance so a vertical page scroll that starts on
+        // the chart still scrolls; a sideways drag scrubs.
+        .gesture(
+            DragGesture(minimumDistance: 6)
+                .onChanged { g in
+                    guard !values.isEmpty else { return }
+                    let f = min(max(g.location.x / max(size.width, 1), 0), 1)
+                    let i = Int((f * CGFloat(max(values.count - 1, 0))).rounded())
+                    if i != scrubIndex {
+                        scrubIndex = i
+                        Haptics.impact(.soft)
+                    }
+                }
+                .onEnded { _ in scrubIndex = nil }
+        )
+    }
+
+    /// Crosshair, dot and readout for the scrubbed point.
+    private func scrubOverlay(index i: Int, in size: CGSize) -> some View {
+        let p = point(i, in: size)
+        let info = readout(i)
+        let flip = xAt(i) > 0.7
+        return ZStack(alignment: .topLeading) {
+            Path { path in
+                path.move(to: CGPoint(x: p.x, y: 0))
+                path.addLine(to: CGPoint(x: p.x, y: size.height))
+            }
+            .stroke(Color.ink(0.25), lineWidth: 1)
+            Circle().fill(Color.vText).frame(width: 10, height: 10).position(p)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(info.label).font(.appCaptionCompact).foregroundStyle(Color.vText3)
+                Text(info.value).font(.appSubheadlineSemibold).foregroundStyle(Color.vText).monospacedDigit()
+            }
+            .fixedSize()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.vSurface, in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
+            .shadow(color: .black.opacity(0.2), radius: 12, y: 4)
+            .alignmentGuide(.leading) { d in flip ? d.width + 8 - p.x : -(p.x + 8) }
+            .alignmentGuide(.top) { _ in -4 }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+extension Double {
+    /// Compact count for chart labels (heatmap buckets are averages).
+    var compactCountLabel: String { Int(rounded()).compactCount }
 }

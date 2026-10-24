@@ -209,7 +209,10 @@ public final class MediaPlayer {
         audioSession.setActive(false)
     }
 
-    public func backward() {
+    /// Previous: restarts the current track when more than 3s in, otherwise
+    /// steps back. `alwaysPrevious` skips the restart rule (the full-screen
+    /// video's swipe-down, which always means "the track before this one").
+    public func backward(alwaysPrevious: Bool = false) {
         // Repeat-one locks playback to the current track — skipping just restarts it.
         if repeatEnabled {
             loopToStart()
@@ -223,7 +226,7 @@ public final class MediaPlayer {
         // If more than 3 seconds in, restart the current track. Route through
         // `seek` (not `urlPlayer` directly) so the lock-screen scrubber is pushed
         // back to 0 too — otherwise it keeps showing the old position.
-        if urlPlayer.elapsedTime > 3 {
+        if !alwaysPrevious, urlPlayer.elapsedTime > 3 {
             seek(to: 0)
             return
         }
@@ -314,17 +317,23 @@ private extension MediaPlayer {
         [pinned] + items.filter { $0 != pinned }.shuffled()
     }
 
-    /// Download the next track ahead of time so skipping to it is gapless (no
-    /// buffer gap, so the lock-screen controls don't flip to paused on skip).
+    /// Download the next TWO tracks ahead of time so skipping (or a quick
+    /// double swipe in the full-screen feed) has no download gap — the lock
+    /// screen never flips to paused on skip. Read-ahead for anything outside
+    /// that window is dropped, so swiping never piles up downloads.
     func prefetchNextTrack(after index: Int) {
         guard items.count > 1 else { return }
-        let nextIndex = items.indices.contains(index + 1) ? index + 1 : 0
-        guard nextIndex != index,
-              let nextID = items[safe: nextIndex],
-              let meta = mediaState?.metaOfMedia(withID: nextID),
-              let url = meta.audioURL
-        else { return }
-        urlPlayer.prefetch(url: url)
+        var keep: Set<URL> = []
+        for step in 1...min(2, items.count - 1) {
+            let i = (index + step) % items.count
+            guard i != index,
+                  let id = items[safe: i],
+                  let url = mediaState?.metaOfMedia(withID: id)?.audioURL
+            else { continue }
+            keep.insert(url)
+            urlPlayer.prefetch(url: url)
+        }
+        urlPlayer.retainPrefetch(keep)
     }
 
     func updateCommandProfile() {
@@ -538,5 +547,37 @@ extension MediaPlayer: URLAudioPlayerDelegate {
                 urlPlayer.stop()
             }
         }
+    }
+}
+
+// MARK: - Queue neighbours
+
+public extension MediaPlayer {
+    /// The queue item `offset` steps from the current one (+1 next, -1
+    /// previous), wrapping like forward()/backward(). Repeat-one and a
+    /// single-track queue replay the current item, so that's the neighbour.
+    func neighborID(_ offset: Int) -> MediaID? {
+        state.currentMediaID.flatMap { neighborID(of: $0, offset) }
+    }
+
+    /// The queue item `offset` steps from `id` (any item, not just the
+    /// current one — the feed can be a swipe ahead of playback).
+    func neighborID(of id: MediaID, _ offset: Int) -> MediaID? {
+        guard let index = items.firstIndex(of: id) else { return nil }
+        if repeatEnabled || items.count == 1 { return id }
+        let n = items.count
+        return items[safe: ((index + offset) % n + n) % n]
+    }
+
+    /// Plays a specific queue item (the feed lands on exactly the track it
+    /// showed, even when it's a swipe ahead of playback).
+    func skip(to id: MediaID) {
+        guard let index = items.firstIndex(of: id) else { return }
+        playItem(at: index)
+    }
+
+    /// Metadata for `neighborID(offset)` — what the feed shows before a swipe lands.
+    func neighborMeta(_ offset: Int) -> MediaMeta? {
+        neighborID(offset).flatMap { mediaState?.metaOfMedia(withID: $0) }
     }
 }

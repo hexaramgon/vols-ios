@@ -193,6 +193,8 @@ public struct ApiProfileTrack: Codable, Sendable, Identifiable {
     public let hasVisual: Bool?
     /// `public` | `private` — own-profile rows surface a lock on private tracks.
     public let visibility: String?
+    /// Upload time — Home's Spotlight sorts by it ("N plays · 3d").
+    public let createdAt: String?
 }
 
 /// A track owned by another artist where this profile's user is credited
@@ -469,6 +471,16 @@ public struct ApiMarketplaceService: Codable, Sendable, Identifiable, Hashable {
     public let coverUrl: String?
     public let gradient: String?
     public let artist: ApiUserRef?
+}
+
+/// A track's cheapest paid license (`track_licenses`) — Marketplace beats.
+public struct ApiTrackPrice: Codable, Sendable {
+    public let trackId: String
+    public let price: Double
+    public let currency: String?
+    enum CodingKeys: String, CodingKey {
+        case trackId = "track_id", price, currency
+    }
 }
 
 public struct ApiExploreData: Codable, Sendable {

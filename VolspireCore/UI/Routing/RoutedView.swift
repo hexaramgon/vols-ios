@@ -9,6 +9,7 @@ import SwiftUI
 
 struct RoutedView: View {
     let route: Route
+    @Environment(SocialStore.self) private var socialStore
 
     var body: some View {
         content
@@ -27,11 +28,20 @@ struct RoutedView: View {
         return meta
     }
 
+    /// Owner line for app-made lists: your own Saved tracks show @you (taps
+    /// to your profile); Volspire's suggestion lists show @volspire.
+    private func listHeader(savedTracks: Bool) -> PlaylistHeaderInfo {
+        guard savedTracks else { return PlaylistHeaderInfo(ownerUsername: "volspire", volspireMark: true) }
+        let me = socialStore.myProfile
+        return PlaylistHeaderInfo(ownerUsername: me?.username, ownerId: me?.userId, isSaved: true)
+    }
+
     @ViewBuilder
     private var content: some View {
         switch route {
-        case let .mediaList(items, listMeta, showSave):
-            MediaCollectionScreen(items: items, listMeta: listMeta, showSave: showSave)
+        case let .mediaList(items, listMeta, showSave, compactHeader, savedTracks):
+            MediaCollectionScreen(items: items, listMeta: listMeta, showSave: showSave,
+                                  playlistHeader: compactHeader ? listHeader(savedTracks: savedTracks) : nil)
         case let .profile(userId):
             ProfileScreen(userId: userId)
         case let .search(query):
@@ -46,8 +56,8 @@ struct RoutedView: View {
             PlaylistsScreen()
         case let .playlist(playlistId, title):
             PlaylistDetailScreen(playlistId: playlistId, title: title)
-        case let .folderContents(folderId, folderName):
-            FolderContentsScreen(folderId: folderId, folderName: folderName)
+        case let .folderContents(folderId, folderName, highlight):
+            FolderContentsScreen(folderId: folderId, folderName: folderName, highlight: highlight)
         case let .marketplacePack(pack):
             MarketplaceDetailScreen(pack: pack)
         case let .marketplaceService(service):

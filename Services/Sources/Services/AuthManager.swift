@@ -36,8 +36,28 @@ public final class AuthManager {
         case existingAccount
     }
 
+    /// What a social provider told us about the person signing in, captured at
+    /// the moment of sign-in. Apple hands the name over exactly once — on the
+    /// first authorization — so it can never be fetched again later; the profile
+    /// step reads this instead of asking the user to type a name Apple already
+    /// provided (App Store guideline 4).
+    public struct SocialIdentity: Equatable, Sendable {
+        public let fullName: String?
+        public let email: String?
+
+        public init(fullName: String?, email: String?) {
+            self.fullName = fullName
+            self.email = email
+        }
+    }
+
     public private(set) var state: AuthState = .loading
     public private(set) var errorMessage: String?
+
+    /// Set by the most recent Apple/Google sign-in, consumed by the
+    /// complete-profile step. Cleared on sign-out so one account's name can
+    /// never seed the next one's profile.
+    public private(set) var pendingSocialIdentity: SocialIdentity?
 
     /// While the register wizard runs its post-auth steps (verify → profile →
     /// photos), the signedIn event must not flip the app into the main UI.
@@ -300,6 +320,14 @@ public final class AuthManager {
             return
         }
 
+        // Capture the name/email BEFORE the exchange: Authentication Services
+        // fills these in only on the first authorization for this Apple ID, and
+        // the profile step needs them to prefill rather than re-ask.
+        pendingSocialIdentity = SocialIdentity(
+            fullName: credential.fullName.flatMap(Self.formatted),
+            email: credential.email
+        )
+
         do {
             let session = try await client.auth.signInWithIdToken(
                 credentials: .init(
@@ -332,6 +360,12 @@ public final class AuthManager {
                 errorMessage = "Couldn't read your Google credentials. Please try again."
                 return
             }
+            // Same as Apple: the provider already knows who this is, so the
+            // profile step seeds from it instead of asking.
+            pendingSocialIdentity = SocialIdentity(
+                fullName: result.user.profile?.name,
+                email: result.user.profile?.email
+            )
             let session = try await client.auth.signInWithIdToken(
                 credentials: .init(
                     provider: .google,
@@ -345,6 +379,16 @@ public final class AuthManager {
             if (error as NSError).code == -5 { return }
             errorMessage = friendly(error)
         }
+    }
+
+    /// Apple hands the name over as components; nil out an empty formatting so
+    /// callers can treat "no name given" uniformly (the user can hide it, and
+    /// every authorization after the first omits it entirely).
+    private static func formatted(_ components: PersonNameComponents) -> String? {
+        let formatter = PersonNameComponentsFormatter()
+        formatter.style = .default
+        let name = formatter.string(from: components).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
     }
 
     /// Lets GoogleSignIn consume an OAuth callback URL. The native sheet flow
@@ -386,6 +430,7 @@ public final class AuthManager {
         // shows the account picker instead of silently reusing the last one.
         GIDSignIn.sharedInstance.signOut()
         state = .unauthenticated
+        pendingSocialIdentity = nil
         await APICache.shared.clear()
     }
 

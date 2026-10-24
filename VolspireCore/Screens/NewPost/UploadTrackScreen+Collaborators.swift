@@ -33,7 +33,7 @@ extension UploadTrackScreen {
                     prompt: Text("Search collaborators…").foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .focused($collabFocused)
@@ -72,7 +72,7 @@ extension UploadTrackScreen {
                                 avatarCircle(initial: user.username?.prefix(1).uppercased() ?? "?")
                                 Text("@\(user.username ?? "user")")
                                     .font(.appSubheadline)
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(Color.vText)
                                     .lineLimit(1)
                                 Spacer()
                                 Text(alreadyAdded ? "Added" : "Add")
@@ -99,7 +99,7 @@ extension UploadTrackScreen {
 
                     Text("@\(credit.username)")
                         .font(.appBodyMedium)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
                         .lineLimit(1)
 
                     Spacer()
@@ -119,7 +119,7 @@ extension UploadTrackScreen {
                         .foregroundStyle(Color.vText2)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .overlay(Capsule().strokeBorder(UploadTheme.border, lineWidth: 1))
+                        .background(Color.vControl, in: Capsule())
                         .contentShape(.rect)
                     }
 
@@ -137,7 +137,7 @@ extension UploadTrackScreen {
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white.opacity(0.03))
+                        .fill(Color.vCard)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
@@ -150,7 +150,7 @@ extension UploadTrackScreen {
     func avatarCircle(initial: String) -> some View {
         ZStack {
             Circle()
-                .fill(Color.white.opacity(0.08))
+                .fill(Color.vControl)
             Circle()
                 .strokeBorder(Color.vBorder, lineWidth: 1)
             Text(initial)

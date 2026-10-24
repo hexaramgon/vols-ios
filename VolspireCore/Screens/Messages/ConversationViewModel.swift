@@ -162,22 +162,37 @@ final class ConversationViewModel {
             await settled
             messages = mapped
             loadingState = .loaded
-            try? await service.markConvoRead(convoId: convoId)
-            PushNotificationManager.shared.clearDeliveredNotifications(convoId: convoId)
-            // markConvoRead has completed — the store zeroes the row and
-            // trues up dots + app badge from the single unread pipeline.
-            inbox?.threadMarkedRead(convoId: convoId)
-            // Best-effort: resolve the listing this thread was opened from
-            // (one cheap id lookup; full fetch only for listing conversations).
-            if linkedListing == nil,
-               let listingId = try? await service.getConvoListingId(convoId: convoId),
-               let listing = try? await service.getListing(listingId: listingId) {
-                linkedListing = listing
-            }
+            // The two follow-up chains are independent of each other — running
+            // them concurrently collapses the old 4-deep serial tail
+            // (mark-read → true-up → listing-id → listing) to one parallel
+            // round of RTTs. mark-read stays AFTER a successful fetch so a
+            // failed load can't clear the unread dot.
+            async let readChain: Void = runMarkReadChain()
+            async let listingChain: Void = resolveLinkedListing()
+            _ = await (readChain, listingChain)
         } catch {
             debugLog("[ConversationVM] load: \(error)")
             await settled
             if messages.isEmpty { loadingState = .error(error.localizedDescription) }
+        }
+    }
+
+    /// mark-read + dot/badge true-up (their internal order is a real dependency).
+    private func runMarkReadChain() async {
+        try? await service.markConvoRead(convoId: convoId)
+        PushNotificationManager.shared.clearDeliveredNotifications(convoId: convoId)
+        // markConvoRead has completed — the store zeroes the row and
+        // trues up dots + app badge from the single unread pipeline.
+        inbox?.threadMarkedRead(convoId: convoId)
+    }
+
+    /// Best-effort: resolve the listing this thread was opened from
+    /// (one cheap id lookup; full fetch only for listing conversations).
+    private func resolveLinkedListing() async {
+        if linkedListing == nil,
+           let listingId = try? await service.getConvoListingId(convoId: convoId),
+           let listing = try? await service.getListing(listingId: listingId) {
+            linkedListing = listing
         }
     }
 
@@ -204,7 +219,12 @@ final class ConversationViewModel {
 
         do {
             let newId = try await service.sendMessage(convoId: convoId, content: text)
-            if let i = messages.firstIndex(where: { $0.id == tempId }) {
+            // The 4s poll can merge the server copy before this returns —
+            // renaming the temp row too would duplicate the message (and its
+            // SwiftUI id), so just drop the temp row then.
+            if messages.contains(where: { $0.id == newId }) {
+                messages.removeAll { $0.id == tempId }
+            } else if let i = messages.firstIndex(where: { $0.id == tempId }) {
                 messages[i] = ChatMessage(id: newId, text: text, isFromMe: true, createdAt: sentAt,
                                           type: "message", isAttachment: false, attachmentURL: nil,
                                           attachmentType: nil, attachmentName: nil, pending: false)
@@ -292,7 +312,10 @@ final class ConversationViewModel {
                 fileName: uploadName, fileSize: uploadData.count
             )
             let signed = (await storage.signAttachmentUrls(paths: [path])).first ?? nil
-            if let i = messages.firstIndex(where: { $0.id == tempId }) {
+            // Same poll race as `send()`: the server copy may already be merged.
+            if messages.contains(where: { $0.id == newId }) {
+                messages.removeAll { $0.id == tempId }
+            } else if let i = messages.firstIndex(where: { $0.id == tempId }) {
                 messages[i] = ChatMessage(id: newId, text: text, isFromMe: true, createdAt: sentAt,
                                           type: "message", isAttachment: true,
                                           attachmentURL: signed.flatMap { URL(string: $0) },
@@ -356,7 +379,7 @@ final class ConversationViewModel {
     private static func attachmentLabel(_ type: String) -> String {
         switch type.lowercased() {
         case let t where t.hasPrefix("image"): "Image"
-        case let t where t.hasPrefix("audio"): "Voice message"
+        case let t where t.hasPrefix("audio"): "Audio"
         case let t where t.hasPrefix("video"): "Video"
         default: "Attachment"
         }

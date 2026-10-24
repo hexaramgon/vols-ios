@@ -29,10 +29,11 @@ public extension Font {
     static let appSubheadline = Font.geist(14)
     /// Captions, row subtitles, helper text.
     static let appFootnote = Font.geist(13)
-    /// Small captions / metadata.
-    static let appCaption = Font.geist(12)
-    /// Uppercase section labels — pair with `.tracking(0.6)` + `.textCase(.uppercase)`.
-    static let appLabel = Font.geist(12, weight: .semibold)
+    /// Small captions / metadata. (13pt since 2026-10 — the app-wide bump
+    /// from 12; it now matches `appFootnote`'s size.)
+    static let appCaption = Font.geist(13)
+    /// Small group labels (sentence case — no uppercase eyebrows).
+    static let appLabel = Font.geist(13, weight: .semibold)
 
     // MARK: Weight variants
     // Same sizes as above in the weights the app actually uses, so every call site
@@ -52,8 +53,13 @@ public extension Font {
     static let appFootnoteMedium = Font.geist(13, weight: .medium)
     /// Semibold 13pt caption / small emphasis.
     static let appFootnoteSemibold = Font.geist(13, weight: .semibold)
-    /// Medium 12pt metadata.
-    static let appCaptionMedium = Font.geist(12, weight: .medium)
+    /// The pre-bump 12pt caption / label, kept for the Artist Dashboard,
+    /// whose dense stat tiles and charts were sized around it.
+    static let appCaptionCompact = Font.geist(12)
+    static let appLabelCompact = Font.geist(12, weight: .semibold)
+
+    /// Medium 13pt metadata.
+    static let appCaptionMedium = Font.geist(13, weight: .medium)
     /// Smallest text — 11pt badges, timestamps, dense metadata.
     static let appCaption2 = Font.geist(11)
     /// Medium 11pt.
@@ -69,6 +75,8 @@ public extension Font {
     static let appDisplay = Font.geist(34, weight: .bold)
     /// Sheet / feature titles (28pt).
     static let appTitleXXL = Font.geist(28, weight: .bold)
+    /// The profile hero's name — a step above XXL.
+    static let appTitleHero = Font.geist(34, weight: .bold)
     /// Prominent screen titles above `appLargeTitle` (27pt).
     static let appTitleXL = Font.geist(27, weight: .bold)
     /// Semibold sibling of `appTitle` (22pt).
@@ -93,8 +101,8 @@ public extension Font {
     static let appSubheadlineBold = Font.geist(14, weight: .bold)
     /// Bold sibling of `appFootnote` (13pt).
     static let appFootnoteBold = Font.geist(13, weight: .bold)
-    /// Bold sibling of `appCaption` (12pt).
-    static let appCaptionBold = Font.geist(12, weight: .bold)
+    /// Bold sibling of `appCaption` (13pt).
+    static let appCaptionBold = Font.geist(13, weight: .bold)
     /// Semibold 11pt.
     static let appCaption2Semibold = Font.geist(11, weight: .semibold)
     /// Bold 11pt.

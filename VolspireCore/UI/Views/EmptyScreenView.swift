@@ -6,8 +6,9 @@
 import DesignSystem
 import SwiftUI
 
-/// The app's standard empty-state placeholder — a Lucide hero icon, a title, and
-/// an optional message. Use this instead of re-rolling per-screen empty-state
+/// The app's standard empty-state placeholder — a Lucide glyph in a 64pt
+/// `vSurface` puck (r16), a title, and an optional message (max 280pt wide).
+/// Callers add a CTA 24pt below. Use this instead of re-rolling per-screen empty-state
 /// VStacks so they stay visually consistent.
 struct EmptyStateView: View {
     let icon: LucideIcon.Name
@@ -19,13 +20,18 @@ struct EmptyStateView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            LucideIcon(icon, .hero).foregroundStyle(Color.vText3)
-            Text(title).font(.appTitle3).foregroundStyle(.white)
+            LucideIcon(icon, .xxl)
+                .foregroundStyle(Color.vText3)
+                .frame(width: 64, height: 64)
+                .background(Color.vSurface, in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+                .padding(.bottom, 6)
+            Text(title).font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
             if let message {
                 Text(message)
                     .font(.appSubheadline)
                     .foregroundStyle(Color.vText2)
                     .multilineTextAlignment(.center)
+                    .frame(maxWidth: 280)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: centered ? .infinity : nil)

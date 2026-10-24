@@ -16,15 +16,25 @@ public struct SheetHeader<Leading: View>: View {
     private let subtitle: String?
     private let onClose: () -> Void
     private let leading: Leading
+    /// A touch larger (title 15 / subtitle 13) for sheets that are a primary
+    /// choice, e.g. New post.
+    private let prominent: Bool
+    /// The hairline under the header; off for list pickers (Add to
+    /// playlist / Workspace), where the rows start right under it.
+    private let divider: Bool
 
     public init(
         title: String,
         subtitle: String? = nil,
+        prominent: Bool = false,
+        divider: Bool = true,
         onClose: @escaping () -> Void,
         @ViewBuilder leading: () -> Leading
     ) {
         self.title = title
         self.subtitle = subtitle
+        self.prominent = prominent
+        self.divider = divider
         self.onClose = onClose
         self.leading = leading()
     }
@@ -35,30 +45,32 @@ public struct SheetHeader<Leading: View>: View {
                 leading
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.appCalloutSemibold)
-                        .foregroundStyle(.white)
+                        .font(prominent ? .appCalloutSemibold : .appSubheadlineSemibold)
+                        .foregroundStyle(Color.vText)
                     if let subtitle {
                         Text(subtitle)
-                            .font(.appCaption)
-                            .foregroundStyle(.white.opacity(0.5))
+                            .font(prominent ? .appFootnote : .appCaption)
+                            .foregroundStyle(Color.vText3)
                             .lineLimit(1)
                     }
                 }
                 Spacer(minLength: 0)
                 Button(action: onClose) {
                     LucideIcon(.x, .lg)
-                        .foregroundStyle(.white.opacity(0.6))
+                        .foregroundStyle(Color.vText3)
                         .frame(width: 32, height: 32)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 20)
             // Extra top padding so the header clears the drag indicator / sheet edge.
             .padding(.top, 24)
             .padding(.bottom, 14)
 
-            Divider().overlay(Color.white.opacity(0.08))
+            if divider {
+                Divider().overlay(Color.vSurface2)
+            }
         }
     }
 }
@@ -72,9 +84,9 @@ public struct SheetHeaderIcon: View {
 
     public var body: some View {
         LucideIcon(name, .md)
-            .foregroundStyle(.white.opacity(0.9))
+            .foregroundStyle(Color.vText2)
             .frame(width: 36, height: 36)
-            .background(Color.white.opacity(0.08), in: Circle())
+            .background(Color.vControl, in: Circle())
     }
 }
 
@@ -84,9 +96,11 @@ public extension SheetHeader where Leading == SheetHeaderIcon {
         icon: LucideIcon.Name,
         title: String,
         subtitle: String? = nil,
+        prominent: Bool = false,
+        divider: Bool = true,
         onClose: @escaping () -> Void
     ) {
-        self.init(title: title, subtitle: subtitle, onClose: onClose) {
+        self.init(title: title, subtitle: subtitle, prominent: prominent, divider: divider, onClose: onClose) {
             SheetHeaderIcon(icon)
         }
     }

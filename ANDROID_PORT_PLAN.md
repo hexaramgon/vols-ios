@@ -195,6 +195,7 @@ Order matches the build phases in §11. "Risk" = where Android needs real design
 | Sign in with Apple (native) | Supabase Apple **web OAuth** via Custom Tabs + deep-link callback (required so existing Apple-account users can log in) |
 | AirPlay (`AVRoutePickerView`) | **System Output Switcher** (`ACTION_MEDIA_OUTPUT` / Media3 session integration). Cast support = optional later; not parity |
 | Lock screen / MPRemoteCommand | **Media3 `MediaSessionService`** + MediaStyle notification (play/pause/next/prev/seek — same command set; artwork cached once per track) |
+| MapKit (Collab tab artist map) | **MapLibre Native Android** with the web's style URLs (OpenFreeMap `styles/positron` light / `styles/dark` dark — no key, free). Static (no gestures), POI layers hidden, avatar pins as view annotations. Same engine + styles as the web map (`components/explore/artist-map.tsx`, 2026-10-23) so all clients look alike |
 | Background audio mode | Foreground service `mediaPlayback` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK` permission |
 | Sheet detents / `presentationBackground` | M3 `ModalBottomSheet` (wrap-content = self-sized; partial/full) + shared Haze background composable |
 | Materials/blur | **Haze 2.0** (31+ real blur; scrim fallback) — only sheets + Now Playing need it |

@@ -2,8 +2,9 @@
 //  EditProfileScreen.swift
 //  Volspire
 //
-//  Dark, grouped-card edit form mirroring the web settings: avatar + cover,
-//  username, bio, location, and up to 3 role tags. Saves via `update_user`.
+//  The profile edit form, mirroring the web's Settings → Profile: photos
+//  (banner + overlapping avatar), basic info, roles, the collab-map opt-in,
+//  and Save in the header. Saves via `update_user` (+ `set_open_to_collab`).
 //
 
 import DesignSystem
@@ -14,10 +15,15 @@ import SwiftUI
 
 struct EditProfileScreen: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(Dependencies.self) private var dependencies
+    @Environment(FeedStore.self) private var feedStore
     @Environment(PlayerController.self) private var playerController
     @Bindable var viewModel: ProfileScreenViewModel
 
     let userId: String
+    /// Band title — "Edit profile" from the profile page, "Profile" when
+    /// pushed from Settings.
+    var title: String = "Edit profile"
 
     /// Clears the floating tab bar + (when present) the mini-player docked
     /// above it — same formula as Library / Messages / MediaCollection.
@@ -32,7 +38,12 @@ struct EditProfileScreen: View {
     @State private var originalBio: String = ""
     @State private var originalLocation: String = ""
     @State private var originalTags: [String] = []
+    /// Collab-map opt-in (`users.open_to_collab`). nil until the saved value
+    /// loads; staged here and written with the rest of the form on Save.
+    @State private var openToCollab: Bool?
+    @State private var originalOpenToCollab: Bool?
     @State private var isSaving = false
+    @State private var saved = false
     @State private var errorMessage: String? = nil
     @State private var avatarItem: PhotosPickerItem? = nil
     @State private var selectedAvatarData: Data? = nil
@@ -43,58 +54,56 @@ struct EditProfileScreen: View {
     /// A freshly-picked banner awaiting crop (at the hero's on-screen aspect).
     @State private var bannerCropTarget: CropTarget? = nil
     @State private var locationCompleter = LocationCompleter()
-    @FocusState private var locationFocused: Bool
+    @FocusState private var focusedField: Field?
+    /// Live availability for an edited username — same states and debounce as
+    /// the signup wizard, so a taken handle is caught here instead of coming
+    /// back as a save failure from the `users_username_key` unique index.
+    @State private var usernameStatus: RegisterViewModel.UsernameStatus = .idle
+    @State private var usernameCheck: Task<Void, Never>?
+
+    private enum Field: Hashable { case username, bio, location }
 
     var body: some View {
-        // A pushed page (not a sheet) — back chevron pops, Save stays trailing.
+        // A pushed page laid out like the web's Settings → Profile: Photos,
+        // Basic info, Roles, Collaboration. Save lives in the header.
         ScrollView {
-            VStack(spacing: 22) {
-                header
-                formCard.padding(.horizontal, ViewConst.screenPaddings)
-                rolesCard.padding(.horizontal, ViewConst.screenPaddings)
-            }
-            .padding(.bottom, bottomInset)
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .background(Color.vBase.ignoresSafeArea())
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
-        .toolbarBackground(Color.vBar, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text("Edit Profile")
-                    .font(.appHeadline)
-                    .foregroundStyle(.white)
-            }
-            ToolbarItem(placement: .navigationBarLeading) {
-                BackButton(shadow: false)
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button(action: save) {
-                    if isSaving {
-                        ProgressView().tint(.white)
-                    } else {
-                        Text("Save").font(.appHeadline)
+            VStack(alignment: .leading, spacing: 32) {
+                SettingsGroup(title: "Photos", bare: true) { photos }
+                SettingsGroup(title: "Basic info", bare: true) { basicInfo }
+                SettingsGroup(
+                    title: "Roles",
+                    caption: "Pick up to \(ProfileRoles.max). They show on your profile and filter you in Collab.",
+                    bare: true
+                ) {
+                    RolePicker(selection: $selectedTags)
+                }
+                SettingsGroup(title: "Collaboration") {
+                    SettingsRow(
+                        title: "Open to collaboration",
+                        caption: "Show your city and your music on the Collab map so artists nearby can find you and reach out. Your exact location is never shared."
+                    ) {
+                        Toggle("", isOn: Binding(
+                            get: { openToCollab ?? false },
+                            set: { openToCollab = $0 }
+                        ))
+                        .labelsHidden()
+                        .toggleStyle(.ink)
+                        .disabled(openToCollab == nil)
                     }
                 }
-                .disabled(isSaving || !hasChanges)
-                .foregroundStyle(hasChanges ? Color.brand : Color.vText3)
+                if let errorMessage {
+                    ErrorBanner(errorMessage)
+                }
             }
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .padding(.top, 16)
+            .padding(.bottom, bottomInset + 24)
         }
-        .alert("Error", isPresented: .init(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(errorMessage ?? "")
+        .scrollDismissesKeyboard(.interactively)
+        .scrollIndicators(.hidden)
+        .appNavBar(title: title, onBack: { dismiss() }) {
+            saveButton
         }
-        .enableSwipeBack()
-        // NOTE: no .preferredColorScheme here — as a pushed page it inherits
-        // dark from the stack. Declaring it again made the window re-resolve
-        // the scheme on pop (a whole-screen dim flash). Sheets need their own;
-        // pushed pages must not.
         .onAppear {
             editUsername = viewModel.username
             editBio = viewModel.bio
@@ -105,10 +114,16 @@ struct EditProfileScreen: View {
             originalLocation = viewModel.location
             originalTags = viewModel.tags
         }
+        .task {
+            guard originalOpenToCollab == nil,
+                  let open = try? await dependencies.supabaseService.getOpenToCollab() else { return }
+            originalOpenToCollab = open
+            if openToCollab == nil { openToCollab = open }
+        }
     }
 
     /// Save only enables once the form differs from the loaded profile (or a new
-    /// avatar/banner was picked).
+    /// avatar/banner was picked, or the collab opt-in flipped).
     private var hasChanges: Bool {
         editUsername != originalUsername
             || editBio != originalBio
@@ -116,16 +131,96 @@ struct EditProfileScreen: View {
             || Set(selectedTags) != Set(originalTags)
             || selectedAvatarData != nil
             || selectedBannerData != nil
+            || openToCollabChanged
+    }
+
+    private var openToCollabChanged: Bool {
+        openToCollab != nil && openToCollab != originalOpenToCollab
+    }
+
+    /// Same rule the signup wizard enforces, so a handle can't be edited into a
+    /// shape that signup would have rejected.
+    private var usernameValid: Bool {
+        editUsername.count >= 3
+            && editUsername.range(of: "^[a-zA-Z0-9_]+$", options: .regularExpression) != nil
+    }
+
+    /// Blocks Save on a known-bad handle. An unresolved check (`.idle` after a
+    /// network failure) still saves — the server has the final say via the
+    /// unique index, and `saveProfile` names that error.
+    private var canSave: Bool {
+        hasChanges && usernameValid && usernameStatus != .taken && usernameStatus != .checking
+    }
+
+    /// Normalizes as you type exactly like the signup wizard (lowercase, spaces
+    /// to underscores — the save path lowercases anyway, so doing it here just
+    /// stops the field from showing something you won't get) and re-checks
+    /// availability on the same 500ms debounce.
+    private func usernameChanged(_ raw: String) {
+        editUsername = raw.lowercased().replacingOccurrences(of: " ", with: "_")
+        usernameCheck?.cancel()
+        let candidate = editUsername
+        // Your own current handle is always fine — checking it would report it
+        // taken by you.
+        guard candidate != originalUsername, candidate.count >= 3 else {
+            usernameStatus = .idle
+            return
+        }
+        usernameStatus = .checking
+        usernameCheck = Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            let available = await viewModel.isUsernameAvailable(candidate)
+            guard !Task.isCancelled, candidate == editUsername else { return }
+            switch available {
+            case true: usernameStatus = .available
+            case false: usernameStatus = .taken
+            case nil: usernameStatus = .idle
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var usernameStatusLine: some View {
+        switch usernameStatus {
+        case .taken:
+            statusText("That username is already taken.", color: .vError)
+        case .available:
+            statusText("Username is available.", color: .vSuccessText)
+        case .checking, .idle:
+            EmptyView()
+        }
+    }
+
+    private func statusText(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.appCaption)
+            .foregroundStyle(color)
     }
 }
 
-// MARK: - Header (cover + avatar)
+// MARK: - Photos (banner + overlapping avatar)
 
 private extension EditProfileScreen {
-    var header: some View {
-        VStack(spacing: 0) {
-            cover
-            avatarBlock.padding(.top, -48)
+    var photos: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if FeatureFlags.profileBanners {
+                ZStack(alignment: .bottomLeading) {
+                    cover
+                        .padding(.bottom, 40)
+                    avatarBlock
+                        .padding(.leading, 16)
+                }
+            } else {
+                // Banners are parked — just the photo.
+                avatarBlock
+            }
+            Text(FeatureFlags.profileBanners
+                 ? "How the top of your profile looks. Tap the banner or your photo to change it."
+                 : "Tap your photo to change it.")
+                .font(.appCaption)
+                .foregroundStyle(Color.vText3)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -141,15 +236,14 @@ private extension EditProfileScreen {
             // content wider than the screen — everything shoved off the right
             // edge. Overlays never influence layout, so this can't.
             Color.clear
-                .frame(height: 150)
+                // The stored banner's own 16:9 shape (shared with the web).
+                .aspectRatio(ProfileLayout.bannerCropAspect, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .overlay { BannerImageView(data: bannerData, url: bannerURL) }
-                .clipped()
-                .overlay(alignment: .bottomTrailing) {
-                    EditPenPill()
-                }
+                .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         }
-        // Pick → crop (hero aspect) → stash. Uploads on Save, not now.
+        .accessibilityLabel(bannerURL == nil && bannerData == nil ? "Add a banner" : "Change banner")
+        // Pick → crop (16:9 banner) → stash. Uploads on Save, not now.
         .onChange(of: bannerItem) { _, newItem in
             guard let newItem else { return }
             Task {
@@ -160,18 +254,19 @@ private extension EditProfileScreen {
             }
         }
         .fullScreenCover(item: $bannerCropTarget) { target in
-            // Crop at the hero banner band's canonical aspect (fixed ≈0.92 so
-            // the stored image is identical from any device — see ProfileLayout).
-            // The old wide 3:1 crop got aspect-filled into this near-square
-            // box: blown up ~3× (blurry) and showing only the middle slice of
-            // what was framed. 1600px keeps @3x screen widths sharp.
+            // Crop at the shared 16:9 banner aspect (same as the web), with
+            // guides for what the iPhone hero and the desktop web show — see
+            // ProfileLayout.
             ImageCropperView(
                 image: target.image,
                 onCrop: { data in selectedBannerData = data; bannerCropTarget = nil },
                 onCancel: { bannerCropTarget = nil },
                 aspectRatio: ProfileLayout.bannerCropAspect,
-                outputSize: 1600,
-                allowsFitMode: false
+                // 2400×1350: tall enough for the iPhone hero's height fill
+                // (~1130px at 3x) without upscaling.
+                outputSize: ProfileLayout.bannerOutputSize,
+                allowsFitMode: false,
+                guides: ProfileLayout.bannerGuides
             )
         }
     }
@@ -180,18 +275,15 @@ private extension EditProfileScreen {
         // Hoisted for the same reason as `cover` — the label closure is `@Sendable`.
         let avatarData = selectedAvatarData
         let avatarURL = viewModel.profileImageURL
-        return VStack(spacing: 10) {
-            PhotosPicker(selection: $avatarItem, matching: .images) {
-                AvatarImageView(data: avatarData, url: avatarURL)
-                    .frame(width: 96, height: 96)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.vBase, lineWidth: 4))
-                    .overlay(alignment: .bottomTrailing) {
-                        EditPenBadge()
-                    }
-            }
+        let initial = String(editUsername.prefix(1)).uppercased()
+        return PhotosPicker(selection: $avatarItem, matching: .images) {
+            AvatarImageView(data: avatarData, url: avatarURL, initial: initial)
+                .frame(width: 80, height: 80)
+                .clipShape(Circle())
+                .padding(4)
+                .background(Color.vBase, in: Circle())
         }
-        .frame(maxWidth: .infinity)
+        .accessibilityLabel("Change profile photo")
         // Pick → crop (square) → stash. Nothing uploads until Save.
         .onChange(of: avatarItem) { _, newItem in
             guard let newItem else { return }
@@ -214,90 +306,75 @@ private extension EditProfileScreen {
     }
 }
 
-// MARK: - Form card
+// MARK: - Basic info
 
 private extension EditProfileScreen {
-    /// The same `AuthFieldGroup` rows the signup wizard uses — icon column, one
-    /// grouped card, hairlines inset past the icons — rather than this screen's
-    /// old labelled rows, so editing a profile looks like creating one.
-    var formCard: some View {
-        // One labelled section per field — they're unrelated values, so sharing
-        // a single grouped card read as one control split in two.
-        VStack(alignment: .leading, spacing: 22) {
-            fieldSection("Username") {
-                AuthRow(icon: .user, placeholder: "Username", text: $editUsername)
-            }
-
-            fieldSection("Bio") { bioRow }
-
-            fieldSection("Location") {
-                locationRow
-                if showLocationSuggestions {
-                    locationSuggestions
+    var basicInfo: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsField(label: "Username") {
+                HStack(spacing: 4) {
+                    Text("@").foregroundStyle(Color.vText3)
+                    TextField(
+                        "",
+                        text: Binding(get: { editUsername }, set: { usernameChanged($0) }),
+                        prompt: Text("yourname").foregroundStyle(Color.vText3)
+                    )
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($focusedField, equals: .username)
                 }
+                .settingsFieldStyle(focused: focusedField == .username, invalid: usernameStatus == .taken)
+                usernameStatusLine
+            }
+
+            SettingsField(label: "Bio") {
+                TextField(
+                    "",
+                    text: $editBio,
+                    prompt: Text("Tell people about yourself…").foregroundStyle(Color.vText3),
+                    axis: .vertical
+                )
+                .lineLimit(3 ... 6)
+                .focused($focusedField, equals: .bio)
+                .settingsFieldStyle(focused: focusedField == .bio)
+            }
+
+            SettingsField(
+                label: "Location",
+                hint: "Shown on your profile, and on the Collab map if you're open to collaboration."
+            ) {
+                VStack(spacing: 0) {
+                    locationRow
+                    if showLocationSuggestions {
+                        locationSuggestions
+                    }
+                }
+                .background(
+                    focusedField == .location ? Color.vFieldFocus : Color.vField,
+                    in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                )
+                .animation(.easeInOut(duration: 0.15), value: showLocationSuggestions)
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: showLocationSuggestions)
-    }
-
-    /// Section heading over its own grouped card.
-    func fieldSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeader(title)
-            AuthFieldGroup { content() }
-        }
-    }
-
-    /// Section heading in the wizard's voice (`appCalloutSemibold`, white).
-    func sectionHeader(_ text: String) -> some View {
-        Text(text)
-            .font(.appCalloutSemibold)
-            .foregroundStyle(.white)
-    }
-
-    /// Multi-line bio in the icon-row language. Grows like the register wizard's
-    /// fields rather than sitting in a fixed-height `TextEditor` well.
-    var bioRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            LucideIcon(.squarePen, .md)
-                .foregroundStyle(Color.vText3)
-                .frame(height: 22) // optical align with the first text line
-            TextField(
-                "",
-                text: $editBio,
-                prompt: Text("Tell people about yourself").foregroundStyle(Color.vText3),
-                axis: .vertical
-            )
-            .font(.appBody)
-            .foregroundStyle(.white)
-            .tint(.white)
-            .lineLimit(2 ... 6)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 16)
     }
 
     var showLocationSuggestions: Bool {
-        locationFocused && !locationCompleter.suggestions.isEmpty
+        focusedField == .location && !locationCompleter.suggestions.isEmpty
     }
 
-    /// Mirrors the wizard's location field: pin icon that brightens on focus,
-    /// 54pt row, suggestions dropping into the same card below it.
     var locationRow: some View {
-        HStack(spacing: 12) {
-            LucideIcon(.mapPin, .md)
-                .foregroundStyle(locationFocused ? .white : Color.vText3)
+        HStack(spacing: 8) {
             TextField(
                 "",
                 text: $editLocation,
                 prompt: Text("City, Country").foregroundStyle(Color.vText3)
             )
-            .font(.appBody)
-            .foregroundStyle(.white)
-            .tint(.white)
+            .font(.appSubheadline)
+            .foregroundStyle(Color.vText)
+            .tint(Color.vText)
             .textInputAutocapitalization(.words)
             .autocorrectionDisabled()
-            .focused($locationFocused)
+            .focused($focusedField, equals: .location)
             .onChange(of: editLocation) { _, newValue in
                 locationCompleter.update(newValue)
             }
@@ -309,27 +386,26 @@ private extension EditProfileScreen {
             }
         }
         .padding(.horizontal, 16)
-        .frame(height: 54)
-        .animation(.easeInOut(duration: 0.15), value: locationFocused)
+        .padding(.vertical, 12)
     }
 
     var locationSuggestions: some View {
         ForEach(locationCompleter.suggestions, id: \.self) { suggestion in
-            AuthRowDivider()
+            SettingsDivider()
             Button {
                 editLocation = formatted(suggestion)
                 locationCompleter.clear()
-                locationFocused = false
+                focusedField = nil
             } label: {
                 HStack(spacing: 12) {
                     LucideIcon(.mapPin, .sm)
                         .foregroundStyle(Color.vText3)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(suggestion.title)
-                            .font(.appCallout).foregroundStyle(.white).lineLimit(1)
+                            .font(.appSubheadline).foregroundStyle(Color.vText).lineLimit(1)
                         if !suggestion.subtitle.isEmpty {
                             Text(suggestion.subtitle)
-                                .font(.appFootnote).foregroundStyle(Color.vText3).lineLimit(1)
+                                .font(.appCaption).foregroundStyle(Color.vText3).lineLimit(1)
                         }
                     }
                     Spacer(minLength: 0)
@@ -354,42 +430,44 @@ private extension EditProfileScreen {
 
     func clearButton(_ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: "xmark.circle.fill")
-                .font(.system(size: 16))
+            LucideIcon(.circleX, .md)
                 .foregroundStyle(Color.vText3)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)
     }
-
 }
 
-// MARK: - Roles card
+// MARK: - Save
 
 private extension EditProfileScreen {
-    /// Section header + chips, laid out like the signup wizard's roles step (no
-    /// surrounding card) so the two read as the same form.
-    var rolesCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                sectionHeader("Your roles")
-                Spacer()
-                Text("\(selectedTags.count)/\(ProfileRoles.max)")
-                    .font(.appFootnoteMedium)
-                    .foregroundStyle(Color.vText3)
+    /// The header's Save: ink when there's an edit to save, greyed out
+    /// otherwise; a spinner while saving, then a check for a moment.
+    var saveButton: some View {
+        Button { save() } label: {
+            Group {
+                if isSaving {
+                    ProgressView().controlSize(.small).tint(Color.vText)
+                } else if saved {
+                    LucideIcon(.check, .md).foregroundStyle(Color.vSuccessText)
+                } else {
+                    Text("Save")
+                        .font(.appCalloutSemibold)
+                        .foregroundStyle(canSave ? Color.vText : Color.vText4)
+                }
             }
-            Text("Helps people find your work. Pick up to \(ProfileRoles.max).")
-                .font(.appFootnote)
-                .foregroundStyle(Color.vText3)
-
-            RolePicker(selection: $selectedTags)
-                .padding(.top, 4)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(.rect)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
+        .disabled(!canSave || isSaving)
+        .animation(.easeInOut(duration: 0.18), value: canSave)
+        .accessibilityLabel(saved ? "Saved" : "Save")
     }
 
     func save() {
         isSaving = true
+        errorMessage = nil
         Task {
             // Deferred image uploads run now, on Save — the avatar/banner aren't
             // committed until the user taps Save. `saveProfile` then writes the
@@ -397,65 +475,70 @@ private extension EditProfileScreen {
             if let data = selectedAvatarData {
                 guard await viewModel.uploadAvatar(userId: userId, imageData: data) else {
                     isSaving = false
-                    errorMessage = "Failed to upload avatar"
+                    errorMessage = "Failed to upload your photo. Please try again."
                     return
                 }
+                selectedAvatarData = nil
             }
             if let data = selectedBannerData {
                 guard await viewModel.uploadBanner(userId: userId, imageData: data) else {
                     isSaving = false
-                    errorMessage = "Failed to upload banner"
+                    errorMessage = "Failed to upload your banner. Please try again."
+                    return
+                }
+                selectedBannerData = nil
+            }
+            let username = editUsername.trimmingCharacters(in: .whitespaces).lowercased()
+            let bio = editBio.trimmingCharacters(in: .whitespaces)
+            let location = editLocation.trimmingCharacters(in: .whitespaces)
+            let success = await viewModel.saveProfile(
+                userId: userId,
+                username: username,
+                bio: bio,
+                location: location,
+                tags: selectedTags
+            )
+            guard success else {
+                isSaving = false
+                errorMessage = viewModel.profileUpdateError ?? "Failed to save profile. Please try again."
+                return
+            }
+            // Open-to-collab or city changed → the Collab map is stale.
+            let mapChanged = openToCollabChanged || location != originalLocation
+            originalUsername = username
+            originalBio = bio
+            originalLocation = location
+            originalTags = selectedTags
+            if openToCollabChanged, let open = openToCollab {
+                do {
+                    try await dependencies.supabaseService.setOpenToCollab(open)
+                    originalOpenToCollab = open
+                } catch {
+                    isSaving = false
+                    errorMessage = "Couldn't update your collaboration setting. Please try again."
                     return
                 }
             }
-            let success = await viewModel.saveProfile(
-                userId: userId,
-                username: editUsername.trimmingCharacters(in: .whitespaces).lowercased(),
-                bio: editBio.trimmingCharacters(in: .whitespaces),
-                location: editLocation.trimmingCharacters(in: .whitespaces),
-                tags: selectedTags
-            )
-            isSaving = false
-            if success {
-                dismiss()
-            } else {
-                errorMessage = viewModel.profileUpdateError ?? "Failed to save profile"
+            if mapChanged {
+                Task { await feedStore.refreshLocationsAfterProfileChange() }
             }
+            isSaving = false
+            saved = true
+            // Every own-profile screen refetches, then the form closes so you
+            // land back on the updated profile (a beat to see the check).
+            NotificationCenter.default.post(name: .ownProfileUpdated, object: nil)
+            try? await Task.sleep(for: .milliseconds(500))
+            dismiss()
         }
     }
 }
 
 // MARK: - Media subviews (structs so they're usable inside PhotosPicker labels)
 
-/// The cover's edit-pen chip (struct: `LucideIcon.init` is main-actor, and
-/// PhotosPicker labels are `@Sendable` — a struct's memberwise init isn't).
-/// Same boxy chip language as the header pills: 11pt continuous corners,
-/// solid dark fill, borderless, white icon.
-private struct EditPenPill: View {
-    var body: some View {
-        LucideIcon(.squarePen, .sm)
-            .foregroundStyle(.white)
-            .frame(width: 34, height: 34)
-            .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .padding(10)
-    }
-}
-
-/// The avatar's edit-pen badge — the same chip, ringed in the page colour so
-/// it separates from the photo (like the avatar's own vBase ring).
-private struct EditPenBadge: View {
-    var body: some View {
-        LucideIcon(.squarePen, .sm)
-            .foregroundStyle(.white)
-            .frame(width: 30, height: 30)
-            .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(Color.vBase, lineWidth: 3))
-    }
-}
-
 private struct AvatarImageView: View {
     let data: Data?
     let url: URL?
+    let initial: String
 
     var body: some View {
         Group {
@@ -465,8 +548,10 @@ private struct AvatarImageView: View {
                 KFImage(url).downsampled(to: 120).resizable().aspectRatio(contentMode: .fill)
             } else {
                 ZStack {
-                    Color.vSurface
-                    Image(systemName: "person.fill").font(.system(size: 36)).foregroundStyle(Color.vText3)
+                    Color.vSurface2
+                    Text(initial.isEmpty ? "?" : initial)
+                        .font(.appTitle)
+                        .foregroundStyle(Color.vText3)
                 }
             }
         }
@@ -484,7 +569,14 @@ private struct BannerImageView: View {
             } else if let url {
                 KFImage(url).downsampled(to: 450).resizable().aspectRatio(contentMode: .fill)
             } else {
-                LinearGradient(colors: [Color(white: 0.16), .vBase], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [.vSurface, .vCardSolid], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .overlay {
+                        HStack(spacing: 8) {
+                            LucideIcon(.image, .lg)
+                            Text("Add a banner").font(.appCaptionMedium)
+                        }
+                        .foregroundStyle(Color.vText4)
+                    }
             }
         }
     }

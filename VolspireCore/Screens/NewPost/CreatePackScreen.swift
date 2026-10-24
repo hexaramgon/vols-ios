@@ -165,7 +165,7 @@ struct CreatePackScreen: View {
                 prompt: Text("Pack name").foregroundStyle(Color.vText3)
             )
             .font(.appBody)
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.vText)
             .submitLabel(.done)
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
@@ -179,10 +179,10 @@ struct CreatePackScreen: View {
                 TextField(
                     "",
                     text: $viewModel.price.decimalFiltered(),
-                    prompt: Text("Price — leave blank or 0 for free").foregroundStyle(Color.vText3)
+                    prompt: Text("Price (leave blank or 0 for free)").foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
                 .keyboardType(.decimalPad)
                 .focused($priceFieldFocused)
                 .doneKeyboardToolbar($priceFieldFocused)
@@ -193,7 +193,7 @@ struct CreatePackScreen: View {
 
             UploadDescriptionField(
                 text: $viewModel.description,
-                prompt: "Describe what's in the pack — sounds, vibe, what makes it special…",
+                prompt: "Describe what's in the pack: sounds, vibe, what makes it special…",
                 limit: 600
             )
         }
@@ -236,12 +236,8 @@ struct CreatePackScreen: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 32)
                 .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color.white.opacity(0.02))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
+                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                        .fill(Color.vField)
                 )
                 .contentShape(.rect)
             }
@@ -286,7 +282,7 @@ struct CreatePackScreen: View {
                     LucideIcon(.triangleAlert, .xs)
                         .foregroundStyle(Color.vText3)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") selected — packaged into a .zip on publish")
+                        Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") selected, packaged into a .zip on publish")
                             .font(.appFootnote)
                             .foregroundStyle(Color.vText3)
                         if !viewModel.formats.isEmpty {
@@ -326,15 +322,10 @@ struct CreatePackScreen: View {
                             Spacer()
                             ZStack {
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(file.isPreview ? Color.white : .clear)
-                                RoundedRectangle(cornerRadius: 6)
-                                    .strokeBorder(
-                                        file.isPreview ? Color.white : Color.white.opacity(0.25),
-                                        lineWidth: 1
-                                    )
+                                    .fill(file.isPreview ? Color.vInverse : Color.vControlActive)
                                 if file.isPreview {
                                     LucideIcon(.check, .xs)
-                                        .foregroundStyle(.black)
+                                        .foregroundStyle(Color.vOnInverse)
                                 }
                             }
                             .frame(width: 22, height: 22)
@@ -363,8 +354,8 @@ struct CreatePackScreen: View {
 
             UploadVisibilityPicker(
                 visibility: $viewModel.visibility,
-                publicHint: "Public — appears in the marketplace and on your profile.",
-                privateHint: "Private — hidden from the marketplace. You can flip it public later from the pack page."
+                publicHint: "Public: appears in the marketplace and on your profile.",
+                privateHint: "Private: hidden from the marketplace. You can flip it public later from the pack page."
             )
         }
     }

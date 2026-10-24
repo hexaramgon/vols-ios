@@ -38,7 +38,8 @@ private struct PendingAttachment {
     let previewImage: UIImage?
 }
 
-/// An audio attachment staged for "Add to Workspace" (sheet item).
+/// A held attachment (photo / audio / file) — drives its options sheet and
+/// "Add to Workspace".
 private struct WorkspaceAttachmentTarget: Identifiable {
     let id = UUID()
     let url: URL
@@ -46,6 +47,9 @@ private struct WorkspaceAttachmentTarget: Identifiable {
     let type: String?
     /// The message this attachment belongs to — powers "Report" in the options sheet.
     var senderMessage: ChatMessage? = nil
+
+    var isImage: Bool { type?.hasPrefix("image") ?? false }
+    var isAudio: Bool { type?.hasPrefix("audio") ?? false }
 }
 
 struct ChatThread: View {
@@ -61,12 +65,12 @@ struct ChatThread: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
-    /// Custom "Photo / File" attachment popup, anchored above the + button.
-    @State private var showAttachMenu = false
+    /// The attach sheet (inline photo grid + Files).
+    @State private var showAttachSheet = false
+    /// Brief confirmation pill above the composer ("Saved to Photos").
+    @State private var savedNotice: String?
     /// A picked photo/file staged in the input bar — sent only when send is tapped.
     @State private var pendingAttachment: PendingAttachment?
-    /// On-screen frame of each image bubble, so tapping one zooms it from its spot.
-    @State private var imageFrames: [String: CGRect] = [:]
     /// Audio attachment staged for "Add to Workspace" (drives the folder picker).
     @State private var workspaceTarget: WorkspaceAttachmentTarget?
     /// Audio attachment whose long-press options sheet is open.
@@ -97,24 +101,38 @@ struct ChatThread: View {
         }
         .animation(.easeOut(duration: 0.25), value: viewModel.messages.isEmpty)
         .animation(.easeOut(duration: 0.25), value: viewModel.loadingState)
-        // Tap anywhere in the thread to dismiss the attachment popup.
-        .overlay {
-            if showAttachMenu {
-                Color.black.opacity(0.001)
-                    .contentShape(.rect)
-                    .onTapGesture { closeAttachMenu() }
+        // "Saved to Photos" / "Saved" — a short pill just above the composer.
+        .overlay(alignment: .bottom) {
+            if let savedNotice {
+                HStack(spacing: 6) {
+                    LucideIcon(.check, .sm)
+                    Text(savedNotice).font(.appFootnoteSemibold)
+                }
+                .foregroundStyle(Color.vOnInverse)
+                .padding(.horizontal, 14)
+                .frame(height: 34)
+                .background(Color.vInverse, in: Capsule())
+                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                .padding(.bottom, 12)
+                .transition(.opacity.combined(with: .scale(scale: 0.92)))
             }
         }
-        // Custom attachment popup — anchored just above the + button (which lives
-        // at the leading edge of the input bar), not a bottom sheet.
-        .overlay(alignment: .bottomLeading) {
-            if showAttachMenu {
-                attachMenuPopup
-                    .padding(.leading, ViewConst.screenPaddings)
-                    .padding(.bottom, 10)
-                    .transition(.scale(scale: 0.9, anchor: .bottomLeading).combined(with: .opacity))
-            }
+        .animation(.smooth(duration: 0.25), value: savedNotice)
+        .sheet(isPresented: $showAttachSheet) {
+            // Each tile closes the sheet, then opens its picker once it's gone.
+            AttachSheet(
+                onPhotos: {
+                    showAttachSheet = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showPhotoPicker = true }
+                },
+                onFiles: {
+                    showAttachSheet = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showFileImporter = true }
+                }
+            )
         }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
+        .onChange(of: photoItem) { _, item in handlePhoto(item) }
         .safeAreaInset(edge: .bottom) {
             // A gated thread swaps the composer for the reason it's closed —
             // a disabled field with no explanation reads as a bug.
@@ -124,8 +142,6 @@ struct ChatThread: View {
                 inputBar
             }
         }
-        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
-        .onChange(of: photoItem) { _, item in handlePhoto(item) }
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: [.image, .pdf, .audio, .movie, .plainText, .data],
@@ -159,9 +175,9 @@ struct ChatThread: View {
         // track "…" menus everywhere else in the app.
         .sheet(item: $optionsTarget) { target in
             TrackOptionsSheet(
-                artwork: .placeholder(name: target.name),
-                title: target.name ?? "Audio",
-                meta: (target.name as NSString?)?.pathExtension.uppercased(),
+                artwork: target.isImage ? .webImage(target.url) : .placeholder(name: target.name),
+                title: target.isImage ? "Photo" : (target.name ?? (target.isAudio ? "Audio" : "File")),
+                meta: target.isImage ? nil : (target.name as NSString?)?.pathExtension.uppercased(),
                 actions: attachmentActions(target)
             )
             // Detents come from TrackOptionsSheet itself (sized to its rows).
@@ -169,17 +185,40 @@ struct ChatThread: View {
         }
     }
 
-    /// Options for a held attachment — Add to Workspace / Share, plus Report on
-    /// the other person's messages (reports the message the attachment belongs to).
+    /// Options for a held attachment — Download (photos → Photos, everything
+    /// else → Files), Add to Workspace (audio), Share, plus Report on the other
+    /// person's messages (reports the message the attachment belongs to).
     private func attachmentActions(_ target: WorkspaceAttachmentTarget) -> [TrackOptionsSheet.Action] {
-        var actions: [TrackOptionsSheet.Action] = [
-            .init(icon: .folderPlus, title: "Add to Workspace", subtitle: "Copy this file into a folder") {
+        var actions: [TrackOptionsSheet.Action] = []
+        if target.isImage {
+            actions.append(.init(icon: .download, title: "Save to Photos", subtitle: "Download it to your library",
+                                 awaitsCompletion: true) {
+                if await AttachmentDownloads.saveToPhotos(from: target.url) {
+                    Haptics.success()
+                    flashSaved("Saved to Photos")
+                } else {
+                    viewModel.attachmentError = "Couldn't save the photo. Check Volspire's Photos access in Settings."
+                }
+            })
+        } else {
+            actions.append(.init(icon: .download, title: "Download", subtitle: "Save it to Files",
+                                 dismissesSheet: false) {
+                do {
+                    let tmp = try await AttachmentDownloads.toTempFile(target.url, name: target.name)
+                    UIApplication.presentSaveToFiles(tmp)
+                } catch {
+                    viewModel.attachmentError = "Couldn't download the file. Please try again."
+                }
+            })
+        }
+        if target.isAudio {
+            actions.append(.init(icon: .folderPlus, title: "Add to Workspace", subtitle: "Copy this file into a folder") {
                 workspaceTarget = target
-            },
-            .init(icon: .share2, title: "Share", subtitle: "Save to Files or send it on", dismissesSheet: false) {
-                await shareAttachment(target)
-            },
-        ]
+            })
+        }
+        actions.append(.init(icon: .share2, title: "Share", subtitle: "Send it on", dismissesSheet: false) {
+            await shareAttachment(target)
+        })
         if let msg = target.senderMessage, !msg.isFromMe {
             actions.append(.init(icon: .flag, title: "Report", subtitle: "Flag this message for review") {
                 // TrackOptionsSheet runs perform ~0.3s after dismissing, so setting
@@ -194,30 +233,28 @@ struct ChatThread: View {
     /// (over the options sheet, which stays up — same pattern as track share).
     private func shareAttachment(_ target: WorkspaceAttachmentTarget) async {
         do {
-            let (data, _) = try await URLSession.shared.data(from: target.url)
-            // The attachment name is sender-controlled; `lastPathComponent` strips any
-            // directory / `..` segments so it can't escape the temp dir, and a UUID
-            // prefix avoids collisions between concurrent shares.
-            let safeName = ((target.name ?? "audio") as NSString).lastPathComponent
-            let fileName = safeName.isEmpty ? "attachment" : safeName
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("\(UUID().uuidString)-\(fileName)")
-            try data.write(to: tmp, options: .atomic)
+            let tmp = try await AttachmentDownloads.toTempFile(target.url, name: target.name)
             UIApplication.presentActivitySheet([tmp])
         } catch {
             viewModel.attachmentError = "Couldn't download the file. Please try again."
         }
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 12) {
-            ZStack {
-                Circle().fill(Color.vSurface).frame(width: 64, height: 64)
-                LucideIcon(.messageCircle, .xl).foregroundStyle(Color.vText2)
-            }
-            Text("No messages yet").font(.appCalloutSemibold).foregroundStyle(.white)
-            Text("Say hello 👋").font(.appFootnote).foregroundStyle(Color.vText3)
+    /// Shows the confirmation pill for a moment.
+    private func flashSaved(_ text: String) {
+        savedNotice = text
+        Task {
+            try? await Task.sleep(for: .seconds(1.8))
+            if savedNotice == text { savedNotice = nil }
         }
+    }
+
+    private var emptyState: some View {
+        InboxEmptyState(
+            title: "Start the conversation",
+            message: "Say hi to @\(otherUsername).",
+            compact: true
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -336,8 +373,9 @@ struct ChatThread: View {
             HStack(spacing: 0) {
                 if msg.isFromMe { Spacer(minLength: 56) }
                 VStack(alignment: msg.isFromMe ? .trailing : .leading, spacing: 4) {
-                    if msg.isAttachment { attachmentView(msg) }
-                    if !msg.text.isEmpty {
+                    if msg.isAttachment { attachmentView(msg, tail: tail) }
+                    // An image's caption lives inside the image bubble.
+                    if !msg.text.isEmpty, !msg.isImageAttachment {
                         messageContent(msg, tail: tail)
                             // Hold a plain text bubble for Copy / Report (collab
                             // requests are handled from the header instead).
@@ -414,16 +452,13 @@ struct ChatThread: View {
         let shape = bubbleShape(isFromMe: isFromMe, tail: tail)
         return Text(text)
             .font(.appCalloutRegular)
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.vText)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
+            // Outgoing neutral-800, incoming neutral-900 (web parity).
             .background {
-                if isFromMe {
-                    shape.fill(accentGradient)
-                } else {
-                    shape.fill(Color.vSurface)
-                }
+                shape.fill(isFromMe ? Color.vSurface2 : Color.vSurface)
             }
     }
 
@@ -439,7 +474,7 @@ struct ChatThread: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.title)
-                        .font(.appFont.trackTitle).foregroundStyle(.white)
+                        .font(.appFont.trackTitle).foregroundStyle(Color.vText)
                         .lineLimit(1)
                     if let artist = track.artist {
                         Text("@\(artist)")
@@ -451,15 +486,15 @@ struct ChatThread: View {
                 Spacer(minLength: 0)
 
                 ZStack {
-                    Circle().fill(.white.opacity(0.92)).frame(width: 30, height: 30)
-                    Image(systemName: "play.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(.black)
+                    Circle().fill(Color.vInverse).frame(width: 30, height: 30)
+                    LucideIcon(.playFill, .xs).foregroundStyle(Color.vOnInverse)
                 }
             }
             .padding(9)
             .frame(width: 252)
             .background {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(isFromMe ? AnyShapeStyle(accentGradient) : AnyShapeStyle(Color.vSurface))
+                    .fill(isFromMe ? Color.vSurface2 : Color.vSurface)
             }
         }
         .buttonStyle(.plain)
@@ -499,41 +534,25 @@ struct ChatThread: View {
     // MARK: Attachments
 
     @ViewBuilder
-    private func attachmentView(_ msg: ChatMessage) -> some View {
+    private func attachmentView(_ msg: ChatMessage, tail: Bool) -> some View {
         if msg.isImageAttachment {
-            if let url = msg.attachmentURL {
-                KFImage.url(url, cacheKey: attachmentCacheKey(url))
-                    // Same shimmer bone as the no-URL state — the bubble never
-                    // renders as empty space while the image downloads.
-                    .placeholder {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(Color.white.opacity(0.08))
-                            .frame(width: 210, height: 210)
-                            .shimmering()
-                    }
-                    .downsampled(to: 220)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: 210, height: 210)
-                    .clipped()
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .contentShape(.rect)
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { imageFrames[msg.id] = $0 }
-                    .onTapGesture {
-                        avatarPreview.present(url: url, sourceFrame: imageFrames[msg.id] ?? .zero, circular: false)
-                    }
-                    .onLongPressGesture(minimumDuration: 0.35) {
-                        // Nothing to show on your own caption-less image.
-                        guard !msg.isFromMe || !msg.text.isEmpty else { return }
-                        Haptics.impact(.medium)
-                        optionsMessage = msg
-                    }
-            } else {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color.white.opacity(0.08))
-                    .frame(width: 210, height: 210)
-                    .shimmering()
-            }
+            ChatImageBubble(
+                url: msg.attachmentURL,
+                caption: msg.text,
+                isFromMe: msg.isFromMe,
+                shape: bubbleShape(isFromMe: msg.isFromMe, tail: tail),
+                onTap: { url, frame in
+                    avatarPreview.present(url: url, sourceFrame: frame, circular: false)
+                },
+                onLongPress: {
+                    // Hold a photo for Save to Photos / Share / Report.
+                    guard let url = msg.attachmentURL else { return }
+                    Haptics.impact(.medium)
+                    optionsTarget = WorkspaceAttachmentTarget(
+                        url: url, name: msg.attachmentName, type: msg.attachmentType, senderMessage: msg
+                    )
+                }
+            )
         } else if msg.isAudioAttachment, let url = msg.attachmentURL {
             AudioAttachmentPlayer(url: url, name: msg.attachmentName, onStartPlaying: {
                 // Don't play over the app's music — pause it when a voice note starts.
@@ -548,9 +567,12 @@ struct ChatThread: View {
         } else {
             fileChip(msg)
                 .onLongPressGesture(minimumDuration: 0.35) {
-                    guard !msg.isFromMe || !msg.text.isEmpty else { return }
+                    // Hold a file for Download / Share / Report.
+                    guard let url = msg.attachmentURL else { return }
                     Haptics.impact(.medium)
-                    optionsMessage = msg
+                    optionsTarget = WorkspaceAttachmentTarget(
+                        url: url, name: msg.attachmentName, type: msg.attachmentType, senderMessage: msg
+                    )
                 }
         }
     }
@@ -559,13 +581,13 @@ struct ChatThread: View {
         let ext = (msg.attachmentName as NSString?)?.pathExtension ?? ""
         let chip = HStack(spacing: 11) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.08))
-                LucideIcon(.file, .lg).foregroundStyle(.white)
+                RoundedRectangle(cornerRadius: Radius.tile, style: .continuous).fill(Color.vControl)
+                LucideIcon(.file, .lg).foregroundStyle(Color.vText)
             }
             .frame(width: 40, height: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(msg.attachmentName ?? "Attachment")
-                    .font(.appSubheadlineMedium).foregroundStyle(.white).lineLimit(1)
+                    .font(.appSubheadlineMedium).foregroundStyle(Color.vText).lineLimit(1)
                 Text(msg.attachmentURL == nil ? "Uploading…" : (ext.isEmpty ? "File" : ext.uppercased()))
                     .font(.appCaption2).foregroundStyle(Color.vText3).lineLimit(1)
             }
@@ -617,7 +639,7 @@ struct ChatThread: View {
         .padding(.vertical, 14)
         .background {
             Color.vBase
-                .overlay(alignment: .top) { Rectangle().fill(Color.vBorder).frame(height: 1) }
+                .overlay(alignment: .top) { Rectangle().fill(Color.vDivider).frame(height: 1) }
                 .ignoresSafeArea(edges: .bottom)
         }
     }
@@ -629,56 +651,49 @@ struct ChatThread: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
+            HStack(alignment: .bottom, spacing: 8) {
+                // Ghost paperclip — opens the attach sheet (photos + Files).
                 Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.78)) { showAttachMenu.toggle() }
+                    inputFocused = false
+                    showAttachSheet = true
                 } label: {
-                    LucideIcon(.plus, .lg)
-                        .foregroundStyle(Color.vText2)
-                        .rotationEffect(.degrees(showAttachMenu ? 45 : 0))
-                        .frame(width: 38, height: 38)
-                        .background(Color.white.opacity(0.07), in: Circle())
-                        // Center the circle against the single-line pill (44pt) instead
-                        // of bottom-aligning the shorter 38pt button — while still
-                        // sinking to the bottom-left once the field grows multi-line.
-                        .frame(height: 44)
+                    LucideIcon(.paperclip, .lg)
+                        .foregroundStyle(showAttachSheet ? Color.vText : Color.vText3)
+                        .frame(width: 32, height: 40)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .disabled(viewModel.isSending)
+                .accessibilityLabel("Attach")
 
-                HStack(alignment: .bottom, spacing: 6) {
+                // One 40pt capsule with the send button inside: grey until
+                // there's something to send, then accent.
+                HStack(alignment: .bottom, spacing: 4) {
                     TextField("", text: $viewModel.draft, prompt: Text(pendingAttachment != nil ? "Add a caption…" : "Message…").foregroundStyle(Color.vText3), axis: .vertical)
-                        // Same size as the comment composers (player + listing),
-                        // so typing feels identical across chat and comments.
-                        .font(.appBody)
-                        .foregroundStyle(.white)
-                        .tint(Color.brand)
+                        .font(.appSubheadline)
+                        .foregroundStyle(Color.vText)
+                        .tint(Color.vText)
                         .focused($inputFocused)
                         .lineLimit(1 ... 5)
                         .padding(.leading, 16)
-                        .padding(.trailing, canSend ? 6 : 16)
-                        .padding(.vertical, 9)
+                        .padding(.vertical, 10)
 
-                    if canSend {
-                        Button {
-                            sendCurrent()
-                        } label: {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 32, height: 32)
-                                .background(accentGradient, in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .padding(3)
-                        .transition(.scale.combined(with: .opacity))
+                    Button {
+                        sendCurrent()
+                    } label: {
+                        LucideIcon(.send, .md)
+                            .foregroundStyle(canSend ? Color.vOnColor : Color.vText4)
+                            .frame(width: 32, height: 32)
+                            .background(canSend ? Color.vAccent : Color.vControl, in: Circle())
                     }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
+                    .padding(4)
+                    .accessibilityLabel("Send")
                 }
-                .frame(minHeight: 44)
-                .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.vBorder))
-                .animation(.spring(response: 0.32, dampingFraction: 0.72), value: canSend)
+                .frame(minHeight: 40)
+                .background(Color.vField, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .animation(.easeOut(duration: 0.15), value: canSend)
             }
         }
         .padding(.horizontal, ViewConst.screenPaddings)
@@ -689,48 +704,9 @@ struct ChatThread: View {
             // so the bar simply pins to the bottom: above the keyboard when typing,
             // above the home indicator otherwise. The fill bleeds into the inset.
             Color.vBase
-                .overlay(alignment: .top) { Rectangle().fill(Color.vBorder).frame(height: 1) }
+                .overlay(alignment: .top) { Rectangle().fill(Color.vDivider).frame(height: 1) }
                 .ignoresSafeArea(edges: .bottom)
         }
-    }
-
-    // MARK: Attachment menu (custom popup)
-
-    private var attachMenuPopup: some View {
-        VStack(spacing: 0) {
-            attachRow(icon: .image, title: "Photo") {
-                closeAttachMenu()
-                showPhotoPicker = true
-            }
-            Divider().overlay(Color.white.opacity(0.08))
-            attachRow(icon: .file, title: "File") {
-                closeAttachMenu()
-                showFileImporter = true
-            }
-        }
-        .frame(width: 184)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.08)))
-        .shadow(color: .black.opacity(0.4), radius: 18, y: 8)
-        .environment(\.colorScheme, .dark)
-    }
-
-    private func attachRow(icon: LucideIcon.Name, title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                LucideIcon(icon, .md).foregroundStyle(.white)
-                Text(title).font(.appCallout).foregroundStyle(.white)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 15)
-            .padding(.vertical, 13)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func closeAttachMenu() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { showAttachMenu = false }
     }
 
     /// Preview of the staged attachment sitting above the input row, with a remove
@@ -742,7 +718,7 @@ struct ChatThread: View {
                     Image(uiImage: img).resizable().scaledToFill()
                 } else {
                     ZStack {
-                        Color.white.opacity(0.08)
+                        Color.vControl
                         LucideIcon(.file, .md).foregroundStyle(Color.vText2)
                     }
                 }
@@ -753,7 +729,7 @@ struct ChatThread: View {
             VStack(alignment: .leading, spacing: 2) {
                 // Photos use an auto-generated filename — show a clean label instead.
                 Text(att.fileType.hasPrefix("image") ? "Photo" : att.fileName)
-                    .font(.appFootnoteMedium).foregroundStyle(.white)
+                    .font(.appFootnoteMedium).foregroundStyle(Color.vText)
                     .lineLimit(1).truncationMode(.middle)
                 Text("Ready to send").font(.appCaption).foregroundStyle(Color.vText3)
             }
@@ -766,13 +742,12 @@ struct ChatThread: View {
                 LucideIcon(.x, .sm)
                     .foregroundStyle(Color.vText2)
                     .frame(width: 30, height: 30)
-                    .background(Color.white.opacity(0.08), in: Circle())
+                    .background(Color.vControl, in: Circle())
             }
             .buttonStyle(.plain)
         }
         .padding(8)
-        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.vBorder))
+        .background(Color.vSurface, in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
     }
 
     /// Sends the staged attachment (with the draft as caption) if present, else a
@@ -861,3 +836,184 @@ private struct MessageOptionsSheet: View {
     }
 }
 
+// MARK: - Image bubble
+
+/// Remembered image aspect ratios (by cache key), persisted across launches,
+/// so a photo seen once lays out at its real shape straight away — opening a
+/// conversation never shows bubbles resizing from square.
+@MainActor private enum ChatImageAspects {
+    private static let defaultsKey = "volspire:chat-image-aspects"
+    private static var byKey: [String: Double] =
+        (UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: Double]) ?? [:]
+
+    static func get(_ key: String) -> CGFloat? { byKey[key].map { CGFloat($0) } }
+
+    static func set(_ key: String, _ aspect: CGFloat) {
+        guard byKey[key] != Double(aspect) else { return }
+        // Keep the table small — old entries just fall back to square once.
+        if byKey.count > 600 { byKey.removeAll() }
+        byKey[key] = Double(aspect)
+        UserDefaults.standard.set(byKey, forKey: defaultsKey)
+    }
+}
+
+/// A photo message, iMessage-style: the image at its own shape (portrait,
+/// landscape or square, clamped to sensible bounds) inside the message
+/// bubble shape — tail corner and all — with the caption, if any, in the same
+/// bubble underneath. Hairline edge so light photos don't bleed into the
+/// page. Shimmer bones while it downloads; an "Uploading…" spinner before the
+/// upload lands. Tap zooms it from its spot; hold for options.
+private struct ChatImageBubble: View {
+    let url: URL?
+    let caption: String
+    let isFromMe: Bool
+    let shape: UnevenRoundedRectangle
+    let onTap: (URL, CGRect) -> Void
+    let onLongPress: () -> Void
+
+    @State private var aspect: CGFloat?
+    @State private var frame: CGRect = .zero
+
+    private static let maxWidth: CGFloat = 240
+    private static let maxHeight: CGFloat = 300
+    private static let minWidth: CGFloat = 150
+    private static let minHeight: CGFloat = 120
+
+    /// The image's on-screen size: full width, height from the aspect, then
+    /// clamped (very tall images narrow down; very wide ones get a floor).
+    private var imageSize: CGSize {
+        guard let a = aspect ?? cachedAspect, a > 0 else { return CGSize(width: Self.maxWidth, height: Self.maxWidth) }
+        var w = Self.maxWidth
+        var h = w / a
+        if h > Self.maxHeight { h = Self.maxHeight; w = max(Self.minWidth, h * a) }
+        if h < Self.minHeight { h = Self.minHeight }
+        return CGSize(width: w.rounded(), height: h.rounded())
+    }
+
+    private var cachedAspect: CGFloat? {
+        url.flatMap { ChatImageAspects.get(attachmentCacheKey($0)) }
+    }
+
+    var body: some View {
+        let size = imageSize
+        let hasCaption = !caption.isEmpty
+        VStack(alignment: .leading, spacing: 0) {
+            image(size)
+                // The photo's own spot (not the caption) — the viewer grows from it.
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
+            if hasCaption {
+                Text(caption)
+                    .font(.appCalloutRegular)
+                    .foregroundStyle(Color.vText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .frame(width: size.width, alignment: .leading)
+            }
+        }
+        .background(isFromMe ? Color.vSurface2 : Color.vSurface)
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Color.ink(0.08), lineWidth: 0.5) }
+        .contentShape(shape)
+        .onTapGesture { if let url { onTap(url, frame) } }
+        .onLongPressGesture(minimumDuration: 0.35, perform: onLongPress)
+    }
+
+    @ViewBuilder
+    private func image(_ size: CGSize) -> some View {
+        if let url {
+            // Sized placeholder + overlay, so the fill image can't stretch the bubble.
+            Color.vSkeleton
+                .frame(width: size.width, height: size.height)
+                .overlay {
+                    KFImage.url(url, cacheKey: attachmentCacheKey(url))
+                        .placeholder { Color.vSkeleton.shimmering() }
+                        .onSuccess { result in
+                            let s = result.image.size
+                            guard s.height > 0 else { return }
+                            let a = s.width / s.height
+                            Task { @MainActor in
+                                ChatImageAspects.set(attachmentCacheKey(url), a)
+                                // Snap, never animate: a resize mid-open read
+                                // as the thread jumping around.
+                                guard aspect != a else { return }
+                                var t = Transaction()
+                                t.disablesAnimations = true
+                                withTransaction(t) { aspect = a }
+                            }
+                        }
+                        .downsampled(to: 480)
+                        .resizable()
+                        .scaledToFill()
+                }
+                .clipped()
+        } else {
+            Color.vSkeleton
+                .frame(width: size.width, height: size.height)
+                .shimmering()
+                .overlay {
+                    VStack(spacing: 8) {
+                        ProgressView().tint(Color.vText2)
+                        Text("Uploading…").font(.appCaption).foregroundStyle(Color.vText2)
+                    }
+                }
+        }
+    }
+}
+
+// MARK: - Attach sheet
+
+/// The paperclip's sheet: two big tiles — Photos (your library) and Files
+/// (documents, audio, video). Each opens the system picker; whatever you
+/// pick is staged above the composer for a caption before sending.
+private struct AttachSheet: View {
+    let onPhotos: () -> Void
+    let onFiles: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(icon: .paperclip, title: "Attach", subtitle: "Add a photo or file to your message") { dismiss() }
+
+            HStack(spacing: 12) {
+                tile(icon: .image, title: "Photos", caption: "From your library",
+                     fill: Color.vAccent, glyph: Color.vOnColor, action: onPhotos)
+                tile(icon: .file, title: "Files", caption: "Docs, audio, video",
+                     fill: Color.vInverse, glyph: Color.vOnInverse, action: onFiles)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 20)
+        }
+        .selfSizedDetent()
+        .sheetBackground()
+    }
+
+    private func tile(icon: LucideIcon.Name, title: String, caption: String,
+                      fill: Color, glyph: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 0) {
+                LucideIcon(icon, .lg)
+                    .foregroundStyle(glyph)
+                    .frame(width: 44, height: 44)
+                    .background(fill, in: Circle())
+                Text(title)
+                    .font(.appSubheadlineSemibold)
+                    .foregroundStyle(Color.vText)
+                    .padding(.top, 28)
+                Text(caption)
+                    .font(.appCaption)
+                    .foregroundStyle(Color.vText3)
+                    .padding(.top, 2)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(Color.vControl, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .contentShape(.rect(cornerRadius: Radius.card))
+        }
+        .buttonStyle(CardPress())
+        .accessibilityLabel("\(title), \(caption)")
+    }
+}

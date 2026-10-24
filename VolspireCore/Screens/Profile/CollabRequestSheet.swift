@@ -63,14 +63,14 @@ private extension CollabRequestSheet {
 private extension CollabRequestSheet {
     func sectionLabel(_ title: String) -> some View {
         HStack(spacing: 5) {
-            Text(title).font(.appCaption2Semibold).tracking(0.6).foregroundStyle(.white.opacity(0.45))
-            Text("(optional)").font(.appCaption2).foregroundStyle(.white.opacity(0.25))
+            Text(title).font(.appLabel).foregroundStyle(Color.vText2)
+            Text("(optional)").font(.appCaption).foregroundStyle(Color.vText4)
         }
     }
 
     var messageSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionLabel("YOUR PITCH")
+            sectionLabel("Your pitch")
             TextField(
                 "",
                 text: $viewModel.collabMessage,
@@ -79,29 +79,28 @@ private extension CollabRequestSheet {
                 axis: .vertical
             )
             .font(.appCalloutRegular)
-            .foregroundStyle(.white)
-            .tint(.white)
+            .foregroundStyle(Color.vText)
+            .tint(Color.vText)
             .lineLimit(3 ... 6)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.vBorder))
+            .background(Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         }
     }
 
     var tracksSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                sectionLabel("ATTACH PORTFOLIO TRACKS")
+                sectionLabel("Attach portfolio tracks")
                 Spacer(minLength: 0)
                 Text("\(attachmentsUsed)/\(viewModel.maxCollabAttachments)")
-                    .font(.appMicroMedium).monospacedDigit().foregroundStyle(.white.opacity(0.35))
+                    .font(.appCaption).monospacedDigit().foregroundStyle(Color.vText3)
             }
             Text("Only your public tracks can be attached.")
-                .font(.appCaption2).foregroundStyle(.white.opacity(0.3))
+                .font(.appCaption).foregroundStyle(Color.vText3)
 
             if viewModel.isFetchingMyCollabTracks {
-                ProgressView().tint(.white.opacity(0.5))
+                ProgressView().tint(Color.vText3)
                     .frame(maxWidth: .infinity).padding(.vertical, 18)
             } else if viewModel.myCollabTracks.isEmpty {
                 Text("You have no public tracks to attach.")
@@ -118,15 +117,14 @@ private extension CollabRequestSheet {
 
     var trackSearchField: some View {
         HStack(spacing: 8) {
-            LucideIcon(.search, .sm).foregroundStyle(.white.opacity(0.4))
+            LucideIcon(.search, .sm).foregroundStyle(Color.vText3)
             TextField("", text: $viewModel.collabTrackQuery,
-                      prompt: Text("Search your tracks…").foregroundColor(.white.opacity(0.35)))
-                .font(.appFootnote).foregroundStyle(.white).tint(.white)
+                      prompt: Text("Search your tracks…").foregroundColor(Color.vText3))
+                .font(.appFootnote).foregroundStyle(Color.vText).tint(Color.vText)
                 .autocorrectionDisabled()
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.white.opacity(0.08)))
+        .background(Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 
     func trackRow(_ track: ProfileTrack) -> some View {
@@ -138,19 +136,19 @@ private extension CollabRequestSheet {
             HStack(spacing: 11) {
                 ArtworkView(track.coverURL.map { .webImage($0) } ?? .album, cornerRadius: 8)
                     .frame(width: 38, height: 38)
-                Text(track.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
+                Text(track.title).font(.appFont.trackTitle).foregroundStyle(Color.vTextRow).lineLimit(1)
                 Spacer(minLength: 8)
                 ZStack {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(selected ? Color.white : Color.clear)
+                        .fill(selected ? Color.vInverse : Color.clear)
                         .frame(width: 20, height: 20)
                         .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .strokeBorder(selected ? Color.white : Color.white.opacity(0.25)))
-                    if selected { LucideIcon(.check, .xs).foregroundStyle(.black) }
+                            .strokeBorder(selected ? Color.vInverse : Color.ink(0.25)))
+                    if selected { LucideIcon(.check, .xs).foregroundStyle(Color.vOnInverse) }
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(selected ? Color.white.opacity(0.06) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(selected ? Color.vRowActive : Color.clear, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
             .opacity(capped ? 0.4 : 1)
             .contentShape(.rect)
         }
@@ -165,9 +163,9 @@ private extension CollabRequestSheet {
     var footer: some View {
         HStack(spacing: 10) {
             Button { dismiss() } label: {
-                Text("Cancel").font(.appCallout).foregroundStyle(.white.opacity(0.7))
+                Text("Cancel").font(.appCallout).foregroundStyle(Color.vControlLabel)
                     .frame(maxWidth: .infinity).padding(.vertical, 13)
-                    .background(Color.white.opacity(0.08), in: Capsule())
+                    .background(Color.vControl, in: Capsule())
             }
             .buttonStyle(.plain)
 
@@ -178,18 +176,18 @@ private extension CollabRequestSheet {
             } label: {
                 Group {
                     if viewModel.isSendingCollab {
-                        ProgressView().tint(.black)
+                        ProgressView().tint(Color.vOnColor)
                     } else {
                         HStack(spacing: 7) {
-                            LucideIcon(.handshake, .sm)
+                            LucideIcon(.send, .sm)
                             Text("Send Request").font(.appHeadline)
                         }
-                        .foregroundStyle(.black)
+                        .foregroundStyle(Color.vOnColor)
                     }
                 }
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
-                .background(.white, in: Capsule())
+                .background(Color.vAccent, in: Capsule())
             }
             .buttonStyle(.plain)
             .disabled(!viewModel.canSendCollab || viewModel.isSendingCollab)
@@ -198,18 +196,17 @@ private extension CollabRequestSheet {
         .padding(.horizontal, 18)
         .padding(.top, 12)
         .padding(.bottom, 18)
-        .background(Color.white.opacity(0.04))
-        .overlay(Rectangle().fill(Color.white.opacity(0.08)).frame(height: 0.5), alignment: .top)
+        .overlay(Rectangle().fill(Color.vSurface2).frame(height: 1), alignment: .top)
     }
 
     var successState: some View {
         VStack(spacing: 16) {
             ZStack {
-                Circle().fill(Color.green.opacity(0.12)).frame(width: 60, height: 60)
-                LucideIcon(.check, .xl).foregroundStyle(Color.green)
+                Circle().fill(Color.vSuccessText.opacity(0.12)).frame(width: 60, height: 60)
+                LucideIcon(.check, .xl).foregroundStyle(Color.vSuccessText)
             }
             VStack(spacing: 4) {
-                Text("Request sent!").font(.appTitle3Bold).foregroundStyle(.white)
+                Text("Request sent!").font(.appTitle3Bold).foregroundStyle(Color.vText)
                 Text("Your collab request is in \(displayName)'s inbox.")
                     .font(.appSubheadline).foregroundStyle(Color.vText2).multilineTextAlignment(.center)
             }
@@ -223,10 +220,10 @@ private extension CollabRequestSheet {
                     Text("Open Messages").font(.appSubheadlineSemibold)
                     LucideIcon(.chevronRight, .sm)
                 }
-                .foregroundStyle(.black)
+                .foregroundStyle(Color.vOnInverse)
                 .frame(height: 42)
                 .padding(.horizontal, 24)
-                .background(Color.white, in: Capsule())
+                .background(Color.vInverse, in: Capsule())
             }
             .buttonStyle(.plain)
             .padding(.top, 2)

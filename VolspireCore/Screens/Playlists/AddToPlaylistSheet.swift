@@ -18,6 +18,8 @@ struct AddToPlaylistSheet: View {
     /// The playlist currently being viewed (if any) — shown as already containing
     /// the track, since you got here from inside it.
     var currentPlaylistId: String? = nil
+    /// Pinned dark when presented over the (always-dark) Now Playing.
+    var alwaysDark = false
 
     @Environment(\.dismiss) private var dismiss
     @Environment(LibraryStore.self) private var libraryStore
@@ -34,7 +36,8 @@ struct AddToPlaylistSheet: View {
             SheetHeader(
                 icon: .listMusic,
                 title: "Add to playlist",
-                subtitle: "Save this track to a playlist"
+                subtitle: "Save this track to a playlist",
+                divider: false
             ) { dismiss() }
 
             content
@@ -47,7 +50,7 @@ struct AddToPlaylistSheet: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .presentationDetents([.medium, .large])
-        .sheetBackground()
+        .sheetBackground(alwaysDark: alwaysDark)
         .task {
             // Load the playlists and which ones already contain this track in
             // parallel, so every row's check is accurate on open (matches the web
@@ -65,7 +68,7 @@ struct AddToPlaylistSheet: View {
     @ViewBuilder
     private var content: some View {
         if !loaded {
-            ProgressView().tint(.white.opacity(0.6))
+            ProgressView().tint(Color.vText2)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
@@ -82,10 +85,10 @@ struct AddToPlaylistSheet: View {
                 if libraryStore.playlists.isEmpty {
                     VStack(spacing: 8) {
                         LucideIcon(.listMusic, .hero).foregroundStyle(Color.vText3)
-                        Text("No playlists yet").font(.appCalloutSemibold).foregroundStyle(.white)
+                        Text("No playlists yet").font(.appCalloutSemibold).foregroundStyle(Color.vText)
                         Text("Create one right here to get started.")
                             .font(.appFootnote)
-                            .foregroundStyle(.white.opacity(0.4))
+                            .foregroundStyle(Color.vText3)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 36)
@@ -120,40 +123,42 @@ struct AddToPlaylistSheet: View {
                 ArtworkView(.placeholder(libraryStore.playlistCover(playlist.coverUrl), name: playlist.title), cornerRadius: 9)
                     .frame(width: 48, height: 48)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(playlist.title).font(.appFont.trackTitle).foregroundStyle(.white).lineLimit(1)
+                    Text(playlist.title).font(.appFont.trackTitle).foregroundStyle(Color.vText).lineLimit(1)
                     Text("\(max(0, playlist.trackCount ?? 0)) tracks").font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                if addingId == playlist.playlistId {
-                    ProgressView().tint(.white).controlSize(.small)
-                } else {
-                    LucideIcon(added ? .circleCheck : .plus, .lg)
-                        .foregroundStyle(added ? Color.green : Color.vText3)
-                }
+                AddedCheck(isOn: added)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
             .contentShape(.rect)
         }
         .buttonStyle(MenuRowStyle())
-        .disabled(addingId == playlist.playlistId)
+        // Not disabled while the write runs (that dimmed the row mid-
+        // animation); `toggle` ignores taps until it finishes.
     }
 
     /// Tap a playlist to add the track; tap one it's already in to remove it.
-    /// The store patches the playlist's count in place, so the row reacts live.
+    /// Optimistic: the check animates in on the tap (with a haptic), and rolls
+    /// back if the write fails. The store patches the playlist's count in place.
     private func toggle(_ playlist: ApiPlaylist) async {
         let id = playlist.playlistId
         guard addingId == nil else { return }
         addingId = id
+        defer { addingId = nil }
         if addedIds.contains(id) {
-            if await libraryStore.removeTrack(fromPlaylist: id, trackId: trackId) {
-                addedIds.remove(id)
-            }
-        } else {
-            if await libraryStore.addTrack(toPlaylist: id, trackId: trackId) {
+            addedIds.remove(id)
+            Haptics.selection()
+            if await !libraryStore.removeTrack(fromPlaylist: id, trackId: trackId) {
                 addedIds.insert(id)
             }
+        } else {
+            addedIds.insert(id)
+            Haptics.success()
+            if await !libraryStore.addTrack(toPlaylist: id, trackId: trackId) {
+                addedIds.remove(id)
+                errorText = "Couldn't add to that playlist. Please try again."
+            }
         }
-        addingId = nil
     }
 }

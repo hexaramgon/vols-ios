@@ -8,21 +8,14 @@ import SwiftUI
 import UIKit
 
 public extension Color {
-    /// The app's single dark base background — every full-screen background
-    /// (`Color.vBase` in the app target, `.gradientBackground()` here) should
-    /// point at this one value so they can never drift apart again.
-    static let appBase = Color(white: 0.05)
+    /// Legacy alias of `Color.vBase` (ColorTokens.swift) — the themed page canvas.
+    static let appBase = Color.vBase
 
-    /// The app's single chrome tone (~#121212) — headers, nav bars, the tab
-    /// bar, and collapsing title bars. A hair lighter than `appBase` so chrome
-    /// reads as distinct from the page. Every bar background should point at
-    /// this one value (`Color.vBar` in the app target).
-    static let appBar = Color(white: 0.07)
+    /// Legacy alias of `Color.vBar` (ColorTokens.swift) — the themed chrome tone.
+    static let appBar = Color.vBar
 
-    /// Subtle translucent fill for cards and glassy controls over dark pages —
-    /// the empty-state CTA-card tone. Profile hero cards/buttons and the
-    /// "No … yet" cards share it (`Color.vCard` in the app target).
-    static let appCard = Color.white.opacity(0.04)
+    /// Legacy alias of `Color.vCard` (ColorTokens.swift) — ink @ 0.04 card fill.
+    static let appCard = Color.vCard
 
     static let spectrum: [Color] = [
         Color("AppCoral", bundle: .module),
@@ -44,10 +37,11 @@ public extension Color {
 }
 
 public extension LinearGradient {
-    /// Brand-led blue accent for composer send buttons (chat input + player
-    /// comments) so every "send" reads as one family. White icons stay legible.
+    /// The accent as a `ShapeStyle` for send buttons and "already on" states.
+    /// Now a SOLID #006BFC (`Color.vAccent`) — kept as a one-color gradient so
+    /// every `LinearGradient.sendAccent` call site compiles unchanged.
     static let sendAccent = LinearGradient(
-        colors: [Color.brand, Color(red: 0.16, green: 0.40, blue: 0.86)],
+        colors: [Color.vAccent, Color.vAccent],
         startPoint: .topLeading, endPoint: .bottomTrailing
     )
 }

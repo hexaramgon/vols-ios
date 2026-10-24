@@ -48,10 +48,9 @@ struct CommentComposerBar: View {
 
     // MARK: Timestamp state
 
-    /// True once the playhead has passed the dropped start, so a range can end.
-    private var canStop: Bool {
-        guard let start = model.commentTimestamp, model.commentTimestampEnd == nil else { return false }
-        return (controller.progress?.elapsedTime ?? 0).rounded(.down) > start
+    /// The dropped start a range can still end from (nil once it has an end).
+    private var openRangeStart: Double? {
+        model.commentTimestampEnd == nil ? model.commentTimestamp : nil
     }
 
     private var placeholder: String {
@@ -113,7 +112,7 @@ struct CommentComposerBar: View {
                     } else {
                         // Start dropped → show it, plus Stop (make range) and Clear.
                         timestampChip
-                        if canStop {
+                        PastPlayheadGate(start: openRangeStart) {
                             chipButton(systemImage: "stop.fill", label: "Stop") { stopRange() }
                         }
                         chipButton(systemImage: "xmark", label: "Clear") { clearTimestamp() }
@@ -127,16 +126,12 @@ struct CommentComposerBar: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .transition(.opacity)
-                .animation(.smooth(duration: 0.2), value: canStop)
             }
         }
         .background(
             RoundedRectangle(cornerRadius: expanded ? 22 : 24, style: .continuous)
-                .fill(Color.white.opacity(expanded ? 0.07 : 0.1))
-                .overlay(
-                    RoundedRectangle(cornerRadius: expanded ? 22 : 24, style: .continuous)
-                        .strokeBorder(Color.white.opacity(expanded ? 0.08 : 0))
-                )
+                // The shared input fill (vField → vFieldFocus while open); no ring.
+                .fill(expanded ? Color.vFieldFocus : Color.vField)
         )
         .matchedComposer(composerNamespace)
         // Wider than the rest of the player content so the input reads as its own bar.
@@ -188,6 +183,13 @@ struct CommentComposerBar: View {
         // stays true through the dismissing tap — no race like keyboard notifications.)
         .onChange(of: isFocused) { _, focused in
             model.composerFocused = focused
+            // A new comment is timed by default: starting one drops the stamp
+            // at the current position (Clear removes it). Set plainly — the
+            // focus change rides the keyboard animation, never withAnimation it.
+            if focused, model.commentTimestamp == nil, model.replyingTo == nil,
+               model.commentText.isEmpty {
+                model.commentTimestamp = (controller.progress?.elapsedTime ?? 0).rounded(.down)
+            }
         }
     }
 
@@ -317,5 +319,22 @@ extension View {
         } else {
             self
         }
+    }
+}
+
+/// Shows its content once the playhead has passed `start` (the comment's
+/// dropped timestamp), so a range can end. It reads the live progress itself,
+/// so only this gate — not the whole composer — re-renders per playback tick.
+private struct PastPlayheadGate<Content: View>: View {
+    @Environment(PlayerController.self) private var controller
+    let start: Double?
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        let passed = start.map { (controller.progress?.elapsedTime ?? 0).rounded(.down) > $0 } ?? false
+        Group {
+            if passed { content }
+        }
+        .animation(.smooth(duration: 0.2), value: passed)
     }
 }

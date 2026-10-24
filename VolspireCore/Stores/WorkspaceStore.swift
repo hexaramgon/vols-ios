@@ -106,9 +106,9 @@ final class WorkspaceStore {
     }
 
     private func fetchFolders() async {
-        // Generous limit: the RPC is already scoped to the past month and the
-        // rail groups client-side, so fetch the whole window.
-        async let activity = service.getWorkspaceActivity(limit: 60)
+        // The web's limit (useWorkspaceActivity): the RPC is already scoped to
+        // the past month; the rail and the overview timeline group client-side.
+        async let activity = service.getWorkspaceActivity(limit: 50)
         do {
             folders = try await service.getUserFolders()
             foldersLoaded = true

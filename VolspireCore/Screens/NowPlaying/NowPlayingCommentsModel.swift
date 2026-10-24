@@ -33,6 +33,9 @@ final class NowPlayingCommentsModel {
     /// True while the composer input is focused (keyboard up). The comments panel
     /// reads this so a tap dismisses the keyboard instead of opening a profile.
     var composerFocused = false
+    /// A comment to scroll to and briefly highlight in the panel — set when the
+    /// live comment toast over the cover is tapped.
+    var highlightedCommentId: String?
 
     func isOwn(_ comment: ApiTrackComment) -> Bool {
         // `currentUserId` is an uppercase uuidString; the DB returns lowercase —
@@ -42,7 +45,8 @@ final class NowPlayingCommentsModel {
         return comment.user.userId.caseInsensitiveCompare(uid) == .orderedSame
     }
 
-    private var loadedKey: String?
+    /// The track / file the current `comments` belong to.
+    private(set) var loadedKey: String?
     private let supabaseService = SupabaseService()
 
     var canSend: Bool {

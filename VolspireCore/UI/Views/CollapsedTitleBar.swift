@@ -46,13 +46,13 @@ struct CollapsedTitleBar: View {
         Color.vBar
             .frame(height: ViewConst.safeAreaInsets.top + 44)
             .overlay(alignment: .bottom) {
-                Rectangle().fill(Color.vBorder).frame(height: 0.5)
+                Rectangle().fill(Color.vDivider).frame(height: 0.5)
             }
             .overlay(alignment: .bottom) {
                 VStack(spacing: 1) {
                     Text(title)
                         .font(.appCalloutSemibold)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
                         .lineLimit(1)
                     if let subtitle {
                         Text(subtitle)

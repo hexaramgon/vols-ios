@@ -110,6 +110,8 @@ final class UploadTrackViewModel {
     // Public preview (the streamable master)
     var audioData: Data?
     var audioFileName: String?
+    /// Why the last picked audio file was rejected (shown under the picker).
+    var audioFileError: String?
     var videoData: Data?
     var videoFileName: String?
     /// When a video is attached, upload only its extracted audio (as an audio
@@ -294,6 +296,16 @@ final class UploadTrackViewModel {
         case .success(let url):
             do {
                 guard let data = try SecurityScopedFile.read(url) else { return }
+                // Validate on pick, not just on Publish — a file that can't be
+                // published should bounce before the rest of the form is filled.
+                // createTrackV2 re-runs the check as a backstop.
+                do {
+                    try MediaSniffer.validate(data, fileName: url.lastPathComponent)
+                } catch {
+                    audioFileError = error.localizedDescription
+                    return
+                }
+                audioFileError = nil
                 audioData = data
                 audioFileName = url.lastPathComponent
             } catch {

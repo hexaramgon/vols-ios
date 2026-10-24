@@ -87,10 +87,9 @@ struct CreateListingScreen: View {
 
     private var bottomBar: some View {
         UploadBottomBar(error: viewModel.uploadState.errorMessage, hint: viewModel.validationHint) {
-            // Same gradient CTA as the auth pages.
+            // The shared primary CTA (AuthCTA = PrimaryButton).
             AuthCTA(
                 title: viewModel.isEditing ? "Save Changes" : "Post Listing",
-                loadingTitle: viewModel.isEditing ? "Saving…" : "Posting…",
                 isLoading: isPosting,
                 isDisabled: !viewModel.canPost
             ) {
@@ -132,7 +131,7 @@ struct CreateListingScreen: View {
                     prompt: Text("e.g. Producer looking for a soul vocalist").foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
                 .submitLabel(.done)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 13)
@@ -159,7 +158,7 @@ struct CreateListingScreen: View {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Audio (Optional)")
 
-            Text("Attach a reference clip, demo, or the beat — each entry needs a title and an audio file.")
+            Text("Attach a reference clip, demo or the beat. Each entry needs a title and an audio file.")
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText2)
 

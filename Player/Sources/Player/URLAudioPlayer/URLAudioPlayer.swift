@@ -216,6 +216,18 @@ final class URLAudioPlayer {
         task.resume()
     }
 
+    /// Drops read-ahead (in-flight or finished) for every URL not in `keep`.
+    func retainPrefetch(_ keep: Set<URL>) {
+        for (url, task) in prefetchTasks where !keep.contains(url) {
+            task.cancel()
+            prefetchTasks[url] = nil
+        }
+        for (url, file) in prefetchedFiles where !keep.contains(url) {
+            try? FileManager.default.removeItem(at: file)
+            prefetchedFiles[url] = nil
+        }
+    }
+
     func resume() {
         shouldPlayWhenReady = true
         // Still loading — playback will start automatically once it's ready.

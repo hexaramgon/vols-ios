@@ -14,22 +14,6 @@ import SwiftUI
 
 // MARK: - Tokens (web neutral scale on the vBase background)
 
-enum UploadTheme {
-    /// Input / card fill — web `bg-neutral-950`, lifted a touch so it reads on vBase.
-    static let fieldFill = Color(white: 0.07)
-    /// Input borders — web `border-neutral-800`.
-    static let border = Color.white.opacity(0.13)
-    /// Empty drop zones / cover placeholder — web dashed `border-neutral-800/80`.
-    static let dashed = StrokeStyle(lineWidth: 1, dash: [5, 4])
-    /// Selected control — web `bg-white/8` + `border-white/20`.
-    static let selectedFill = Color.white.opacity(0.08)
-    static let selectedBorder = Color.white.opacity(0.22)
-    /// Error text — the shared `Color.vError` token (web `text-red-400`).
-    static let errorText = Color.vError
-    /// Warning text — the shared `Color.vWarning` token (web `text-amber-500/80`).
-    static let warningText = Color.vWarning.opacity(0.85)
-}
-
 // MARK: - Flow header
 
 /// The upload-flow header — the shared `SheetHeader` (icon tile + title + subtitle
@@ -74,7 +58,7 @@ struct UploadBottomBar<CTA: View>: View {
     var body: some View {
         VStack(spacing: 10) {
             if let error {
-                statusRow(error, color: UploadTheme.errorText)
+                statusRow(error, color: Color.vError)
                     .transition(.opacity)
             } else if let hint {
                 statusRow(hint, color: Color.vText3)
@@ -129,7 +113,7 @@ struct UploadSectionDivider: View {
         // micro-label + hairline).
         Text(label)
             .font(.appCalloutSemibold)
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.vText)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -151,19 +135,15 @@ struct UploadFieldLabel: View {
     }
 }
 
-// MARK: - Input shell (dark fill + hairline border, rounded-xl)
+// MARK: - Input shell (borderless field fill)
 
 extension View {
-    /// Matches the workspace / playlist sheet input fields: a soft translucent
-    /// fill, continuous corners, and no hard border (`vBorder` is clear).
-    func uploadFieldShell(cornerRadius: CGFloat = 16) -> some View {
-        // Same card as the auth field groups: white 5% fill, continuous 16pt.
-        self
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.vBorder)
-            )
+    /// The borderless field: `vField` fill, continuous r12 corners, no ring
+    /// (the web revamp's input principle). `invalid` swaps in the soft red
+    /// tint (never a red ring).
+    func uploadFieldShell(cornerRadius: CGFloat = Radius.card, invalid: Bool = false) -> some View {
+        background(invalid ? Color.vDangerSoft : Color.vField,
+                   in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
@@ -223,7 +203,7 @@ struct UploadTitleGenreColumn: View {
                 prompt: Text("Track title").foregroundStyle(Color.vText3)
             )
             .font(.appBody)
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.vText)
             .submitLabel(.done)
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
@@ -234,7 +214,7 @@ struct UploadTitleGenreColumn: View {
                 HStack {
                     Text(genre.isEmpty ? "Genre" : genre)
                         .font(.appBody)
-                        .foregroundStyle(genre.isEmpty ? Color.vText3 : .white)
+                        .foregroundStyle(genre.isEmpty ? Color.vText3 : Color.vText)
                     Spacer()
                     LucideIcon(.chevronDown, .sm)
                         .foregroundStyle(Color.vText3)
@@ -266,7 +246,7 @@ struct UploadDescriptionField: View {
                 axis: .vertical
             )
             .font(.appBody)
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.vText)
             .lineLimit(lines)
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
@@ -316,8 +296,8 @@ struct UploadInlineAddButton: View {
     }
 }
 
-/// The dashed full-width "add another" button (package tiers, process steps,
-/// audio clip rows).
+/// The full-width "add another" button (package tiers, process steps, audio
+/// clip rows) — a `vControl` capsule (no dashed outline).
 struct UploadDashedAddButton: View {
     let label: String
     let action: () -> Void
@@ -334,14 +314,11 @@ struct UploadDashedAddButton: View {
                 Text(label)
                     .font(.appCallout)
             }
-            .foregroundStyle(Color.vText3)
+            .foregroundStyle(Color.vControlLabel)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
-            )
-            .contentShape(.rect)
+            .padding(.vertical, 13)
+            .background(Color.vControl, in: Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -379,7 +356,7 @@ struct UploadEditableList: View {
                         prompt: Text(placeholder).foregroundStyle(Color.vText3)
                     )
                     .font(.appBody)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .padding(.horizontal, 12)
                     .padding(.vertical, compact ? 9 : 11)
                     .uploadFieldShell()
@@ -426,7 +403,7 @@ struct UploadTwoFieldRow: View {
                     prompt: Text(titlePlaceholder).foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .uploadFieldShell()
@@ -438,7 +415,7 @@ struct UploadTwoFieldRow: View {
                     axis: .vertical
                 )
                 .font(.appFootnote)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
                 .lineLimit(2...4)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
@@ -475,9 +452,9 @@ struct UploadCoverBox: View {
                     .resizable()
                     .scaledToFill()
             } else if let existingURL {
-                ArtworkView(.webImage(existingURL), cornerRadius: 16)
+                ArtworkView(.webImage(existingURL), cornerRadius: Radius.panel)
             } else {
-                UploadTheme.fieldFill
+                Color.vField
                 VStack(spacing: 6) {
                     LucideIcon(.image, .lg)
                         .foregroundStyle(Color.vText3)
@@ -488,16 +465,7 @@ struct UploadCoverBox: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-        .overlay {
-            if image == nil, existingURL == nil {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(UploadTheme.border, style: UploadTheme.dashed)
-            } else {
-                RoundedRectangle(cornerRadius: 16)
-                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 1)
-            }
-        }
+        .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
     }
 }
 
@@ -552,7 +520,7 @@ struct CoverDraft {
     }
 }
 
-// MARK: - Switch (web Toggle: white track + black knob when on)
+// MARK: - Switch (web Toggle: ink track + paper knob when on)
 
 /// Visual only — wrap it in a tappable row so the whole row is the target.
 struct UploadSwitch: View {
@@ -560,11 +528,11 @@ struct UploadSwitch: View {
 
     var body: some View {
         Capsule()
-            .fill(isOn ? Color.white : Color.white.opacity(0.22))
+            .fill(isOn ? Color.vInverse : Color.ink(0.22))
             .frame(width: 44, height: 24)
             .overlay {
                 Circle()
-                    .fill(isOn ? Color.black : Color(white: 0.83))
+                    .fill(isOn ? Color.vOnInverse : Color.dynamic(light: .white, dark: UIColor(white: 0.83, alpha: 1)))
                     .frame(width: 16, height: 16)
                     .offset(x: isOn ? 10 : -10)
             }
@@ -622,16 +590,13 @@ struct UploadTypeTile: View {
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
             }
-            .foregroundStyle(selected ? .white : Color.vText3)
+            .foregroundStyle(selected ? Color.vOnInverse : Color.vText2)
             .frame(maxWidth: .infinity, minHeight: 78)
             .padding(.vertical, 6)
+            // Selected = ink tile, unselected = control fill (web white vs white/8).
             .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(selected ? Color.white.opacity(0.1) : .clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(selected ? Color.white.opacity(0.3) : UploadTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(selected ? Color.vInverse : Color.vControl)
             )
             .contentShape(.rect)
         }
@@ -672,8 +637,8 @@ struct UploadGradientPicker: View {
                             .frame(width: 40, height: 40)
                             .overlay(
                                 Circle().strokeBorder(
-                                    value == option.id ? Color.white : UploadTheme.border,
-                                    lineWidth: value == option.id ? 2 : 1
+                                    value == option.id ? Color.vText : Color.clear,
+                                    lineWidth: 2
                                 )
                             )
                             .padding(2)
@@ -711,10 +676,8 @@ struct UploadIconBox: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.white.opacity(0.06))
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.vBorder, lineWidth: 1)
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(Color.vControl)
             LucideIcon(icon, .md)
                 .foregroundStyle(Color.vText2)
         }
@@ -722,8 +685,9 @@ struct UploadIconBox: View {
     }
 }
 
-/// The dashed "tap to choose" target — the ONE attach look, shared by the
-/// track upload's drop zones and the listing's clip rows.
+/// The "tap to choose" target — the ONE attach look, shared by the track
+/// upload's drop zones and the listing's clip rows. Field fill, no dashed
+/// outline; a missing required file tints it soft red.
 struct UploadDropZone: View {
     let icon: LucideIcon.Name
     let title: String
@@ -737,7 +701,7 @@ struct UploadDropZone: View {
             VStack(spacing: 4) {
                 Text(title)
                     .font(.appCallout)
-                    .foregroundStyle(error ? UploadTheme.errorText : Color.vText2)
+                    .foregroundStyle(error ? Color.vError : Color.vText2)
                 Text(hint)
                     .font(.appFootnote)
                     .foregroundStyle(Color.vText3)
@@ -746,15 +710,8 @@ struct UploadDropZone: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 36)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white.opacity(0.02))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(
-                    error ? UploadTheme.errorText.opacity(0.4) : UploadTheme.border,
-                    style: UploadTheme.dashed
-                )
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(error ? Color.vDangerSoft : Color.vField)
         )
         .contentShape(.rect)
     }
@@ -774,7 +731,7 @@ struct UploadAttachedFileCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(name ?? "File")
                     .font(.appBodyMedium)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(UploadClipRows.formatBytes(bytes))
@@ -793,7 +750,7 @@ struct UploadAttachedFileCard: View {
             .buttonStyle(.plain)
         }
         .padding(12)
-        .uploadFieldShell(cornerRadius: 16)
+        .uploadFieldShell()
     }
 }
 
@@ -831,10 +788,11 @@ struct UploadClipRows: View {
                     prompt: Text(titlePlaceholder).foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
-                .uploadFieldShell()
+                // A file without a title is invalid → soft red fill.
+                .uploadFieldShell(invalid: row.hasFile && !row.hasTitle)
 
                 Button {
                     clips.removeAll { $0.id == row.id }
@@ -876,12 +834,8 @@ struct UploadClipRows: View {
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white.opacity(0.03))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(Color.vBorder, lineWidth: 1)
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(Color.vCard)
         )
     }
 
@@ -902,14 +856,14 @@ struct UploadSuccessOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.6).ignoresSafeArea()
+            Color.vScrim.ignoresSafeArea()
             VStack(spacing: 14) {
                 LucideIcon(.circleCheck, .hero)
-                    .foregroundStyle(Color.brand)
+                    .foregroundStyle(Color.vSuccessText)
                 VStack(spacing: 3) {
                     Text(title)
                         .font(.appHeadline)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
                     if let subtitle {
                         Text(subtitle)
                             .font(.appFootnote)
@@ -922,7 +876,7 @@ struct UploadSuccessOverlay: View {
             .padding(.horizontal, 32)
             .padding(.vertical, 28)
             .frame(maxWidth: 300)
-            .background(Color.vBar, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
         }
     }
 }
@@ -958,13 +912,13 @@ struct UploadTagInput: View {
                                 HStack(spacing: 6) {
                                     Text("#\(tag)")
                                         .font(.appFootnote)
-                                        .foregroundStyle(.white)
+                                        .foregroundStyle(Color.vText)
                                     LucideIcon(.x, .xs)
                                         .foregroundStyle(Color.vText3)
                                 }
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 7)
-                                .background(Capsule().fill(Color.white.opacity(0.1)))
+                                .background(Capsule().fill(Color.vControl))
                                 .contentShape(.rect)
                             }
                             .buttonStyle(.plain)
@@ -978,7 +932,7 @@ struct UploadTagInput: View {
                     prompt: Text("Add your own custom tags…").foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .submitLabel(.done)
@@ -1016,7 +970,7 @@ struct UploadTagInput: View {
                                     .foregroundStyle(Color.vText3)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 7)
-                                    .background(Capsule().fill(Color.white.opacity(0.05)))
+                                    .background(Capsule().fill(Color.vCard))
                                     .contentShape(.rect)
                             }
                             .buttonStyle(.plain)
@@ -1060,7 +1014,7 @@ struct GenrePickerSheet: View {
                     prompt: Text("Search genres…").foregroundStyle(Color.vText3)
                 )
                 .font(.appBody)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
                 .autocorrectionDisabled()
             }
             .padding(.horizontal, 14)
@@ -1084,8 +1038,7 @@ struct GenrePickerSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-        .presentationBackground(Color(white: 0.08))
-        .presentationDragIndicator(.visible)
+        .sheetBackground()
     }
 
     private func genreRow(_ label: String, value: String) -> some View {
@@ -1096,11 +1049,11 @@ struct GenrePickerSheet: View {
             HStack {
                 Text(label)
                     .font(.appBody)
-                    .foregroundStyle(genre == value ? .white : Color.vText2)
+                    .foregroundStyle(genre == value ? Color.vText : Color.vText2)
                 Spacer()
                 if genre == value {
                     LucideIcon(.check, .sm)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.vText)
                 }
             }
             .padding(.vertical, 13)
@@ -1110,7 +1063,7 @@ struct GenrePickerSheet: View {
     }
 }
 
-// MARK: - Select pill (web visibility buttons: bordered, white/8 when active)
+// MARK: - Select pill (web visibility buttons: ink when active, control fill when not)
 
 struct UploadPill: View {
     let label: String
@@ -1144,17 +1097,13 @@ struct UploadPill: View {
                     .font(.appCallout)
                     .lineLimit(1)
             }
-            .foregroundStyle(selected ? .white : Color.vText3)
+            .foregroundStyle(selected ? Color.vOnInverse : Color.vControlLabel)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(maxWidth: expands ? .infinity : nil)
             .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(selected ? UploadTheme.selectedFill : .clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(selected ? UploadTheme.selectedBorder : UploadTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .fill(selected ? Color.vInverse : Color.vControl)
             )
             .contentShape(.rect)
         }
@@ -1233,8 +1182,8 @@ struct UploadPreviewPlayer: View {
         Group {
             if isVideo {
                 ZStack(alignment: .bottom) {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(UploadTheme.fieldFill)
+                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                        .fill(Color.vShade)
 
                     if let player {
                         PlayerVideoView(player: player, gravity: .resizeAspect)
@@ -1242,7 +1191,7 @@ struct UploadPreviewPlayer: View {
                             .onTapGesture { toggle() }
                     } else {
                         ProgressView()
-                            .tint(.white.opacity(0.6))
+                            .tint(Color.vText2)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
 
@@ -1264,20 +1213,14 @@ struct UploadPreviewPlayer: View {
                 // the transport row keeps the card's full width.
                 .frame(height: videoCardHeight)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { cardWidth = $0 })
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(UploadTheme.border, lineWidth: 1)
-                )
+                .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                // Video chrome sits over the picture → keep it dark.
+                .alwaysDark()
                 .animation(.smooth(duration: 0.25), value: videoAspect)
             } else {
                 transportRow
                     .padding(12)
-                    .background(UploadTheme.fieldFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(UploadTheme.border, lineWidth: 1)
-                    )
+                    .background(Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
             }
         }
         .onAppear(perform: setup)
@@ -1290,10 +1233,10 @@ struct UploadPreviewPlayer: View {
             Button { toggle() } label: {
                 ZStack {
                     Circle()
-                        .fill(.white)
+                        .fill(Color.vInverse)
                         .frame(width: 34, height: 34)
                     LucideIcon(isPlaying ? .pauseFill : .playFill, .sm)
-                        .foregroundStyle(.black)
+                        .foregroundStyle(Color.vOnInverse)
                         .offset(x: isPlaying ? 0 : 1) // optical centre for the triangle
                         .contentTransition(.identity)
                         .animation(nil, value: isPlaying)
@@ -1321,7 +1264,7 @@ struct UploadPreviewPlayer: View {
 
             Text("\(format(current)) / \(format(duration))")
                 .font(.appCaption2)
-                .foregroundStyle(isVideo ? Color.white.opacity(0.85) : Color.vText3)
+                .foregroundStyle(isVideo ? Color.vText2 : Color.vText3)
                 .monospacedDigit()
         }
     }

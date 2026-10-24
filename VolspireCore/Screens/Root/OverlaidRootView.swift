@@ -19,7 +19,8 @@ struct OverlaidRootView: View {
     /// Full-resolution image for the attachment preview's pinch-zoom viewer —
     /// fetched when the preview opens, cleared when it closes.
     @State private var attachmentImage: UIImage?
-    @Environment(\.colorScheme) private var colorScheme
+    /// The viewer's Save button: nil idle, true saved (✓), false failed (!).
+    @State private var attachmentSaved: Bool?
     @Environment(PlayerController.self) var playerController
 
     private struct UploadConfirmation: Equatable {
@@ -75,7 +76,6 @@ struct OverlaidRootView: View {
                 ZStack {
                     if showMiniPlayer {
                         ExpandableNowPlaying(
-                            show: .constant(true),
                             expanded: $expandSheet,
                             collapsedFrame: collapsedFrame
                         )
@@ -91,7 +91,6 @@ struct OverlaidRootView: View {
                         // animation so it can't merge and overshoot.
                         .animation(.smooth(duration: 0.35), value: isConversationActive)
                         .animation(.easeInOut(duration: 0.25), value: conversationState.composerActive)
-                        .toolbarColorScheme(colorScheme, for: .navigationBar)
                         // Slide up + fade in when a track starts (reverse on clear)
                         // instead of popping in/out.
                         .transition(.offset(y: 70).combined(with: .opacity))
@@ -105,6 +104,8 @@ struct OverlaidRootView: View {
             // Above the mini-player + tab bar so the avatar zoom covers everything.
             .overlay { avatarPreviewOverlay }
             .overlay { uploadConfirmationOverlay }
+            // First-visit section explainers (IntroModal.swift), over everything.
+            .overlay { IntroModalHost() }
             .environment(conversationState)
             .environment(avatarPreview)
             .onReceive(NotificationCenter.default.publisher(for: .ownContentPosted)) { note in
@@ -231,75 +232,144 @@ private extension OverlaidRootView {
         .onTapGesture { avatarPreview.dismiss() }
     }
 
-    /// Message image attachments: a centred full-screen viewer that fades in.
-    /// Once the full image is in it's UIScrollView-backed — pinch or double-tap
-    /// to zoom, pan while zoomed — and a single tap anywhere dismisses. The
-    /// bubble's already-decoded thumbnail shows on frame 0 while the full image
-    /// loads, so the black backdrop never out-races the picture.
+    /// Message photos, Photos-app style: always on black (light mode too),
+    /// with floating glass Close / Share. The photo grows out of its bubble
+    /// (rounded corners easing square) to fit the screen, then hands over to
+    /// the pinch / double-tap zoom viewer; tap or swipe down to dismiss, and it
+    /// shrinks back into the bubble. The bubble's decoded thumbnail stands in
+    /// until the full image lands, so the hero never starts empty.
     private func imageAttachmentPreview(_ url: URL) -> some View {
         let thumbKey = attachmentCacheKey(url)
-        let px = 220 * UIScreen.main.scale
-        let cached = ImageCache.default.retrieveImageInMemoryCache(
-            forKey: thumbKey,
-            options: [.processor(DownsamplingImageProcessor(size: CGSize(width: px, height: px)))]
-        ) ?? ImageCache.default.retrieveImageInMemoryCache(forKey: thumbKey)
+        let thumb = Self.cachedThumbnail(forKey: thumbKey)
+        let shown = attachmentImage ?? thumb
+        let screen = UIScreen.size
+        let fitted = Self.fittedRect(for: shown?.size, in: screen, fallback: avatarPreview.sourceFrame.size)
+        let dragFade = min(abs(avatarPreview.dragY) / 420, 0.7)
 
-        return VStack(spacing: 0) {
-            attachmentHeader
+        return ZStack {
+            Color.black
+                .opacity(avatarPreview.zoomed ? 1 - dragFade : 0)
+                .ignoresSafeArea()
 
-            // The image fits in the space UNDER the header — the zoom viewer
-            // aspect-fits within these bounds, so nothing sits behind the bar.
-            // The viewer area starts below the header, so plain centring within
-            // it sits the photo headerHeight/2 BELOW the screen's centre — and
-            // against the near-black chrome that reads as "not centred". Bias
-            // the image up by half the header so its centre lands on the
-            // screen's centre (clamped: tall photos still never go under the bar).
-            let headerHeight = ViewConst.safeAreaInsets.top + 44
-            ZStack {
-                Color.black
-                if let attachmentImage {
-                    ZoomableAttachmentViewer(image: attachmentImage, verticalBias: headerHeight / 2) {
-                        avatarPreview.dismiss()
+            if avatarPreview.settled, let shown {
+                ZoomableAttachmentViewer(
+                    image: shown,
+                    onSingleTap: { avatarPreview.dismiss() },
+                    onDrag: { avatarPreview.dragY = $0 },
+                    onDragEnd: { dy, velocity in
+                        if abs(dy) > 110 || abs(velocity) > 900 {
+                            avatarPreview.dismiss()
+                        } else {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { avatarPreview.dragY = 0 }
+                        }
                     }
-                } else if let cached {
-                    // Thumbnail stand-in until the full image lands — same
-                    // aspect-fit placement as the zoom viewer's rest state.
-                    Image(uiImage: cached).resizable().scaledToFit()
-                        .offset(y: -headerHeight / 2)
-                }
+                )
+                // Rebuild when the full image replaces the thumbnail.
+                .id(ObjectIdentifier(shown))
+                .offset(y: avatarPreview.dragY)
+                .ignoresSafeArea()
+            } else {
+                attachmentHero(shown, fitted: fitted)
             }
-            .contentShape(Rectangle())
-            .onTapGesture { avatarPreview.dismiss() }
+
+            attachmentControls(shown)
+                .opacity(avatarPreview.settled && avatarPreview.dragY == 0 ? 1 : 0)
+                .animation(.easeOut(duration: 0.18), value: avatarPreview.settled)
+                .animation(.easeOut(duration: 0.18), value: avatarPreview.dragY == 0)
         }
-        .opacity(avatarPreview.zoomed ? 1 : 0)
-        .ignoresSafeArea()
+        // Immersive: the status bar would be dark-on-black in light mode.
+        .statusBarHidden(avatarPreview.zoomed)
         .task(id: url) { attachmentImage = await loadAttachmentImage(url, cacheKey: thumbKey) }
-        .onDisappear { attachmentImage = nil }
+        .onDisappear { attachmentImage = nil; attachmentSaved = nil }
     }
 
-    /// Chrome bar over the attachment viewer — the app's bar tone, a centred
-    /// title, and an "X" close on the right (cropper-style button).
-    private var attachmentHeader: some View {
-        ZStack {
-            Text("Photo Attachment")
-                .font(.appCalloutSemibold)
-                .foregroundStyle(.white)
-
-            HStack {
-                Spacer(minLength: 0)
-                Button { avatarPreview.dismiss() } label: {
-                    LucideIcon(.x, .xxl)
-                        .foregroundStyle(.white.opacity(0.7))
-                        .frame(width: 44, height: 44)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, 8)
+    /// The animating copy: at the bubble's frame (rounded like the bubble)
+    /// when closed, the screen-fitted rect (square corners) when open — plus
+    /// the live drag, so a swipe-dismiss shrinks home from where you let go.
+    private func attachmentHero(_ image: UIImage?, fitted: CGRect) -> some View {
+        let f = avatarPreview.sourceFrame
+        let open = avatarPreview.zoomed
+        let rect = open ? fitted.offsetBy(dx: 0, dy: avatarPreview.dragY) : f
+        return Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                Color.vSkeleton
             }
         }
-        .frame(height: 44)
-        .padding(.top, ViewConst.safeAreaInsets.top)
-        .background(Color.vBar)
+        .frame(width: rect.width, height: rect.height)
+        .clipShape(RoundedRectangle(cornerRadius: open ? 0 : 18, style: .continuous))
+        .position(x: rect.midX, y: rect.midY)
+        .ignoresSafeArea()
+        .contentShape(Rectangle())
+        .onTapGesture { avatarPreview.dismiss() }
+    }
+
+    /// Floating glass Close (top-left), Save + Share (top-right), always
+    /// light-on-dark. Save appears once the full-quality image is in.
+    private func attachmentControls(_ image: UIImage?) -> some View {
+        VStack {
+            HStack(spacing: 10) {
+                glassButton(.x, label: "Close") { avatarPreview.dismiss() }
+                Spacer(minLength: 0)
+                if let full = attachmentImage {
+                    glassButton(
+                        attachmentSaved == true ? .check : (attachmentSaved == false ? .triangleAlert : .download),
+                        label: attachmentSaved == true ? "Saved to Photos" : "Save to Photos"
+                    ) {
+                        guard attachmentSaved != true else { return }
+                        Task {
+                            let ok = await AttachmentDownloads.saveToPhotos(full)
+                            if ok { Haptics.success() }
+                            withAnimation(.smooth(duration: 0.2)) { attachmentSaved = ok }
+                        }
+                    }
+                }
+                if let image {
+                    glassButton(.share2, label: "Share") { UIApplication.presentActivitySheet([image]) }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, ViewConst.safeAreaInsets.top + 4)
+            Spacer(minLength: 0)
+        }
+        .ignoresSafeArea()
+        .environment(\.colorScheme, .dark)
+    }
+
+    private func glassButton(_ icon: LucideIcon.Name, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            LucideIcon(icon, .lg)
+                .foregroundStyle(.white)
+                .frame(width: 40, height: 40)
+                .background(.ultraThinMaterial, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// The bubble's already-decoded thumbnail (its downsample size, then any
+    /// size) so the hero has pixels on frame 0.
+    private static func cachedThumbnail(forKey key: String) -> UIImage? {
+        for side in [480.0, 220.0] {
+            let px = side * UIScreen.displayScale
+            if let img = ImageCache.default.retrieveImageInMemoryCache(
+                forKey: key,
+                options: [.processor(DownsamplingImageProcessor(size: CGSize(width: px, height: px)))]
+            ) { return img }
+        }
+        return ImageCache.default.retrieveImageInMemoryCache(forKey: key)
+    }
+
+    /// Aspect-fit rect for an image of `size` centred on the screen — matches
+    /// the zoom viewer's rest position, so the hand-over doesn't jump.
+    private static func fittedRect(for size: CGSize?, in screen: CGSize, fallback: CGSize) -> CGRect {
+        let s = (size?.width ?? 0) > 0 && (size?.height ?? 0) > 0 ? size! : fallback
+        guard s.width > 0, s.height > 0 else { return CGRect(origin: .zero, size: screen) }
+        let k = min(screen.width / s.width, screen.height / s.height)
+        let w = s.width * k, h = s.height * k
+        return CGRect(x: (screen.width - w) / 2, y: (screen.height - h) / 2, width: w, height: h)
     }
 
     /// Fetches the full-resolution attachment through Kingfisher — same
@@ -332,11 +402,12 @@ private final class ZoomScrollView: UIScrollView {
 /// (same reasoning as the cropper: more reliable than SwiftUI gestures).
 private struct ZoomableAttachmentViewer: UIViewRepresentable {
     let image: UIImage
-    /// Shifts the at-rest image up so it centres on the SCREEN rather than in
-    /// this view's own (below-the-header) bounds. Clamped in `centerImage`.
-    var verticalBias: CGFloat = 0
     /// Called on a plain tap (dismiss) — double-taps zoom instead.
     let onSingleTap: () -> Void
+    /// Swipe-down-to-dismiss (only at rest zoom): live vertical offset, then
+    /// the release (offset, vertical velocity).
+    var onDrag: (CGFloat) -> Void = { _ in }
+    var onDragEnd: (CGFloat, CGFloat) -> Void = { _, _ in }
 
     func makeUIView(context: Context) -> ZoomScrollView {
         let scrollView = ZoomScrollView()
@@ -353,7 +424,8 @@ private struct ZoomableAttachmentViewer: UIViewRepresentable {
         scrollView.addSubview(imageView)
         context.coordinator.imageView = imageView
         context.coordinator.onSingleTap = onSingleTap
-        context.coordinator.verticalBias = verticalBias
+        context.coordinator.onDrag = onDrag
+        context.coordinator.onDragEnd = onDragEnd
 
         let doubleTap = UITapGestureRecognizer(
             target: context.coordinator, action: #selector(Coordinator.handleDoubleTap(_:))
@@ -365,6 +437,11 @@ private struct ZoomableAttachmentViewer: UIViewRepresentable {
         )
         singleTap.require(toFail: doubleTap)
         scrollView.addGestureRecognizer(singleTap)
+        let pan = UIPanGestureRecognizer(
+            target: context.coordinator, action: #selector(Coordinator.handlePan(_:))
+        )
+        pan.delegate = context.coordinator
+        scrollView.addGestureRecognizer(pan)
 
         scrollView.onLayout = { [weak scrollView] in
             guard let scrollView else { return }
@@ -379,10 +456,11 @@ private struct ZoomableAttachmentViewer: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    final class Coordinator: NSObject, UIScrollViewDelegate {
+    final class Coordinator: NSObject, UIScrollViewDelegate, UIGestureRecognizerDelegate {
         weak var imageView: UIImageView?
         var onSingleTap: () -> Void = {}
-        var verticalBias: CGFloat = 0
+        var onDrag: (CGFloat) -> Void = { _ in }
+        var onDragEnd: (CGFloat, CGFloat) -> Void = { _, _ in }
         /// Bounds the zoom scales were computed for — recomputed if they change.
         private var fittedBounds: CGSize = .zero
 
@@ -416,21 +494,38 @@ private struct ZoomableAttachmentViewer: UIViewRepresentable {
         /// Keeps the image centred while it's smaller than the viewport — by
         /// moving the image view's frame (the PhotoScroller pattern), which is
         /// deterministic; inset-based centring drifts because the rest offset
-        /// doesn't track late-set insets. `verticalBias` lifts the rest position
-        /// so the image centres on the screen, not this below-the-header box —
-        /// clamped to 0 so it can never poke out of the top.
+        /// doesn't track late-set insets.
         private func centerImage(_ scrollView: UIScrollView) {
             guard let imageView else { return }
             let box = scrollView.bounds.size
             var frame = imageView.frame
             frame.origin.x = frame.width < box.width ? (box.width - frame.width) / 2 : 0
-            frame.origin.y = frame.height < box.height
-                ? max(0, (box.height - frame.height) / 2 - verticalBias)
-                : 0
+            frame.origin.y = frame.height < box.height ? (box.height - frame.height) / 2 : 0
             imageView.frame = frame
         }
 
         @objc func handleSingleTap() { onSingleTap() }
+
+        /// Swipe-to-dismiss: only at rest zoom and only for a mostly vertical pull.
+        func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+            guard let pan = gesture as? UIPanGestureRecognizer,
+                  let scrollView = pan.view as? UIScrollView else { return true }
+            guard scrollView.zoomScale <= scrollView.minimumZoomScale * 1.01 else { return false }
+            let v = pan.velocity(in: scrollView)
+            return abs(v.y) > abs(v.x)
+        }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
+        @objc func handlePan(_ pan: UIPanGestureRecognizer) {
+            let dy = pan.translation(in: pan.view).y
+            switch pan.state {
+            case .changed: onDrag(dy)
+            case .ended, .cancelled: onDragEnd(dy, pan.velocity(in: pan.view).y)
+            default: break
+            }
+        }
 
         @objc func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
             guard let scrollView = gesture.view as? UIScrollView, let imageView else { return }
@@ -453,6 +548,10 @@ private struct ZoomableAttachmentViewer: UIViewRepresentable {
 
 extension Notification.Name {
     static let navigateToProfile = Notification.Name("navigateToProfile")
+    /// Opens a New post create flow; `object` is its id (RootTabView).
+    static let openNewPost = Notification.Name("openNewPost")
+    /// The signed-in user saved Edit Profile — own-profile screens refetch.
+    static let ownProfileUpdated = Notification.Name("ownProfileUpdated")
     /// Posted after the signed-in user publishes content (track upload, collab
     /// listing). Two listeners: the kept-alive own-profile tab refreshes in
     /// place (so the new post shows without a relaunch), and OverlaidRootView

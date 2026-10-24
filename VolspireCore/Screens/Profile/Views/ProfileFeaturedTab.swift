@@ -13,12 +13,10 @@ struct ProfileFeaturedTab: View {
     let viewModel: ProfileScreenViewModel
 
     var body: some View {
-        if viewModel.creditedTracks.isEmpty {
-            ProfileEmptyState(
-                icon: .sparkles,
-                title: "Nothing featured yet",
-                subtitle: "Tracks by other artists that credit this profile show up here."
-            )
+        if viewModel.creditedTracks.isEmpty && !viewModel.creditedLoaded {
+            SkeletonRows(count: 5, thumb: .rounded(size: 40), line2: nil)
+        } else if viewModel.creditedTracks.isEmpty {
+            ProfileEmptyState(icon: .users, title: "Not featured yet")
         } else {
             list
         }
@@ -26,7 +24,7 @@ struct ProfileFeaturedTab: View {
 
     private var list: some View {
         LazyVStack(spacing: 4) {
-            ForEach(viewModel.creditedTracks) { track in
+            ForEach(Array(viewModel.creditedTracks.enumerated()), id: \.element.id) { i, track in
                 ProfileMediaRow(
                     viewModel: viewModel,
                     id: track.id,
@@ -43,6 +41,7 @@ struct ProfileFeaturedTab: View {
                 }
                 .opacity(track.isUnavailable ? 0.55 : 1)
                 .onTapGesture { if !track.isUnavailable { viewModel.playCredited(track) } }
+                .staggeredAppear(i, in: "profile.featured-\(ObjectIdentifier(viewModel).hashValue)")
             }
         }
         .padding(.horizontal, 8)
@@ -57,8 +56,8 @@ struct ProfileFeaturedTab: View {
             .foregroundStyle(dimmed ? Color.vText3 : Color.vText2)
             .lineLimit(1)
             .fixedSize()
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Color.white.opacity(0.07), in: Capsule())
+            .background(Color.vSurface, in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
     }
 }

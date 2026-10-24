@@ -176,7 +176,7 @@ struct NewServiceScreen: View {
                 prompt: Text("e.g. Professional Stem Mix").foregroundStyle(Color.vText3)
             )
             .font(.appBody)
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.vText)
             .submitLabel(.done)
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
@@ -219,7 +219,7 @@ struct NewServiceScreen: View {
                     .foregroundStyle(Color.vText2)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
-                    .overlay(Capsule().strokeBorder(UploadTheme.border, lineWidth: 1))
+                    .background(Color.vControl, in: Capsule())
                     .contentShape(.rect)
                 }
                 Spacer()
@@ -249,7 +249,7 @@ struct NewServiceScreen: View {
                     HStack(spacing: 4) {
                         Text(row.name)
                             .font(.appBodyMedium)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.vText)
                         LucideIcon(.chevronDown, .xs)
                             .foregroundStyle(Color.vText3)
                     }
@@ -282,7 +282,7 @@ struct NewServiceScreen: View {
                         prompt: Text("Price").foregroundStyle(Color.vText3)
                     )
                     .font(.appBody)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .keyboardType(.decimalPad)
                     .focused($numberFieldFocused)
                 }
@@ -300,7 +300,7 @@ struct NewServiceScreen: View {
                         prompt: Text("Days").foregroundStyle(Color.vText3)
                     )
                     .font(.appBody)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .keyboardType(.numberPad)
                     .focused($numberFieldFocused)
                 }
@@ -318,7 +318,7 @@ struct NewServiceScreen: View {
                     HStack(spacing: 4) {
                         Text(row.revisions == "999" ? "∞" : row.revisions)
                             .font(.appBody)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.vText)
                         LucideIcon(.chevronDown, .xs)
                             .foregroundStyle(Color.vText3)
                     }
@@ -343,7 +343,7 @@ struct NewServiceScreen: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color.white.opacity(0.03))
+                .fill(Color.vCard)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 16)
@@ -371,14 +371,14 @@ struct NewServiceScreen: View {
         VStack(alignment: .leading, spacing: 12) {
             UploadSectionDivider("How It Works")
 
-            Text("Walk buyers through your process step by step — numbered automatically.")
+            Text("Walk buyers through your process step by step, numbered automatically.")
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText2)
 
             ForEach(Array(viewModel.processSteps.enumerated()), id: \.element.id) { index, step in
                 HStack(alignment: .top, spacing: 10) {
                     ZStack {
-                        Circle().fill(Color.white.opacity(0.06))
+                        Circle().fill(Color.ink(0.06))
                         Circle().strokeBorder(Color.vBorder, lineWidth: 1)
                         Text("\(index + 1)")
                             .font(.appLabel)
@@ -425,7 +425,7 @@ struct NewServiceScreen: View {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Portfolio")
 
-            Text("Showcase past work — each entry needs a title and an audio file.")
+            Text("Showcase past work. Each entry needs a title and an audio file.")
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText2)
 
@@ -455,7 +455,7 @@ struct NewServiceScreen: View {
         VStack(alignment: .leading, spacing: 12) {
             UploadSectionDivider("FAQs")
 
-            Text("Optional — answer common buyer questions upfront.")
+            Text("Optional: answer common buyer questions upfront.")
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText2)
 
@@ -485,8 +485,8 @@ struct NewServiceScreen: View {
 
             UploadVisibilityPicker(
                 visibility: $viewModel.visibility,
-                publicHint: "Public — appears in the marketplace and on your profile.",
-                privateHint: "Private — hidden from the marketplace. You can make it public later from the service page."
+                publicHint: "Public: appears in the marketplace and on your profile.",
+                privateHint: "Private: hidden from the marketplace. You can make it public later from the service page."
             )
         }
     }

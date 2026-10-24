@@ -60,9 +60,12 @@ struct SettingsDocScreen: View {
                 .overlay(alignment: .topTrailing) {
                     Button { dismiss() } label: {
                         LucideIcon(.x, .md)
-                            .foregroundStyle(.white.opacity(0.8))
+                            .foregroundStyle(Color.vControlLabel)
                             .frame(width: 32, height: 32)
-                            .background(Color.white.opacity(0.08), in: Circle())
+                            // Opaque (not the translucent control fill), so the
+                            // document scrolling under it doesn't show through.
+                            .background(Color.vSurface, in: Circle())
+                            .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
                             .padding(6) // pads the hit area out to 44pt
                             .contentShape(.rect)
                     }
@@ -80,15 +83,14 @@ struct SettingsDocScreen: View {
     private func docScroll(topPadding: CGFloat, bottomPadding: CGFloat) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text(doc.eyebrow.uppercased())
-                    .font(.appLabel)
-                    .tracking(2)
+                Text(doc.eyebrow)
+                    .font(.appFont.sectionLabel)
                     .foregroundStyle(Color.vText3)
                     .padding(.bottom, 8)
 
                 Text(doc.title)
                     .font(.appLargeTitle)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .padding(.bottom, 4)
 
                 Text("Last updated: \(doc.updated)")
@@ -100,7 +102,7 @@ struct SettingsDocScreen: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(section.title)
                             .font(.appTitle3)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.vText)
                         if let body = section.body {
                             bodyText(body)
                         }
@@ -172,7 +174,7 @@ struct HelpCenterScreen: View {
         VStack(spacing: 0) {
             ForEach(Array(HelpContent.faqs.enumerated()), id: \.element.question) { index, faq in
                 if index > 0 {
-                    Rectangle().fill(.white.opacity(0.07)).frame(height: 1)
+                    Rectangle().fill(Color.vDivider).frame(height: 1)
                 }
                 faqRow(faq)
             }
@@ -193,16 +195,15 @@ struct HelpCenterScreen: View {
                             // Row-title scale (like picker/sheet rows) — the
                             // 16pt body read too heavy against 14pt answers.
                             .font(.appCalloutSemibold)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.vText)
                             .multilineTextAlignment(.leading)
-                        Text(faq.category.uppercased())
-                            .font(.appMicroSemibold)
-                            .tracking(1.5)
+                        Text(faq.category)
+                            .font(.appFont.sectionLabel)
                             .foregroundStyle(Color.vText3)
                     }
                     Spacer(minLength: 8)
                     LucideIcon(.plus, .md)
-                        .foregroundStyle(isOpen ? .white : Color.vText3)
+                        .foregroundStyle(isOpen ? Color.vText : Color.vText3)
                         .rotationEffect(.degrees(isOpen ? 45 : 0))
                         .padding(.top, 3)
                 }
@@ -226,7 +227,7 @@ struct HelpCenterScreen: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Still need help?")
                 .font(.appTitle3)
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.vText)
             Text("We read every message. Most replies land within 24 hours on weekdays.")
                 .font(.appFootnote)
                 .foregroundStyle(Color.vText2)
@@ -240,10 +241,10 @@ struct HelpCenterScreen: View {
                     LucideIcon(.mail, .sm)
                     Text("Email support").font(.appSubheadlineSemibold)
                 }
-                .foregroundStyle(.black)
+                .foregroundStyle(Color.vOnInverse)
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
-                .background(.white, in: Capsule())
+                .background(Color.vInverse, in: Capsule())
             }
             .buttonStyle(.plain)
             .padding(.top, 10)
@@ -284,7 +285,7 @@ enum HelpContent {
         ),
         FAQ(
             question: "What’s the difference between Tracks, Short Tracks and Snippets?",
-            answer: "Volspire splits the catalog by length so listeners always know what they’re hearing. Tracks are 3:00 or longer, Short Tracks are between 0:30 and 3:00, and Snippets are under 0:30. The home page surfaces a shelf for each.",
+            answer: "Volspire splits the catalog by length so listeners always know what they’re hearing. Tracks are longer than 2:00, Short Tracks run 0:30 to 2:00, and Snippets are under 0:30. The home page surfaces a shelf for each.",
             category: "Uploads & Tracks"
         ),
         FAQ(

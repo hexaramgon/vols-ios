@@ -21,11 +21,15 @@ struct HeaderIconButton: View {
     var size: CGFloat = ViewConst.headerIconSize
     let action: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         Button(action: action) {
             LucideIcon(icon, size: size)
-                .foregroundStyle(.white)
-                .shadow(color: .black.opacity(shadow ? 0.5 : 0), radius: 2, y: 1)
+                .foregroundStyle(Color.vText)
+                // The legibility shadow only makes sense for a light glyph over
+                // art — pin hero overlays dark with `.alwaysDark()`.
+                .shadow(color: .black.opacity(shadow && colorScheme == .dark ? 0.5 : 0), radius: 2, y: 1)
                 .overlay(alignment: .topTrailing) {
                     if showDot {
                         Circle()

@@ -43,7 +43,7 @@ struct TrackOptionsSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             SheetHeader(title: title, subtitle: headerSubtitle) { dismiss() } leading: {
-                ArtworkView(artwork, cornerRadius: 8)
+                ArtworkView(artwork, cornerRadius: Radius.tile)
                     .frame(width: 40, height: 40)
             }
 
@@ -61,7 +61,7 @@ struct TrackOptionsSheet: View {
 
     /// Appended "Report" row — presents the report sheet over this one.
     private var reportRow: some View {
-        OptionSheetRow(icon: .flag, title: "Report") { showReport = true }
+        OptionSheetRow(icon: .flag, title: "Report track") { showReport = true }
             .disabled(loadingID != nil)
     }
 
@@ -76,7 +76,7 @@ struct TrackOptionsSheet: View {
             icon: action.icon,
             title: action.title,
             subtitle: action.subtitle,
-            tint: action.isDestructive ? Color.red : .white
+            tint: action.isDestructive ? Color.vError : Color.vText
         ) {
             if action.awaitsCompletion {
                 Task {
@@ -132,10 +132,10 @@ struct InlineCreateRow: View {
                     TextField(
                         "",
                         text: $name,
-                        prompt: Text(placeholder).foregroundStyle(.white.opacity(0.35))
+                        prompt: Text(placeholder).foregroundStyle(Color.vText3)
                     )
                     .font(.appCalloutSemibold)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color.vText)
                     .focused($focused)
                     .submitLabel(.done)
                     .onSubmit { submit() }
@@ -144,11 +144,11 @@ struct InlineCreateRow: View {
                     Spacer(minLength: 8)
 
                     if busy {
-                        ProgressView().tint(.white).controlSize(.small)
+                        ProgressView().tint(Color.vText).controlSize(.small)
                     } else {
                         Button { submit() } label: {
                             LucideIcon(.circleCheck, .lg)
-                                .foregroundStyle(canSubmit ? Color.green : Color.vText3)
+                                .foregroundStyle(canSubmit ? Color.vSuccess : Color.vText3)
                         }
                         .buttonStyle(.plain)
                         .disabled(!canSubmit)
@@ -166,7 +166,7 @@ struct InlineCreateRow: View {
                         tile
                         Text(label)
                             .font(.appCalloutSemibold)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Color.vText)
                         Spacer(minLength: 8)
                     }
                     .padding(.horizontal, 8)
@@ -184,10 +184,10 @@ struct InlineCreateRow: View {
 
     private var tile: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(Color.white.opacity(0.08))
+            RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
+                .fill(Color.vControl)
             LucideIcon(.plus, .lg)
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(Color.vText2)
         }
         .frame(width: 48, height: 48)
     }

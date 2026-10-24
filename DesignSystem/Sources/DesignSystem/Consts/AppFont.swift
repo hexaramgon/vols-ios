@@ -10,7 +10,7 @@ import SwiftUI
 // style has a single source of truth — these were exact `.geist(…)` duplicates
 // of the tokens they now point at (values unchanged).
 public enum AppFont {
-    public static let timingIndicator: Font = .appLabel                // 12, semibold
+    public static let timingIndicator: Font = .appLabel                // 13, semibold
     public static let button: Font = .appBodyLargeSemibold             // 17, semibold
     public static let mediaListHeaderSubtitle: Font = .appTitle2Regular // 20
     public static let mediaListItemSubtitle: Font = .appFootnote       // 13
@@ -26,11 +26,11 @@ public enum AppFont {
 
     /// Section headers — exactly two levels app-wide. `sectionTitle` is the
     /// big rail/page header ("Popular", "Playlists"); `sectionLabel` is the
-    /// small ALL-CAPS group label above list groups (search results,
-    /// notification day groups) — uppercase the text and pair it with
-    /// `.tracking(0.6)` + the tertiary text grey at the site.
-    public static let sectionTitle: Font = .appTitle3Bold              // 18, bold
-    public static let sectionLabel: Font = .appLabel                   // 12, semibold
+    /// small group label above list groups (search results, notification day
+    /// groups) in the tertiary text grey. No uppercase eyebrows — sentence-case
+    /// text, no `.textCase(.uppercase)` / tracking (matches the web revamp).
+    public static let sectionTitle: Font = .appTitle3                  // 18, semibold
+    public static let sectionLabel: Font = .appLabel                   // 13, semibold
 }
 
 public extension Font {

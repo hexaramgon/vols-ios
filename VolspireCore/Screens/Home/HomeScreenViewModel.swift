@@ -14,50 +14,27 @@ import Services
 import SharedUtilities
 import SwiftUI
 
-// MARK: - UI Models
-
-/// A home rail/feed track row, mapped at ingest (URLs resolved once).
-struct HomeTrack: Identifiable, Hashable {
-    let id: String
-    let title: String
-    let artist: String
-    let coverURL: URL?
-    let audioURL: URL?
-    let streams: Int?
-    let durationMs: Int?
-}
-
-struct ExploreArtistItem: Identifiable {
+/// Who a Collab pitch goes to (the web's `PitchTarget`).
+struct PitchTarget: Identifiable, Hashable {
     let id: String
     let username: String
     let avatarURL: URL?
-    let monthlyListeners: Int
-    var isFollowing: Bool
 }
 
 // MARK: - ViewModel
 
-/// Screen-local state for Home: playback dispatch, the pull-refresh chip,
-/// the create-folder form, and the search typeahead. All server content lives
-/// in the shared stores (FeedStore / WorkspaceStore / ListingsStore /
-/// SocialStore) — this object mostly composes them.
+/// Screen-local state for Home: playback dispatch (and the queue it started,
+/// for the Now playing panel), the pull-refresh chip, the create-folder form,
+/// and the search typeahead. All server content lives in the shared stores
+/// (FeedStore / WorkspaceStore / ListingsStore / SocialStore / LibraryStore).
 @Observable
 @MainActor
 class HomeScreenViewModel {
-    // Create-folder sheet on the Workspace tab. The folders themselves live in
-    // the shared WorkspaceStore; only the form state is screen-local.
-    var showCreateFolder = false
-    var newFolderName = ""
-    var newFolderDescription = ""
-    var isCreatingFolder = false
-
     /// Shared stores — assigned by HomeScreen's `.task`.
     weak var feed: FeedStore?
     weak var workspace: WorkspaceStore?
-    /// Search-result artist rows seed the follow overlay.
     weak var social: SocialStore?
     weak var listingsStore: ListingsStore?
-
     weak var player: MediaPlayer?
 
     private let supabaseService: SupabaseService
@@ -71,19 +48,12 @@ class HomeScreenViewModel {
         self.storageService = storageService
     }
 
-    /// Plays `track` and queues the rest of the section it came from (`context`)
-    /// in its natural order, so Next/Previous move through *that* section — not a
-    /// concatenation of every home rail (which is why Next used to jump to the
-    /// top "Popular" tracks). Registration in MediaState, id dedupe and dropping
-    /// nil-audio items all live in the shared `MediaPlayer.play(_:queue:)`.
+    /// Plays `track` and queues the section it came from (`context`) in its
+    /// natural order, so Next/Previous move through *that* list.
     func playTrack(_ track: HomeTrack, in context: [HomeTrack]) async {
         guard track.audioURL != nil else { return }
-
-        // Queue = the section in order. The tapped track must be in it (it is,
-        // since it came from that list) or `MediaPlayer.play` rejects the queue.
         var ordered = context
         if !ordered.contains(where: { $0.id == track.id }) { ordered = [track] }
-
         await player?.play(MediaID(track.id), queue: ordered.map { t in
             Media(
                 id: MediaID(t.id),
@@ -92,116 +62,89 @@ class HomeScreenViewModel {
         })
     }
 
-    /// First load — the feed rails and the collab listings warm concurrently
-    /// (both stores' loads are guarded, so later tab opens are no-ops).
+    /// First load — the charts/artists and the listings board warm concurrently.
     func loadInitial() async {
         async let feedDone: Void = warmFeed()
         async let listingsDone: Void = warmListings()
         _ = await (feedDone, listingsDone)
     }
 
-    private func warmFeed() async {
-        await feed?.loadInitial()
-    }
-
-    private func warmListings() async {
-        await listingsStore?.loadListingsIfNeeded()
-    }
+    private func warmFeed() async { await feed?.loadInitial() }
+    private func warmListings() async { await listingsStore?.loadListingsIfNeeded() }
 
     // MARK: - Pull-to-refresh (chip-wrapped store delegates)
 
-    /// True while any pull-to-refresh is running. The system's refresh spinner
-    /// anchors at the scroll view's very top — hidden behind the fixed header —
-    /// so the screen floats its own indicator below the header off this flag.
+    /// True while any pull-to-refresh is running — the screen floats its own
+    /// indicator below the fixed header off this flag.
     var isPullRefreshing = false
     private var pullRefreshCount = 0 {
         didSet { isPullRefreshing = pullRefreshCount > 0 }
     }
 
+    /// Collab: charts, artists, map, plus the listings
+    /// preview the Collab tab shows.
     func refresh() async {
         pullRefreshCount += 1
         defer { pullRefreshCount -= 1 }
-        // The All tab also shows the Collab rail, so refresh listings with it.
         async let feedDone: Void = refreshFeedAll()
         async let listingsDone: Void = refreshListingsQuiet()
         _ = await (feedDone, listingsDone)
     }
 
-    private func refreshFeedAll() async {
-        await feed?.refreshAll()
-    }
-
-    private func refreshListingsQuiet() async {
-        await listingsStore?.refreshListings()
-    }
+    private func refreshFeedAll() async { await feed?.refreshAll() }
+    private func refreshListingsQuiet() async { await listingsStore?.refreshListings() }
 
     func refreshFollowing() async {
         pullRefreshCount += 1
         defer { pullRefreshCount -= 1 }
-        await feed?.refreshFollowing()
+        async let feedDone: Void = refreshFollowingFeed()
+        async let foldersDone: Void = refreshFoldersQuiet()
+        _ = await (feedDone, foldersDone)
     }
 
-    func refreshArtists() async {
-        pullRefreshCount += 1
-        defer { pullRefreshCount -= 1 }
-        await feed?.refreshArtists()
-    }
+    private func refreshFollowingFeed() async { await feed?.refreshFollowing() }
+    private func refreshFoldersQuiet() async { await workspace?.refreshFolders() }
 
     func refreshListings() async {
         pullRefreshCount += 1
         defer { pullRefreshCount -= 1 }
-        await listingsStore?.refreshListings()
+        async let board: Void = refreshListingsQuiet()
+        async let saved: Void = refreshSavedQuiet()
+        _ = await (board, saved)
     }
 
-    /// Pull-to-refresh for the Saved list, chip-wrapped like the board's.
-    func refreshSavedListings() async {
-        pullRefreshCount += 1
-        defer { pullRefreshCount -= 1 }
-        await listingsStore?.refreshSaved()
-    }
+    private func refreshSavedQuiet() async { await listingsStore?.refreshSaved() }
 
-    /// Workspace-tab pull-to-refresh: delegates to the shared store, wrapped in
-    /// the pull-refresh counter so the floating chip shows like the other tabs.
-    func refreshFolders() async {
-        pullRefreshCount += 1
-        defer { pullRefreshCount -= 1 }
-        await workspace?.refreshFolders()
-    }
 
-    /// Creates a folder from the Workspace tab's CTA / grid tile via the shared
-    /// store (which refetches the grid in place) — same trim + guard behaviour
-    /// as the Workspace screen.
-    func createFolder() async {
-        guard let workspace, !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        isCreatingFolder = true
-        do {
-            let desc = newFolderDescription.trimmingCharacters(in: .whitespaces)
-            try await workspace.createFolder(
-                name: newFolderName.trimmingCharacters(in: .whitespaces),
-                description: desc.isEmpty ? nil : desc
-            )
-            newFolderName = ""
-            newFolderDescription = ""
-            showCreateFolder = false
-        } catch {
-            debugLog("[HomeVM] createFolder: \(error)")
+
+    // MARK: - Search typeahead (Home search sheet)
+
+    /// One suggestion row (web `Suggestion`): a track title or an artist.
+    enum Suggestion: Identifiable, Hashable {
+        case track(HomeTrack)
+        case artist(ExploreArtistItem)
+        var id: String {
+            switch self {
+            case .track(let t): "t-\(t.id)"
+            case .artist(let a): "a-\(a.id)"
+            }
         }
-        isCreatingFolder = false
     }
 
-    // MARK: - Search typeahead (Home search overlay)
-
-    /// Live suggestions for the search overlay, from the `search_all` RPC.
-    var searchTracks: [HomeTrack] = []
-    var searchArtists: [ExploreArtistItem] = []
-    var isSearching = false
+    /// Up to 6 rows: 3 title/artist prefix matches, 3 artists, then 2
+    /// contains-matches (the web's ordering).
+    private(set) var suggestions: [Suggestion] = []
+    private(set) var isSearching = false
+    /// The query `suggestions` answer — set only on a successful response, so
+    /// the overlay shows bones (not "No results") while in flight or failed.
+    private(set) var suggestionsQuery: String?
     private var searchTask: Task<Void, Never>?
 
-    /// Debounced typeahead — runs `search_all` as the user types in the overlay.
+    /// Debounced typeahead — runs `search_all` as the user types.
     func runSearch(_ query: String) {
         searchTask?.cancel()
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { searchTracks = []; searchArtists = []; isSearching = false; return }
+        guard !q.isEmpty else { suggestions = []; suggestionsQuery = nil; isSearching = false; return }
 
         searchTask = Task { @MainActor in
             isSearching = true
@@ -210,21 +153,32 @@ class HomeScreenViewModel {
             do {
                 let results = try await supabaseService.searchAll(query: q, limit: 8)
                 guard !Task.isCancelled else { return }
-                searchTracks = mapSearchTracks(results.tracks)
-                searchArtists = mapSearchArtists(results.artists)
-                isSearching = false
+                suggestions = buildSuggestions(q, tracks: mapSearchTracks(results.tracks),
+                                               artists: feed?.mapArtists(results.artists) ?? [])
+                suggestionsQuery = q
             } catch {
                 guard !Task.isCancelled else { return }
-                isSearching = false
             }
+            isSearching = false
         }
     }
 
     func clearSearch() {
         searchTask?.cancel()
-        searchTracks = []
-        searchArtists = []
+        suggestions = []
+        suggestionsQuery = nil
         isSearching = false
+    }
+
+    private func buildSuggestions(_ q: String, tracks: [HomeTrack], artists: [ExploreArtistItem]) -> [Suggestion] {
+        let lq = q.lowercased()
+        let prefix = tracks.filter { $0.title.lowercased().hasPrefix(lq) || $0.artist.lowercased().hasPrefix(lq) }
+        let prefixIds = Set(prefix.map(\.id))
+        let contains = tracks.filter { !prefixIds.contains($0.id) }
+        let rows: [Suggestion] = prefix.prefix(3).map { .track($0) }
+            + artists.prefix(3).map { .artist($0) }
+            + contains.prefix(2).map { .track($0) }
+        return Array(rows.prefix(6))
     }
 
     private func mapSearchTracks(_ tracks: [ApiSearchTrack]) -> [HomeTrack] {
@@ -237,20 +191,6 @@ class HomeScreenViewModel {
                 audioURL: storageService.resolveTrackUrl(t.audioUrl).flatMap { URL(string: $0) },
                 streams: t.streams,
                 durationMs: t.durationMs
-            )
-        }
-    }
-
-    /// Search-scoped artist mapping (the rails' mapping lives in FeedStore).
-    private func mapSearchArtists(_ items: [ApiExploreArtist]) -> [ExploreArtistItem] {
-        items.map {
-            social?.seedFollow(userId: $0.userId, isFollowing: $0.isFollowing ?? false)
-            return ExploreArtistItem(
-                id: $0.userId,
-                username: $0.username ?? "unknown",
-                avatarURL: $0.profileImageUrl.flatMap { URL(string: $0) },
-                monthlyListeners: $0.monthlyListeners ?? 0,
-                isFollowing: $0.isFollowing ?? false
             )
         }
     }
