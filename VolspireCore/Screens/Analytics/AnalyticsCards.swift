@@ -12,6 +12,24 @@
 import DesignSystem
 import SwiftUI
 
+// MARK: - Dates
+
+enum AnalyticsDates {
+    /// "Oct 3" from an RPC day string ("2026-10-03").
+    static func label(_ iso: String?) -> String {
+        guard let iso, let date = formatter.date(from: iso) else { return "" }
+        return date.formatted(.dateTime.month(.abbreviated).day())
+    }
+
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+}
+
 // MARK: - Block
 
 /// A titled block of the detail pane (14 semibold heading, not a section

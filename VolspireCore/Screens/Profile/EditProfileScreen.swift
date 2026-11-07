@@ -3,8 +3,8 @@
 //  Volspire
 //
 //  The profile edit form, mirroring the web's Settings → Profile: photos
-//  (banner + overlapping avatar), basic info, roles, the collab-map opt-in,
-//  and Save in the header. Saves via `update_user` (+ `set_open_to_collab`).
+//  (banner + overlapping avatar), basic info, roles, and Save in the header.
+//  Saves via `update_user`. (The Collab-map opt-in lives in Settings → Privacy.)
 //
 
 import DesignSystem
@@ -38,10 +38,6 @@ struct EditProfileScreen: View {
     @State private var originalBio: String = ""
     @State private var originalLocation: String = ""
     @State private var originalTags: [String] = []
-    /// Collab-map opt-in (`users.open_to_collab`). nil until the saved value
-    /// loads; staged here and written with the rest of the form on Save.
-    @State private var openToCollab: Bool?
-    @State private var originalOpenToCollab: Bool?
     @State private var isSaving = false
     @State private var saved = false
     @State private var errorMessage: String? = nil
@@ -65,7 +61,7 @@ struct EditProfileScreen: View {
 
     var body: some View {
         // A pushed page laid out like the web's Settings → Profile: Photos,
-        // Basic info, Roles, Collaboration. Save lives in the header.
+        // Basic info, Roles. Save lives in the header.
         ScrollView {
             VStack(alignment: .leading, spacing: 32) {
                 SettingsGroup(title: "Photos", bare: true) { photos }
@@ -76,20 +72,6 @@ struct EditProfileScreen: View {
                     bare: true
                 ) {
                     RolePicker(selection: $selectedTags)
-                }
-                SettingsGroup(title: "Collaboration") {
-                    SettingsRow(
-                        title: "Open to collaboration",
-                        caption: "Show your city and your music on the Collab map so artists nearby can find you and reach out. Your exact location is never shared."
-                    ) {
-                        Toggle("", isOn: Binding(
-                            get: { openToCollab ?? false },
-                            set: { openToCollab = $0 }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.ink)
-                        .disabled(openToCollab == nil)
-                    }
                 }
                 if let errorMessage {
                     ErrorBanner(errorMessage)
@@ -114,16 +96,10 @@ struct EditProfileScreen: View {
             originalLocation = viewModel.location
             originalTags = viewModel.tags
         }
-        .task {
-            guard originalOpenToCollab == nil,
-                  let open = try? await dependencies.supabaseService.getOpenToCollab() else { return }
-            originalOpenToCollab = open
-            if openToCollab == nil { openToCollab = open }
-        }
     }
 
     /// Save only enables once the form differs from the loaded profile (or a new
-    /// avatar/banner was picked, or the collab opt-in flipped).
+    /// avatar/banner was picked).
     private var hasChanges: Bool {
         editUsername != originalUsername
             || editBio != originalBio
@@ -131,11 +107,6 @@ struct EditProfileScreen: View {
             || Set(selectedTags) != Set(originalTags)
             || selectedAvatarData != nil
             || selectedBannerData != nil
-            || openToCollabChanged
-    }
-
-    private var openToCollabChanged: Bool {
-        openToCollab != nil && openToCollab != originalOpenToCollab
     }
 
     /// Same rule the signup wizard enforces, so a handle can't be edited into a
@@ -180,16 +151,21 @@ struct EditProfileScreen: View {
         }
     }
 
-    @ViewBuilder
+    /// Taken / available, sliding in on the pop marks' spring (same as sign-up).
     private var usernameStatusLine: some View {
-        switch usernameStatus {
-        case .taken:
-            statusText("That username is already taken.", color: .vError)
-        case .available:
-            statusText("Username is available.", color: .vSuccessText)
-        case .checking, .idle:
-            EmptyView()
+        Group {
+            switch usernameStatus {
+            case .taken:
+                statusText("That username is already taken.", color: .vError)
+                    .transition(.opacity.combined(with: .offset(y: -4)))
+            case .available:
+                statusText("Username is available.", color: .vSuccessText)
+                    .transition(.opacity.combined(with: .offset(y: -4)))
+            case .checking, .idle:
+                EmptyView()
+            }
         }
+        .animation(.popMark, value: usernameStatus)
     }
 
     private func statusText(_ text: String, color: Color) -> some View {
@@ -369,7 +345,7 @@ private extension EditProfileScreen {
                 text: $editLocation,
                 prompt: Text("City, Country").foregroundStyle(Color.vText3)
             )
-            .font(.appSubheadline)
+            .font(.appBody)
             .foregroundStyle(Color.vText)
             .tint(Color.vText)
             .textInputAutocapitalization(.words)
@@ -449,7 +425,7 @@ private extension EditProfileScreen {
                 if isSaving {
                     ProgressView().controlSize(.small).tint(Color.vText)
                 } else if saved {
-                    LucideIcon(.check, .md).foregroundStyle(Color.vSuccessText)
+                    SuccessMark(size: 22)
                 } else {
                     Text("Save")
                         .font(.appCalloutSemibold)
@@ -503,22 +479,12 @@ private extension EditProfileScreen {
                 errorMessage = viewModel.profileUpdateError ?? "Failed to save profile. Please try again."
                 return
             }
-            // Open-to-collab or city changed → the Collab map is stale.
-            let mapChanged = openToCollabChanged || location != originalLocation
+            // City changed → the Collab map is stale.
+            let mapChanged = location != originalLocation
             originalUsername = username
             originalBio = bio
             originalLocation = location
             originalTags = selectedTags
-            if openToCollabChanged, let open = openToCollab {
-                do {
-                    try await dependencies.supabaseService.setOpenToCollab(open)
-                    originalOpenToCollab = open
-                } catch {
-                    isSaving = false
-                    errorMessage = "Couldn't update your collaboration setting. Please try again."
-                    return
-                }
-            }
             if mapChanged {
                 Task { await feedStore.refreshLocationsAfterProfileChange() }
             }

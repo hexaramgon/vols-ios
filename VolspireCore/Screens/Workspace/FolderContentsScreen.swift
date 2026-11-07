@@ -4,7 +4,8 @@
 //
 //  A folder (web `folder-view`): a "‹ Workspace" band, the hero (the folder's
 //  colour wash, its art, role line, name, meta, Upload / Invite), filter
-//  chips, then flat "Tracks" and "Files" sections.
+//  chips, then flat "Tracks", "Packs" (linked marketplace packs) and "Files"
+//  sections.
 //
 
 import DesignSystem
@@ -14,22 +15,27 @@ import SwiftUI
 import UniformTypeIdentifiers
 import SharedUtilities
 
-private enum FolderAction { case edit, members, delete }
+private enum FolderAction { case edit, members, shareLink, publishPack }
 
 struct FolderContentsScreen: View {
     @Environment(Router.self) var router
     @Environment(\.dismiss) private var dismiss
     @Environment(PlayerController.self) private var playerController
     @Environment(WorkspaceStore.self) private var workspaceStore
+    @Environment(Dependencies.self) private var dependencies
     @State private var viewModel: FolderContentsViewModel
     @State private var pendingAction: FolderAction?
     @State private var fileForOptions: ApiFolderFile?
+    @State private var packForOptions: ApiFolderPack?
+    /// Staged by the pack sheet's Remove row; confirmed once it has closed.
+    @State private var pendingPackRemoval: ApiFolderPack?
     /// Staged by the options sheet's Delete / Remove row; the confirmation
     /// dialog presents once that sheet has finished dismissing.
-    @State private var fileToDelete: ApiFolderFile?
-    @State private var showFileDeleteConfirm = false
-    @State private var trackToRemove: ApiFolderFile?
-    @State private var showTrackRemoveConfirm = false
+    /// The in-place confirms in this page's "…" sheets (one sheet at a time).
+    @State private var sheetConfirm: DestructiveConfirm?
+    /// Downloaded and waiting for the options sheet to close, then handed to
+    /// the track upload flow.
+    @State private var pendingTrackPrefill: TrackFilePrefill?
     /// From Activity: the item to scroll to + highlight once the files load.
     private let highlight: FolderHighlight?
     /// The row currently lit (fades out after a moment, like a comment).
@@ -61,7 +67,14 @@ struct FolderContentsScreen: View {
         // canvas fades in once you scroll); the "…" rides in the band.
         // The back label names where it goes ("‹ Workspace"); the folder's
         // own name is the hero title right below.
-        .backTitleBand("Workspace", overlaysContent: true) {
+        .backTitleBand(
+            "Workspace",
+            title: viewModel.folderName,
+            // The hero's name (under the cover + role line) is under the band
+            // by about here — the band takes it over, as on playlists.
+            titleRevealAt: 180,
+            overlaysContent: true
+        ) {
             if viewModel.isOwner {
                 HeaderIconButton(icon: .ellipsis, size: ViewConst.heroOverlayIconSize) { viewModel.showOptions = true }
             }
@@ -79,51 +92,42 @@ struct FolderContentsScreen: View {
                 debugLog("[FolderContents] File picker error: \(error)")
             }
         }
-        .alert("Something went wrong", isPresented: .init(
-            get: { viewModel.uploadError != nil },
-            set: { if !$0 { viewModel.uploadError = nil } }
-        )) {
-            Button("OK") { viewModel.uploadError = nil }
-        } message: {
-            Text(viewModel.uploadError ?? "")
+        // Failures surface as the app's error toast, not a system alert.
+        .onChange(of: viewModel.uploadError) { _, error in
+            guard let error else { return }
+            ToastCenter.shared.show(error, style: .error)
+            viewModel.uploadError = nil
         }
         .sheet(item: $fileForOptions, onDismiss: {
-            if fileToDelete != nil { showFileDeleteConfirm = true }
-            if trackToRemove != nil { showTrackRemoveConfirm = true }
+            sheetConfirm = nil
+            viewModel.cancelTrackPrefill()
+            if let prefill = pendingTrackPrefill {
+                pendingTrackPrefill = nil
+                NotificationCenter.default.post(name: .openNewPost, object: "track",
+                                                userInfo: ["trackPrefill": prefill])
+            }
         }) { file in fileOptionsSheet(file) }
-        .confirmationDialog("Delete file", isPresented: $showFileDeleteConfirm, titleVisibility: .visible, presenting: fileToDelete) { file in
-            Button("Delete", role: .destructive) {
-                fileToDelete = nil
-                Task { await viewModel.deleteFile(file) }
-            }
-            Button("Cancel", role: .cancel) { fileToDelete = nil }
-        } message: { _ in
-            Text("It will be permanently deleted for everyone in this folder. This cannot be undone.")
-        }
-        .confirmationDialog("Remove track", isPresented: $showTrackRemoveConfirm, titleVisibility: .visible, presenting: trackToRemove) { file in
-            Button("Remove", role: .destructive) {
-                trackToRemove = nil
-                Task { await viewModel.removeTrack(file) }
-            }
-            Button("Cancel", role: .cancel) { trackToRemove = nil }
-        } message: { _ in
-            Text("It will be removed from this folder. The original track is not affected.")
-        }
-        .sheet(isPresented: $viewModel.showOptions, onDismiss: runFolderAction) { optionsSheet }
-        .sheet(isPresented: $viewModel.showEdit) { editSheet }
+        .sheet(item: $packForOptions, onDismiss: confirmPackRemoval) { pack in packOptionsSheet(pack) }
+        .sheet(isPresented: $viewModel.showOptions, onDismiss: {
+            sheetConfirm = nil
+            runFolderAction()
+        }) { optionsSheet }
+        // Full screen, like the other edit pages.
+        .fullScreenCover(isPresented: $viewModel.showEdit) { editSheet }
+        // "Publish as pack" downloading the folder.
+        .refreshChip(viewModel.isPreparingPack, topInset: ViewConst.safeAreaInsets.top + 52)
         .sheet(isPresented: $viewModel.showMembers) { ManageMembersSheet(viewModel: viewModel) }
-        .destructiveConfirm(
-            "Delete folder",
-            isPresented: $viewModel.showDeleteConfirm,
-            message: "This permanently deletes the folder and every file in it, for everyone it's shared with."
-        ) {
-            Task { if await viewModel.deleteFolder() { dismiss() } }
+        .sheet(isPresented: $viewModel.showShareLink) {
+            FolderShareLinkSheet(folderId: viewModel.folderId, folderName: viewModel.folderName,
+                                 initialLink: viewModel.shareLink) { viewModel.shareLink = $0 }
         }
         .task {
             viewModel.workspace = workspaceStore
             async let files: Void = viewModel.loadFiles()
             async let meta: Void = viewModel.loadFolderMeta()
             _ = await (files, meta)
+            // Needs the role from the meta load.
+            await viewModel.loadShareLink()
         }
     }
 }
@@ -163,6 +167,9 @@ private extension FolderContentsScreen {
                         .padding(.top, 8)
                 }
                 metaRow.padding(.top, 12)
+                if let link = viewModel.shareLink, !link.expired {
+                    publicLinkPill.padding(.top, 12)
+                }
             }
 
         }
@@ -184,18 +191,42 @@ private extension FolderContentsScreen {
         }
     }
 
+    /// "Public link" — shown while the folder has a live share link, so it's
+    /// never shared silently; opens the link's sheet.
+    var publicLinkPill: some View {
+        Button { viewModel.showShareLink = true } label: {
+            HStack(spacing: 5) {
+                LucideIcon(.link, .xs)
+                Text("Public link").font(.appCaptionMedium)
+            }
+            .foregroundStyle(Color.vText2)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.vControl, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Manage the folder's public link")
+    }
+
     /// Up to 5 overlapping member avatars + "N members", "N items", "Created …".
     var metaRow: some View {
         HStack(spacing: 12) {
             if !viewModel.members.isEmpty {
-                HStack(spacing: 8) {
-                    HStack(spacing: -6) {
-                        ForEach(viewModel.members.prefix(5)) { member in
-                            AvatarView(url: viewModel.avatarURL(member.profileImageUrl), name: member.username, size: 20)
+                // Opens the members sheet (managing for the owner, a read-only
+                // list for everyone else).
+                Button { viewModel.showMembers = true } label: {
+                    HStack(spacing: 8) {
+                        HStack(spacing: -6) {
+                            ForEach(viewModel.members.prefix(5)) { member in
+                                AvatarView(url: viewModel.avatarURL(member.profileImageUrl), name: member.username, size: 20)
+                            }
                         }
+                        Text("\(viewModel.members.count) \(viewModel.members.count == 1 ? "member" : "members")")
                     }
-                    Text("\(viewModel.members.count) \(viewModel.members.count == 1 ? "member" : "members")")
+                    .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
+                .accessibilityHint(viewModel.isOwner ? "Manage members" : "See who's in this folder")
             }
             if case .loaded = viewModel.loadingState {
                 Text("\(viewModel.files.count) \(viewModel.files.count == 1 ? "item" : "items")")
@@ -211,35 +242,20 @@ private extension FolderContentsScreen {
 
     func coverRow(_ size: FolderArt.Size) -> some View {
         HStack(alignment: .bottom, spacing: 12) {
-            FolderArt(id: viewModel.folderId, name: viewModel.folderName, size: size)
+            FolderArt(id: viewModel.folderId, name: viewModel.folderName, size: size, showsLetter: true)
             Spacer(minLength: 0)
             if viewModel.canUpload || viewModel.isOwner {
                 HStack(spacing: 8) {
                     if viewModel.isOwner {
-                        heroButton("Invite", icon: .userPlus, primary: false) { viewModel.showMembers = true }
+                        HeroCapsuleButton("Invite", icon: .userPlus) { viewModel.showMembers = true }
                     }
                     if viewModel.canUpload {
-                        heroButton("Upload", icon: .upload, primary: true) { viewModel.showFilePicker = true }
+                        HeroCapsuleButton("Upload", icon: .upload, primary: true) { viewModel.showFilePicker = true }
                     }
                 }
                 .fixedSize()
             }
         }
-    }
-
-    func heroButton(_ title: String, icon: LucideIcon.Name, primary: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                LucideIcon(icon, .md)
-                Text(title).font(.appSubheadlineSemibold)
-            }
-            .foregroundStyle(primary ? Color.vOnInverse : Color.vControlLabel)
-            .padding(.horizontal, 18)
-            .frame(height: 40)
-            .background(primary ? Color.vInverse : Color.vControl, in: Capsule())
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -254,7 +270,7 @@ private extension FolderContentsScreen {
         case .error:
             LoadErrorView { Task { await viewModel.refresh() } }
                 .frame(maxWidth: .infinity, minHeight: 320)
-        case .loaded where viewModel.files.isEmpty && viewModel.pendingUploads.isEmpty:
+        case .loaded where viewModel.files.isEmpty && viewModel.packs.isEmpty && viewModel.pendingUploads.isEmpty:
             FolderEmptyState(
                 artId: viewModel.folderId,
                 artName: viewModel.folderName,
@@ -268,7 +284,7 @@ private extension FolderContentsScreen {
             .padding(.bottom, bottomInset)
         case .loaded:
             VStack(alignment: .leading, spacing: 0) {
-                if !viewModel.files.isEmpty { filterChips }
+                if !viewModel.files.isEmpty || !viewModel.packs.isEmpty { filterChips }
 
                 // Transient file-action errors — the shared inline banner.
                 if let message = viewModel.actionError {
@@ -290,6 +306,11 @@ private extension FolderContentsScreen {
                             ForEach(Array(viewModel.trackFiles.enumerated()), id: \.element.id) { i, file in
                                 trackRow(file).staggeredAppear(i, in: "folder-\(ObjectIdentifier(viewModel).hashValue)")
                             }
+                        }
+                    }
+                    if viewModel.showsPacks {
+                        section("Packs") {
+                            ForEach(viewModel.packs) { packRow($0) }
                         }
                     }
                     if !viewModel.shownFiles.isEmpty {
@@ -423,7 +444,7 @@ private extension FolderContentsScreen {
             .coverShadow()
 
             Text(displayName(file))
-                .font(.appSubheadlineMedium)
+                .font(.appFont.fileTitle)
                 .foregroundStyle(isCurrent ? Color.vText : Color.vTextRow)
                 .lineLimit(1)
 
@@ -464,12 +485,12 @@ private extension FolderContentsScreen {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayName(file))
-                    .font(.appSubheadlineMedium)
+                    .font(.appFont.fileTitle)
                     .foregroundStyle(isCurrent ? Color.vText : Color.vTextRow)
                     .lineLimit(1)
                 let caption = viewModel.fileCaption(file)
                 if !caption.isEmpty {
-                    Text(caption).font(.appCaption).foregroundStyle(Color.vText3).lineLimit(1)
+                    Text(caption).font(.appFont.fileSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
                 }
             }
 
@@ -522,13 +543,108 @@ private extension FolderContentsScreen {
         withAnimation(.easeOut(duration: 0.6)) { highlightedRowId = nil }
     }
 
+    /// A linked pack: its art (cover, else name mesh), name over
+    /// "@creator · Drum Kit"; opens the pack page. An unavailable pack keeps a
+    /// muted row so it can still be removed.
+    func packRow(_ pack: ApiFolderPack) -> some View {
+        let coverURL = pack.coverUrl.flatMap { StorageService().resolveTrackUrl($0) }.flatMap { URL(string: $0) }
+        return HStack(spacing: 14) {
+            Group {
+                if let coverURL {
+                    ArtworkView(.webImage(coverURL), cornerRadius: 8)
+                } else if pack.available, let name = pack.name {
+                    PlaylistCoverFallback(name: name, icon: nil)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                } else {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.vSurface)
+                }
+            }
+            .frame(width: 44, height: 44)
+            .coverShadow()
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(pack.available ? (pack.name ?? "Pack") : "Pack unavailable")
+                    .font(.appSubheadlineMedium)
+                    .foregroundStyle(pack.available ? Color.vTextRow : Color.vText3)
+                    .lineLimit(1)
+                if pack.available {
+                    Text([pack.creator?.username.map { "@\($0)" }, pack.packType].compactMap { $0 }.joined(separator: " · "))
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            if viewModel.canUpload {
+                Button { packForOptions = pack } label: {
+                    LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
+                        .foregroundStyle(Color.vText3)
+                        .frame(width: 32, height: 32)
+                        .minimumHitArea(for: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Pack options")
+            }
+        }
+        .padding(.leading, 6)
+        .padding(.trailing, 4)
+        .padding(.vertical, 10)
+        .contentShape(.rect)
+        .onTapGesture {
+            if let api = pack.asMarketplacePack { router.navigateToMarketplacePack(api) }
+        }
+    }
+
+    func packOptionsSheet(_ pack: ApiFolderPack) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SheetHeader(icon: .package, title: pack.name ?? "Pack",
+                        subtitle: pack.creator?.username.map { "@\($0)" }) { packForOptions = nil }
+            VStack(spacing: 0) {
+                if let api = pack.asMarketplacePack {
+                    OptionSheetRow(icon: .externalLink, title: "Open pack") {
+                        packForOptions = nil
+                        router.navigateToMarketplacePack(api)
+                    }
+                }
+                OptionSheetRow(icon: .trash2, title: "Remove from folder", tint: .vDestructive) {
+                    pendingPackRemoval = pack
+                    packForOptions = nil
+                }
+            }
+            .padding(.top, 6)
+        }
+        .selfSizedDetent()
+        .sheetBackground()
+    }
+
+    /// The pack sheet has closed: confirm, then unlink (optimistic).
+    func confirmPackRemoval() {
+        guard let pack = pendingPackRemoval else { return }
+        pendingPackRemoval = nil
+        ConfirmCenter.shared.present(DestructiveConfirm(
+            title: "Remove this pack from the folder?",
+            message: "The pack itself isn't affected — it just won't be linked here.",
+            actionLabel: "Remove"
+        ) {
+            do {
+                try await workspaceStore.removePack(packId: pack.packId, folderId: viewModel.folderId)
+                ToastCenter.shared.show("Removed from folder")
+            } catch {
+                debugLog("[FolderContents] remove pack failed: \(error)")
+                ToastCenter.shared.show("Only the folder owner or whoever added it can remove it.", style: .error)
+            }
+        })
+    }
+
     /// Always-visible ⋯ (touch has no hover).
     func rowMenuButton(_ file: ApiFolderFile) -> some View {
         Button { fileForOptions = file } label: {
             LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                 .foregroundStyle(Color.vText3)
                 .frame(width: 32, height: 32)
-                .contentShape(.rect)
+                .minimumHitArea(for: 32)
         }
         .buttonStyle(.plain)
     }
@@ -597,11 +713,27 @@ private extension FolderContentsScreen {
                 OptionSheetRow(icon: .userPlus, title: "Manage members") {
                     pendingAction = .members; viewModel.showOptions = false
                 }
+                OptionSheetRow(icon: .link, title: viewModel.shareLink == nil ? "Share public link" : "Public link") {
+                    pendingAction = .shareLink; viewModel.showOptions = false
+                }
+                // Packs are built on a computer; this is the phone's way in —
+                // the folder's files, already uploaded, straight into New Pack.
+                if (FeatureFlags.freePacks || FeatureFlags.marketplaceSurfaces), !viewModel.packableFiles.isEmpty {
+                    OptionSheetRow(icon: .package, title: "Publish as pack",
+                                   subtitle: "Open these \(viewModel.packableFiles.count) files in New Pack") {
+                        pendingAction = .publishPack; viewModel.showOptions = false
+                    }
+                }
                 OptionSheetRow(icon: .trash2, title: "Delete folder", tint: .vError) {
-                    pendingAction = .delete; viewModel.showOptions = false
+                    sheetConfirm = DestructiveConfirm(
+                        title: "Delete this folder?",
+                        message: "Every file in it is deleted for everyone it's shared with. This can't be undone.",
+                        actionLabel: "Delete folder"
+                    ) { deleteFolder() }
                 }
             }
             .padding(.top, 6)
+            .confirmModal($sheetConfirm)
         }
         .selfSizedDetent()
         .sheetBackground()
@@ -620,35 +752,74 @@ private extension FolderContentsScreen {
                 OptionSheetRow(icon: .download, title: "Download") {
                     shareFile(file)
                 }
+                if viewModel.canPostAsTrack(file) {
+                    OptionSheetRow(icon: .upload, title: "Post as track",
+                                   subtitle: "Open it in Upload Track") {
+                        Task {
+                            let prefill = await viewModel.prepareTrackPrefill(file)
+                            // Swiped away mid-download (that cancels it): only a
+                            // still-open sheet hands the file on.
+                            guard fileForOptions?.id == file.id else {
+                                if let prefill { try? FileManager.default.removeItem(at: prefill.localURL) }
+                                return
+                            }
+                            // Failure closes the sheet too, so the page's error banner shows.
+                            pendingTrackPrefill = prefill
+                            fileForOptions = nil
+                        }
+                    } trailing: {
+                        if viewModel.preparingTrackFileId == file.id {
+                            ProgressView().tint(Color.vText2)
+                        }
+                    }
+                    .disabled(viewModel.preparingTrackFileId != nil)
+                }
                 if file.type == "track" {
                     if viewModel.canUpload {
                         OptionSheetRow(icon: .trash2, title: "Remove from folder", tint: .vError) {
-                            trackToRemove = file
-                            fileForOptions = nil
+                            sheetConfirm = DestructiveConfirm(
+                                icon: .circleMinus,
+                                title: "Remove from this folder?",
+                                message: "The original track isn't affected.",
+                                actionLabel: "Remove"
+                            ) {
+                                if let trackId = file.trackId {
+                                    dependencies.contentActions.removeTrackFromFolder(trackId: trackId, folderId: viewModel.folderId)
+                                }
+                            }
                         }
                     }
                 } else if viewModel.canDelete(file) {
                     OptionSheetRow(icon: .trash2, title: "Delete", tint: .vError) {
-                        // Stage + close the sheet; the confirmation dialog presents
-                        // from the screen once the sheet is gone (see onDismiss).
-                        fileToDelete = file
-                        fileForOptions = nil
+                        sheetConfirm = DestructiveConfirm(
+                            title: "Delete this file?",
+                            message: "It's deleted for everyone in this folder. This can't be undone."
+                        ) {
+                            dependencies.contentActions.deleteFile(
+                                id: file.fileId, folderId: viewModel.folderId,
+                                describe: viewModel.friendlyDeleteError
+                            )
+                        }
                     }
                 }
             }
             .padding(.top, 6)
+            .confirmModal($sheetConfirm)
         }
         .selfSizedDetent()
         .sheetBackground()
     }
 
-    /// Hands the file's (already-resolved) URL to the system share sheet,
-    /// which carries "Save to Files" — the phone's download.
+    /// Hands the file's URL to the system share sheet, which carries "Save to
+    /// Files" — the phone's download. Files are already signed; a track
+    /// reference holds a track-media placeholder, signed here.
     func shareFile(_ file: ApiFolderFile) {
         AnalyticsService.shared?.log(.shareClicked, metadata: ["kind": "file", "method": "share_sheet"])
-        let items: [Any] = (file.fileUrl ?? file.trackAudioUrl).flatMap { URL(string: $0) }.map { [$0] }
-            ?? [file.name]
-        UIApplication.presentActivitySheet(items)
+        Task {
+            let raw = (file.fileUrl ?? file.trackAudioUrl).flatMap { URL(string: $0) }
+            let url: URL? = if let raw { await StorageService().playableURL(raw) } else { nil }
+            UIApplication.presentActivitySheet(url.map { [$0] } ?? [file.name])
+        }
     }
 
     /// Runs the chosen action once the options sheet finishes dismissing.
@@ -658,29 +829,46 @@ private extension FolderContentsScreen {
         switch action {
         case .edit: viewModel.startEditing()
         case .members: viewModel.showMembers = true
-        case .delete: viewModel.showDeleteConfirm = true
+        case .shareLink: viewModel.showShareLink = true
+        case .publishPack:
+            Task {
+                // The spinner chip shows while it downloads (isPreparingPack).
+                guard let prefill = await viewModel.preparePackPrefill() else { return }
+                NotificationCenter.default.post(name: .openNewPost, object: "sample_pack",
+                                                userInfo: ["packPrefill": prefill])
+            }
         case .none: break
         }
     }
 
+    /// Optimistic folder delete (ContentActions), then leave the page —
+    /// confirmed in the modal, so its sheet is already gone.
+    func deleteFolder() {
+        dependencies.contentActions.deleteFolder(id: viewModel.folderId)
+        dismiss()
+    }
+
     var editSheet: some View {
-        FolderFormSheet(
-            icon: .pencil,
+        EditDetailsScreen(
             title: "Edit Folder",
-            subtitle: nil,
+            subtitle: "Update its name and description",
+            nameLabel: "Folder name",
+            namePrompt: "e.g. Album Sessions, Client Work…",
             name: $viewModel.editName,
+            descriptionPrompt: "What's this folder for?",
             description: $viewModel.editDescription,
-            actionTitle: "Save changes",
+            hasChanges: viewModel.editName.trimmingCharacters(in: .whitespacesAndNewlines)
+                != viewModel.folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+                || viewModel.editDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                != viewModel.folderDescription.trimmingCharacters(in: .whitespacesAndNewlines),
             busy: viewModel.isSaving,
-            isEdit: true,
-            originalName: viewModel.folderName,
-            originalDescription: viewModel.folderDescription,
-            onDelete: {
-                viewModel.showEdit = false
-                // Present the confirm after the sheet is gone.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { viewModel.showDeleteConfirm = true }
-            },
-            onSubmit: { await viewModel.saveEdit() }
+            // Confirmed inside the edit page; the page leaves as it closes.
+            delete: .init(title: "Delete Folder", confirm: DestructiveConfirm(
+                title: "Delete this folder?",
+                message: "Every file in it is deleted for everyone it's shared with. This can't be undone.",
+                actionLabel: "Delete folder"
+            ) { deleteFolder() }),
+            onSave: { await viewModel.saveEdit() }
         )
     }
 }
@@ -733,9 +921,13 @@ struct FolderEmptyState: View {
 
 // MARK: - Manage Members (folder collaboration)
 
-private struct ManageMembersSheet: View {
+struct ManageMembersSheet: View {
     @Bindable var viewModel: FolderContentsViewModel
     @Environment(\.dismiss) private var dismiss
+    /// The member whose role sheet is open.
+    @State private var roleTarget: ApiFolderMember?
+    /// Both lists have landed — until then a skeleton holds the sheet's shape.
+    @State private var loaded = false
 
     /// Animation keys as plain strings, so the API structs need no Equatable.
     private var resultKeys: [String] { viewModel.searchResults.map(\.userId) }
@@ -748,64 +940,121 @@ private struct ManageMembersSheet: View {
         VStack(spacing: 0) {
             SheetHeader(
                 icon: .users,
-                title: "Manage Members",
+                title: "Members",
                 subtitle: viewModel.folderName
             ) { dismiss() }
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    addSection
-                    membersSection
+                // Skeleton and real content are separate layers that
+                // cross-fade in place once both lists have loaded, so nothing
+                // glides into position as the data arrives.
+                ZStack(alignment: .top) {
+                    if loaded {
+                        content.transition(.opacity)
+                    } else {
+                        skeleton.transition(.opacity)
+                    }
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 24)
-                // Every list edit (add, remove, filter, role change) glides
-                // instead of popping — keyed on derived ids, not the structs.
-                .animation(.smooth(duration: 0.28), value: resultKeys)
-                .animation(.smooth(duration: 0.28), value: memberKeys)
+                .padding(20)
+                .animation(.easeInOut(duration: 0.25), value: loaded)
             }
             .scrollDismissesKeyboard(.interactively)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .presentationDetents([.medium, .large])
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .presentationDetents([.large])
         .sheetBackground()
+        .sheet(item: $roleTarget) { roleSheet($0) }
         .task {
-            await viewModel.loadCollaborators()
+            // The role decides the invite section; opened from the Workspace
+            // hold sheet it may not be known yet (cached folder list — cheap).
+            await viewModel.loadFolderMeta()
+            if viewModel.isOwner { await viewModel.loadCollaborators() }
             await viewModel.loadMembers()
+            loaded = true
         }
     }
 
-    private var addSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            // Only the owner invites / changes roles; members see the list.
+            if viewModel.isOwner { inviteSection }
+            // No "In this folder · 0" — the section appears with its first member.
+            if !viewModel.members.isEmpty {
+                membersSection
+                    .transition(.opacity)
+            }
+        }
+        // Every list edit (add, remove, filter, role change) glides instead
+        // of popping — keyed on derived ids. Mounted after loading, so the
+        // first data doesn't animate in.
+        .animation(.smooth(duration: 0.28), value: resultKeys)
+        .animation(.smooth(duration: 0.28), value: memberKeys)
+    }
+
+    /// The sheet's shape while loading: the invite heading + a still search
+    /// field + rows (owner), then "In this folder" + rows.
+    private var skeleton: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            if viewModel.isOwner {
+                VStack(alignment: .leading, spacing: 8) {
+                    SheetFieldLabel("Invite collaborators")
+                    Text("New members join as editors. Change it anytime below.")
+                        .font(.appCaption).foregroundStyle(Color.vText3)
+                    HStack(spacing: 8) {
+                        LucideIcon(.search, .sm).foregroundStyle(Color.vText3)
+                        Text("Search your collaborators…").font(.appBody).foregroundStyle(Color.vText3)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                    memberBones(count: 2)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                SheetFieldLabel("In this folder")
+                memberBones(count: 3)
+            }
+        }
+    }
+
+    /// Rows in the person-row geometry (38pt avatar, name over role, pill).
+    private func memberBones(count: Int) -> some View {
+        SkeletonRows(
+            count: count,
+            thumb: .circle(size: 38),
+            line1: CGSize(width: 120, height: 12),
+            line2: CGSize(width: 90, height: 10),
+            trailing: CGSize(width: Self.pillWidth, height: 32),
+            thumbSpacing: 11,
+            horizontalPadding: 0,
+            verticalPadding: 8
+        )
+    }
+
+    // MARK: Invite
+
+    private var inviteSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SheetFieldLabel("Invite collaborators")
+            Text("New members join as editors. Change it anytime below.")
+                .font(.appCaption).foregroundStyle(Color.vText3)
             searchField
 
-            // The list under the field is self-explaining: your remaining
-            // collaborators by default, live results while typing.
-            Text(isFiltering ? "Results" : "Your collaborators")
-                .font(.appLabel).foregroundStyle(Color.vText3)
-                .padding(.top, 4)
-                .contentTransition(.opacity)
-                .animation(.smooth(duration: 0.2), value: isFiltering)
-
-            if viewModel.isLoadingCollaborators && viewModel.searchResults.isEmpty {
-                ProgressView().tint(Color.vText2)
-                    .frame(maxWidth: .infinity).padding(.vertical, 18)
-            } else if viewModel.searchResults.isEmpty {
+            if viewModel.searchResults.isEmpty {
                 emptyResultsHint
                     .transition(.opacity)
             } else {
-                VStack(spacing: 8) {
-                    ForEach(viewModel.searchResults) { searchResultRow($0) }
+                VStack(spacing: 2) {
+                    ForEach(viewModel.searchResults) { inviteRow($0) }
                 }
             }
         }
     }
 
     private var searchField: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             LucideIcon(.search, .sm).foregroundStyle(Color.vText3)
             TextField("", text: $viewModel.memberSearch, prompt: Text("Search your collaborators…").foregroundColor(Color.vText3))
-                .font(.appCalloutRegular).foregroundStyle(Color.vText).tint(Color.vText)
+                .font(.appBody).foregroundStyle(Color.vText).tint(Color.vText)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
             if isFiltering {
@@ -820,8 +1069,7 @@ private struct ManageMembersSheet: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
         }
-        .padding(.horizontal, 14)
-        .frame(height: 46)
+        .padding(.horizontal, 12).padding(.vertical, 10)
         .background(Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         .animation(.smooth(duration: 0.2), value: isFiltering)
         .onChange(of: viewModel.memberSearch) { _, _ in Task { await viewModel.searchUsers() } }
@@ -833,140 +1081,139 @@ private struct ManageMembersSheet: View {
         let message: String = if isFiltering {
             "No collaborators match “\(viewModel.memberSearch.trimmingCharacters(in: .whitespaces))”."
         } else if viewModel.allCollaborators.isEmpty {
-            "No collaborators yet. Connect with people from their profile, then add them here."
+            "No collaborators yet. Connect with people from their profile, then invite them here."
         } else {
             "All of your collaborators are already in this folder."
         }
         return Text(message)
-            .font(.appFootnote)
-            .foregroundStyle(Color.vText3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(Color.vCard, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .font(.appFootnote).foregroundStyle(Color.vText3)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 16)
     }
 
-    private func searchResultRow(_ user: ApiUserSummary) -> some View {
-        HStack(spacing: 12) {
-            avatar(viewModel.avatarURL(user.profileImageUrl))
-            Text(user.username ?? "user").font(.appCalloutSemibold).foregroundStyle(Color.vText).lineLimit(1)
-            Spacer(minLength: 8)
+    /// Every trailing pill here (Invite, Owner, a role ▾) — and its spinner —
+    /// takes this one width, so they line up whatever the label / chevron.
+    private static let pillWidth: CGFloat = 96
+
+    private func inviteRow(_ user: ApiUserSummary) -> some View {
+        personRow(url: user.profileImageUrl, name: user.username, subtitle: "Collaborator") {
             if viewModel.memberActionId == user.userId {
                 ProgressView().controlSize(.small).tint(Color.vText)
+                    .frame(width: Self.pillWidth)
             } else {
                 // Only the pill is tappable — the row itself is inert, so a
-                // stray tap on the card can't add someone by accident.
+                // stray tap can't add someone by accident.
                 Button { Task { await viewModel.addMember(user) } } label: {
-                    HStack(spacing: 4) {
-                        LucideIcon(.plus, .xs)
-                        Text("Add").font(.appCaptionMedium)
-                    }
-                    .foregroundStyle(Color.vOnInverse)
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Color.vInverse, in: Capsule())
-                    .contentShape(.capsule)
+                    CapsuleButtonLabel(icon: .plus, title: "Invite", expands: true)
+                        .frame(width: Self.pillWidth)
                 }
                 .buttonStyle(.plain)
                 .disabled(viewModel.memberActionId != nil)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
-        .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-        .transition(.opacity.combined(with: .scale(scale: 0.97)))
     }
+
+    // MARK: Members
 
     private var membersSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("In this folder (\(viewModel.members.count))")
-                .font(.appLabel).foregroundStyle(Color.vText3)
-            if viewModel.isLoadingMembers && viewModel.members.isEmpty {
-                ProgressView().tint(Color.vText2).frame(maxWidth: .infinity).padding(.vertical, 30)
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(viewModel.members) { memberCard($0) }
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            SheetFieldLabel("In this folder")
+            VStack(spacing: 2) {
+                ForEach(viewModel.members) { memberRow($0) }
             }
         }
     }
 
-    private func memberCard(_ member: ApiFolderMember) -> some View {
+    private func memberRow(_ member: ApiFolderMember) -> some View {
         let isOwnerMember = member.role == "owner"
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                avatar(viewModel.avatarURL(member.profileImageUrl))
-                Text(member.username ?? "user").font(.appCalloutSemibold).foregroundStyle(Color.vText).lineLimit(1)
-                Spacer(minLength: 8)
-                if isOwnerMember {
-                    HStack(spacing: 4) {
-                        Text("Owner").font(.appLabel).foregroundStyle(Color.vOwnerGold)
-                    }
-                    .padding(.horizontal, 9).padding(.vertical, 5)
-                    .background(Color.vOwnerGold.opacity(0.12), in: Capsule())
-                } else if viewModel.memberActionId == member.userId {
-                    ProgressView().controlSize(.small).tint(Color.vText)
-                } else {
-                    Button { Task { await viewModel.removeMember(member) } } label: {
-                        Text("Remove").font(.appCaptionMedium)
-                            .foregroundStyle(Color.vError)
-                            .padding(.horizontal, 12).padding(.vertical, 6)
-                            .background(Color.vDangerSoft, in: Capsule())
-                            .contentShape(.capsule)
-                    }
-                    .buttonStyle(.plain)
-                }
+        return personRow(url: member.profileImageUrl, name: member.username, subtitle: Self.roleBlurb(member.role)) {
+            if isOwnerMember {
+                // Same capsule as a role, just not tappable.
+                CapsuleButtonLabel(title: "Owner", style: .secondary, expands: true)
+                    .frame(width: Self.pillWidth)
+            } else if !viewModel.isOwner {
+                // Read-only for members: the role, not a menu.
+                CapsuleButtonLabel(title: member.role.capitalized, style: .secondary, expands: true)
+                    .frame(width: Self.pillWidth)
+            } else if viewModel.memberActionId == member.userId {
+                ProgressView().controlSize(.small).tint(Color.vText)
+                    .frame(width: Self.pillWidth)
+            } else {
+                roleMenu(member)
             }
-            if !isOwnerMember {
-                MemberRolePicker(member: member) { role in
+        }
+    }
+
+    /// The role as the app's secondary capsule + chevron; it opens the role
+    /// sheet (Editor / Viewer, Remove).
+    private func roleMenu(_ member: ApiFolderMember) -> some View {
+        Button { roleTarget = member } label: {
+            CapsuleButtonLabel(title: member.role.capitalized, style: .secondary, expands: true, trailingIcon: .chevronDown)
+                .frame(width: Self.pillWidth)
+                .contentTransition(.opacity)
+        }
+        .buttonStyle(.plain)
+        .disabled(viewModel.memberActionId != nil)
+    }
+
+    private func roleSheet(_ member: ApiFolderMember) -> some View {
+        let name = member.username ?? "user"
+        return ChoiceSheet(
+            title: "@\(name)",
+            subtitle: "Role in \(viewModel.folderName)",
+            icon: .userCheck,
+            choices: ["editor", "viewer"].map { role in
+                SheetChoice(
+                    icon: role == "editor" ? .pencil : .eye,
+                    title: role.capitalized,
+                    subtitle: Self.roleBlurb(role),
+                    selected: member.role == role
+                ) {
+                    guard member.role != role else { return }
                     Task { await viewModel.updateMemberRole(member, role: role) }
                 }
-            }
+            },
+            destructive: (
+                title: "Remove from folder",
+                icon: .userX,
+                confirm: DestructiveConfirm(
+                    icon: .userX,
+                    title: "Remove @\(name)?",
+                    message: "They'll lose access to this folder's files.",
+                    actionLabel: "Remove"
+                ) { await viewModel.removeMember(member) }
+            )
+        )
+    }
+
+    private static func roleBlurb(_ role: String) -> String {
+        switch role {
+        case "owner": "Manages members and files"
+        case "editor": "Can add and edit files"
+        default: "Can view and download"
         }
-        .padding(12)
-        .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+    }
+
+    // MARK: Row
+
+    /// One person: avatar, name / subtitle in the shared row fonts, and a
+    /// trailing control — the same flat row as the collab request's tracks.
+    private func personRow(
+        url: String?, name: String?, subtitle: String,
+        @ViewBuilder trailing: () -> some View
+    ) -> some View {
+        HStack(spacing: 11) {
+            AvatarView(url: viewModel.avatarURL(url), name: name, size: 38)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name ?? "user").font(.appFont.trackTitle).foregroundStyle(Color.vTextRow).lineLimit(1)
+                Text(subtitle).font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            trailing()
+        }
+        .padding(.horizontal, 10).padding(.vertical, 8)
         .transition(.opacity.combined(with: .scale(scale: 0.97)))
-    }
-
-    private func avatar(_ url: URL?) -> some View {
-        AvatarView(url: url, name: nil, size: 38)
-    }
-
-}
-
-/// The viewer/editor segmented picker on a member card. One ink
-/// highlight SLIDES between segments (matched geometry) — with the role
-/// updated optimistically in the view model, the slide is instant.
-private struct MemberRolePicker: View {
-    let member: ApiFolderMember
-    let onPick: (String) -> Void
-
-    private static let roles = ["viewer", "editor"]
-    @Namespace private var highlight
-
-    var body: some View {
-        HStack(spacing: 6) {
-            ForEach(Self.roles, id: \.self) { role in
-                let selected = member.role == role
-                Button { onPick(role) } label: {
-                    Text(role.capitalized)
-                        .font(selected ? .appLabel : .appCaptionMedium)
-                        .foregroundStyle(selected ? Color.vOnInverse : Color.vControlLabel)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .background {
-                            if selected {
-                                RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
-                                    .fill(Color.vInverse)
-                                    .matchedGeometryEffect(id: "role", in: highlight)
-                            } else {
-                                RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
-                                    .fill(Color.vControl)
-                            }
-                        }
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .animation(.smooth(duration: 0.28), value: member.role)
     }
 }
 

@@ -56,6 +56,8 @@ public extension Font {
     /// The pre-bump 12pt caption / label, kept for the Artist Dashboard,
     /// whose dense stat tiles and charts were sized around it.
     static let appCaptionCompact = Font.geist(12)
+    /// 12pt medium — the profile hero's stat labels.
+    static let appCaptionCompactMedium = Font.geist(12, weight: .medium)
     static let appLabelCompact = Font.geist(12, weight: .semibold)
 
     /// Medium 13pt metadata.
@@ -85,6 +87,8 @@ public extension Font {
     static let appTitle2 = Font.geist(20, weight: .bold)
     /// Semibold 20pt title.
     static let appTitle2Semibold = Font.geist(20, weight: .semibold)
+    /// Semibold 19pt — a detail page's title one step under `appTitle2` (listing detail).
+    static let appTitle2SemiboldCompact = Font.geist(19, weight: .semibold)
     /// Regular 20pt title.
     static let appTitle2Regular = Font.geist(20)
     /// Large body / prominent row titles (17pt).

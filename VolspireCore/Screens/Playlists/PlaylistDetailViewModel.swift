@@ -24,6 +24,15 @@ final class PlaylistDetailViewModel {
     var editDescription = ""
     var pickedCoverData: Data?
     var isSaving = false
+    /// Shown in the edit screen's bottom bar when a save fails.
+    var editError: String?
+    /// Save stays off until the name, description, or cover changed.
+    var hasEditChanges: Bool {
+        pickedCoverData != nil
+            || editTitle.trimmingCharacters(in: .whitespacesAndNewlines) != (detail?.title ?? "")
+            || editDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            != (detail?.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     let playlistId: String
     var currentUserId: String?
@@ -60,7 +69,7 @@ final class PlaylistDetailViewModel {
             state = .loaded
         } catch {
             debugLog("[PlaylistDetailVM] load: \(error)")
-            if detail == nil { state = .error(error.localizedDescription) }
+            state.fail(error, ifEmpty: detail == nil)
         }
     }
 
@@ -69,7 +78,10 @@ final class PlaylistDetailViewModel {
     func removeTrack(trackId: String) async {
         guard let library else { return }
         if await library.removeTrack(fromPlaylist: playlistId, trackId: trackId) {
+            ToastCenter.shared.show("Removed from playlist")
             await load()
+        } else {
+            ToastCenter.shared.show("Couldn't remove the track. Try again.", style: .error)
         }
     }
 
@@ -87,6 +99,7 @@ final class PlaylistDetailViewModel {
         let title = editTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, !isSaving else { return }
         isSaving = true
+        editError = nil
         do {
             var coverUrl: String?
             if let data = pickedCoverData, let me = currentUserId {
@@ -106,13 +119,9 @@ final class PlaylistDetailViewModel {
             await library?.playlistEdited()
         } catch {
             debugLog("[PlaylistDetailVM] saveEdit: \(error)")
+            editError = "Couldn't save your changes. Please try again."
         }
         isSaving = false
-    }
-
-    func deletePlaylist() async -> Bool {
-        guard let library else { return false }
-        return await library.deletePlaylist(playlistId: playlistId)
     }
 
     func cover(_ path: String?) -> URL? {
@@ -126,7 +135,7 @@ final class PlaylistDetailViewModel {
                 artwork: cover(track.coverUrl),
                 title: track.title,
                 artist: track.artistUsername,
-                audioURL: storage.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) }
+                audioURL: storage.trackMediaURL(track.audioUrl)
             )
         )
     }

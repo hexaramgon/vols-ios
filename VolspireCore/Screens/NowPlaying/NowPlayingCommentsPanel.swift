@@ -33,14 +33,12 @@ struct NowPlayingCommentsPanel: View {
     /// Comment whose options sheet (report / delete) is showing — opened by a
     /// long-press on the row, or the own-comment "…".
     @State private var optionsComment: ApiTrackComment?
+    /// The list's bottom edge on screen (changes only with layout).
+    @State private var listMaxY: CGFloat = .greatestFiniteMagnitude
     /// Staged when "Report" is tapped; presented once the options sheet has
     /// dismissed (avoids a sheet-over-sheet transition).
     @State private var pendingReportComment: ApiTrackComment?
     @State private var reportingComment: ApiTrackComment?
-    /// Own comment awaiting the "Delete comment" confirm (from its ⋯ menu).
-    @State private var confirmDeleteComment: ApiTrackComment?
-    /// Staged by the long-press sheet's Delete; confirmed once it has dismissed.
-    @State private var pendingDeleteComment: ApiTrackComment?
 
     /// Non-nil when a workspace file is playing — its comments load instead of track ones.
     private var currentFileId: String? { controller.currentFileId }
@@ -73,17 +71,13 @@ struct NowPlayingCommentsPanel: View {
                 pendingReportComment = nil
                 reportingComment = comment
             }
-            if let comment = pendingDeleteComment {
-                pendingDeleteComment = nil
-                confirmDeleteComment = comment
-            }
         }) { comment in
             CommentOptionsSheet(
                 comment: comment,
                 isOwn: model.isOwn(comment),
-                onReply: { model.replyingTo = comment },
+                onReply: { model.reply(to: comment) },
                 onReport: { pendingReportComment = comment },
-                onDelete: { pendingDeleteComment = comment }
+                onDelete: { model.delete(commentId: comment.commentId, trackId: currentTrackId, fileId: currentFileId) }
             )
         }
         .sheet(item: $reportingComment) { comment in
@@ -92,24 +86,9 @@ struct NowPlayingCommentsPanel: View {
             ReportSheet(
                 targetType: currentFileId != nil ? .fileComment : .trackComment,
                 targetId: comment.commentId,
-                subject: comment.user.username.map { "@\($0)" } ?? "Comment"
+                subject: comment.user.username.map { "@\($0)" } ?? "Comment",
+                alwaysDark: true
             )
-        }
-        .confirmationDialog(
-            "Delete comment",
-            isPresented: Binding(
-                get: { confirmDeleteComment != nil },
-                set: { if !$0 { confirmDeleteComment = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: confirmDeleteComment
-        ) { comment in
-            Button("Delete comment", role: .destructive) {
-                model.delete(commentId: comment.commentId, trackId: currentTrackId, fileId: currentFileId)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("This can't be undone.")
         }
     }
 
@@ -144,6 +123,12 @@ struct NowPlayingCommentsPanel: View {
 
     // MARK: List
 
+    /// How much of the list the lifted composer covers (0 when it's down).
+    private var composerOverlap: CGFloat {
+        guard model.composerTopY < listMaxY else { return 0 }
+        return listMaxY - model.composerTopY + 8
+    }
+
     private var commentsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -171,9 +156,20 @@ struct NowPlayingCommentsPanel: View {
                 .padding(.top, 12)
                 // Extra room so the last comment can scroll clear of the fade.
                 .padding(.bottom, 32)
+                // Rows never animate their layout: the keyboard / composer lift
+                // and the reply scroll run animated, and a lazily-built row
+                // created mid-animation flew in from nowhere. The scroll itself
+                // still animates (it's the scroll view's offset, not the rows),
+                // and the rows' own `.animation(_:value:)` washes still run.
+                .transaction { $0.animation = nil }
             }
             .scrollDismissesKeyboard(.interactively)
             .scrollDisabled(scrollLocked)
+            // While typing, the lifted composer + keyboard cover the list's
+            // bottom: inset by that much so the last comments scroll clear of
+            // it and a reply's "just above the composer" is the real edge.
+            .safeAreaPadding(.bottom, composerOverlap)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { listMaxY = $0 }
             // Soft bottom edge: comments dissolve out over the last ~32pt
             // instead of hard-clipping at the card's bottom.
             .mask(
@@ -190,13 +186,29 @@ struct NowPlayingCommentsPanel: View {
             } action: { _, isTop in
                 if atTop.wrappedValue != isTop { atTop.wrappedValue = isTop }
             }
-            // Tap anywhere in the list to dismiss the keyboard (collapses the input).
+            // Tap anywhere in the list to dismiss the keyboard (collapses the input)
+            // — except a tap on Reply, which keeps typing (it fired alongside the
+            // button and dropped the keyboard only for Reply to raise it again).
+            // Checked a beat later, as the button's action may run after this.
             .simultaneousGesture(TapGesture().onEnded {
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                let request = model.replyRequest
+                DispatchQueue.main.async {
+                    guard model.replyRequest == request else { return }
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
             })
             // New comments land at the top (RPC returns newest-first) — reveal them.
             .onChange(of: model.comments.first?.id) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(topAnchor, anchor: .top) }
+            }
+            // Replying (Instagram-style, like the listing page): once the
+            // composer is up, glide the comment to sit just above it.
+            .onChange(of: model.replyRequest) { _, _ in
+                guard let id = model.replyingTo?.id else { return }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    withAnimation(.smooth(duration: 0.45)) { proxy.scrollTo(id, anchor: .bottom) }
+                }
             }
             // Opened from the live comment toast: bring that comment into view,
             // highlighted, then let the highlight fade after a moment.
@@ -261,7 +273,11 @@ struct NowPlayingCommentsPanel: View {
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(.white.opacity(optionsComment?.id == comment.id ? 0.09
-                                     : model.highlightedCommentId == comment.id ? 0.12 : 0))
+                                     : (model.highlightedCommentId == comment.id
+                                        || model.replyingTo?.id == comment.id) ? 0.12 : 0))
+                // Only the wash animates — on the whole row this animation
+                // also caught the reply's relayout and flew other rows around.
+                .animation(.easeOut(duration: 0.2), value: model.replyingTo?.id)
                 .padding(.horizontal, -10)
                 .padding(.vertical, -8)
         )
@@ -278,7 +294,7 @@ struct NowPlayingCommentsPanel: View {
     @ViewBuilder
     private func actionsRow(_ comment: ApiTrackComment, isReply: Bool) -> some View {
         if !isReply {
-            actionButton(.reply, "Reply") { model.replyingTo = comment }
+            actionButton(.reply, "Reply") { model.reply(to: comment) }
         }
     }
 
@@ -328,9 +344,11 @@ private struct CommentOptionsSheet: View {
     let isOwn: Bool
     let onReply: () -> Void
     let onReport: () -> Void
+    /// Runs once the Delete confirm (the centered modal) is accepted.
     let onDelete: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var pendingConfirm: DestructiveConfirm?
 
     /// Only top-level comments can be replied to (one-level threading).
     private var canReply: Bool { comment.parentId == nil }
@@ -356,8 +374,10 @@ private struct CommentOptionsSheet: View {
                 }
                 if isOwn {
                     OptionSheetRow(icon: .trash2, title: "Delete comment", tint: .vError) {
-                        dismiss()
-                        onDelete()
+                        pendingConfirm = DestructiveConfirm(
+                            title: "Delete this comment?",
+                            message: "This can't be undone."
+                        ) { onDelete() }
                     }
                 } else {
                     OptionSheetRow(icon: .triangleAlert, title: "Report") {
@@ -367,6 +387,7 @@ private struct CommentOptionsSheet: View {
                 }
             }
             .padding(.top, 6)
+            .confirmModal($pendingConfirm)
         }
         .selfSizedDetent()
         .sheetBackground(alwaysDark: true)

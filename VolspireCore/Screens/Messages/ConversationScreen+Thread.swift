@@ -10,6 +10,7 @@ import DesignSystem
 import Kingfisher
 import MediaLibrary
 import PhotosUI
+import Services
 import SharedUtilities
 import SwiftUI
 import UniformTypeIdentifiers
@@ -95,6 +96,11 @@ struct ChatThread: View {
                 messageList
             } else if viewModel.loadingState == .loaded {
                 emptyState
+            } else if case .error = viewModel.loadingState {
+                LoadErrorView(icon: .messageCircle, title: "Couldn't load messages") {
+                    Task { await viewModel.load() }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ThreadSkeleton()
             }
@@ -147,13 +153,11 @@ struct ChatThread: View {
             allowedContentTypes: [.image, .pdf, .audio, .movie, .plainText, .data],
             allowsMultipleSelection: false
         ) { handleFile($0) }
-        .alert("Attachment", isPresented: Binding(
-            get: { viewModel.attachmentError != nil },
-            set: { if !$0 { viewModel.attachmentError = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(viewModel.attachmentError ?? "")
+        // Failures surface as the app's error toast, not a system alert.
+        .onChange(of: viewModel.attachmentError) { _, error in
+            guard let error else { return }
+            ToastCenter.shared.show(error, style: .error)
+            viewModel.attachmentError = nil
         }
         // "Add to Workspace" for an audio attachment — pick a folder to copy it into.
         .sheet(item: $workspaceTarget) { target in
@@ -263,10 +267,14 @@ struct ChatThread: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // Non-lazy: the thread is capped at 50 messages, and a LazyVStack
-                // doesn't render the bottom rows until scrolled — which makes the
-                // initial scroll-to-bottom silently no-op (opening blank).
+                // Non-lazy: a page is 50 messages (more only when the user asks
+                // for earlier ones), and a LazyVStack doesn't render the bottom
+                // rows until scrolled — which makes the initial scroll-to-bottom
+                // silently no-op (opening blank).
                 VStack(spacing: 0) {
+                    if viewModel.hasOlder {
+                        loadOlderButton(proxy)
+                    }
                     ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, msg in
                         let divider = shouldShowDivider(at: index)
                         if divider { timeDivider(msg.createdAt) }
@@ -290,7 +298,9 @@ struct ChatThread: View {
             // Tap on inert space drops the keyboard (bubbles' own taps/long-
             // presses still win) — the app-wide behaviour.
             .tapToDismissKeyboard()
-            .onChange(of: viewModel.messages.count) { _, _ in scrollToBottom(proxy, animated: true) }
+            // Follow a NEW latest message only — prepending earlier pages must
+            // not yank the thread to the bottom.
+            .onChange(of: viewModel.messages.last?.id) { _, _ in scrollToBottom(proxy, animated: true) }
             // `defaultScrollAnchor` alone can land at the top when messages arrive
             // after first layout — force the bottom once the list is on screen.
             .onAppear { DispatchQueue.main.async { scrollToBottom(proxy, animated: false) } }
@@ -305,6 +315,35 @@ struct ChatThread: View {
                 }
             }
         }
+    }
+
+    /// Loads the previous page, then re-pins to the message that was on top so
+    /// the reader's place doesn't jump.
+    private func loadOlderButton(_ proxy: ScrollViewProxy) -> some View {
+        Button {
+            let anchor = viewModel.messages.first?.id
+            Task {
+                await viewModel.loadOlder()
+                // The prepended rows must be laid out before the re-pin lands.
+                try? await Task.sleep(for: .milliseconds(50))
+                if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+            }
+        } label: {
+            Group {
+                if viewModel.isLoadingOlder {
+                    ProgressView()
+                } else {
+                    Text("Load earlier messages")
+                        .font(.appFootnoteMedium)
+                        .foregroundStyle(Color.vText2)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(viewModel.isLoadingOlder)
+        .padding(.top, 6)
     }
 
     private func timeDivider(_ date: Date) -> some View {
@@ -371,7 +410,7 @@ struct ChatThread: View {
                 .padding(.vertical, 6)
         } else {
             HStack(spacing: 0) {
-                if msg.isFromMe { Spacer(minLength: 56) }
+                if msg.isFromMe { Spacer(minLength: 40) }
                 VStack(alignment: msg.isFromMe ? .trailing : .leading, spacing: 4) {
                     if msg.isAttachment { attachmentView(msg, tail: tail) }
                     // An image's caption lives inside the image bubble.
@@ -387,7 +426,7 @@ struct ChatThread: View {
                     }
                 }
                 .opacity(msg.pending ? 0.5 : 1)
-                if !msg.isFromMe { Spacer(minLength: 56) }
+                if !msg.isFromMe { Spacer(minLength: 40) }
             }
         }
     }
@@ -413,37 +452,43 @@ struct ChatThread: View {
     /// direction-aware wording for pending / accepted / declined (the actions
     /// themselves live in the conversation header).
     private func collabStatusMessage(_ msg: ChatMessage) -> some View {
-        let (icon, text, tint): (LucideIcon.Name, String, Color) = switch msg.requestStatus ?? "pending" {
+        let status = msg.requestStatus ?? "pending"
+        let text = switch status {
         case "accepted":
-            (.circleCheck,
-             msg.isFromMe
-                 ? "@\(otherUsername) accepted your collab request — you can now message each other."
-                 : "You accepted the collab request — you can now message each other.",
-             .green)
+            msg.isFromMe
+                ? "@\(otherUsername) accepted your collab request. You can now message each other."
+                : "You accepted the collab request. You can now message each other."
         case "rejected":
-            (.circleX,
-             msg.isFromMe
-                 ? "@\(otherUsername) declined your collab request."
-                 : "You declined the collab request.",
-             Color.vText3)
+            msg.isFromMe
+                ? "@\(otherUsername) declined your collab request."
+                : "You declined the collab request."
         default:
-            (.clock,
-             msg.isFromMe
-                 ? "Waiting for @\(otherUsername) to respond — messaging unlocks once they accept."
-                 : "@\(otherUsername) wants to collaborate — accept to start messaging.",
-             Color.vText3)
+            msg.isFromMe
+                ? "Waiting for @\(otherUsername) to respond. Messaging unlocks once they accept."
+                : "@\(otherUsername) wants to collaborate. Accept to start messaging."
         }
-        return HStack(alignment: .firstTextBaseline, spacing: 6) {
-            LucideIcon(icon, .xs)
+        // Same neutral surface as other system rows; the outcome rides on the
+        // app's pop mark (green check / grey cross) rather than tinted text.
+        // Static, not SuccessMark: it's a status line, so it mustn't re-pop
+        // every time the thread opens.
+        return HStack(spacing: 8) {
+            switch status {
+            case "accepted": PopMark(isOn: true, rest: .none, size: 18)
+            case "rejected": PopMark(isOn: true, mark: .cross, rest: .none, tint: Color.vText3, size: 18)
+            default: LucideIcon(.clock, .xs).foregroundStyle(Color.vText3)
+            }
             Text(text)
+                .font(.appCaption)
+                .foregroundStyle(Color.vText2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .font(.appCaption2Medium)
-        .foregroundStyle(tint)
-        .multilineTextAlignment(.center)
-        .padding(.horizontal, 14)
+        .padding(.leading, 10)
+        .padding(.trailing, 14)
         .padding(.vertical, 8)
         .background(Color.vSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .frame(maxWidth: .infinity)
+        .padding(.horizontal, ViewConst.screenPaddings)
         .padding(.top, 10)
         .padding(.bottom, 4)
     }
@@ -451,14 +496,16 @@ struct ChatThread: View {
     private func textBubble(_ text: String, isFromMe: Bool, tail: Bool) -> some View {
         let shape = bubbleShape(isFromMe: isFromMe, tail: tail)
         return Text(text)
-            .font(.appCalloutRegular)
-            .foregroundStyle(Color.vText)
+            .font(.appBody)
+            // Yours: the brand accent with white type (iMessage-style), so your
+            // side of the thread reads at a glance; theirs stays neutral.
+            .foregroundStyle(isFromMe ? Color.vOnColor : Color.vText)
+            .tint(isFromMe ? Color.vOnColor : Color.vAccent)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            // Outgoing neutral-800, incoming neutral-900 (web parity).
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
             .background {
-                shape.fill(isFromMe ? Color.vSurface2 : Color.vSurface)
+                shape.fill(isFromMe ? Color.vAccent : Color.vSurface)
             }
     }
 
@@ -622,12 +669,12 @@ struct ChatThread: View {
 
     // MARK: Input
 
-    /// Replaces the composer while a collab request of ours is unanswered or
-    /// declined. Same chrome as `inputBar` (hairline + `vBase` bleeding into the
+    /// Replaces the composer while a collab request (either side's) is
+    /// unanswered or declined. Same chrome as `inputBar` (hairline + `vBase` bleeding into the
     /// safe area) so the bottom of the screen doesn't change shape.
     private func gatedNotice(_ gate: CollabRequestGate) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            LucideIcon(.clock, .sm)
+            LucideIcon(gate == .declined || gate == .youDeclined ? .circleX : .clock, .sm)
                 .foregroundStyle(Color.vText3)
                 .padding(.top, 1)
             Text(gate.message)
@@ -639,7 +686,6 @@ struct ChatThread: View {
         .padding(.vertical, 14)
         .background {
             Color.vBase
-                .overlay(alignment: .top) { Rectangle().fill(Color.vDivider).frame(height: 1) }
                 .ignoresSafeArea(edges: .bottom)
         }
     }
@@ -657,43 +703,47 @@ struct ChatThread: View {
                     inputFocused = false
                     showAttachSheet = true
                 } label: {
-                    LucideIcon(.paperclip, .lg)
+                    LucideIcon(.paperclip, .xl)
                         .foregroundStyle(showAttachSheet ? Color.vText : Color.vText3)
-                        .frame(width: 32, height: 40)
-                        .contentShape(.rect)
+                        .frame(width: 36, height: 40)
+                        .minimumHitArea(for: 36)
                 }
                 .buttonStyle(.plain)
                 .disabled(viewModel.isSending)
                 .accessibilityLabel("Attach")
 
-                // One 40pt capsule with the send button inside: grey until
-                // there's something to send, then accent.
+                // One 40pt capsule with the send button inside — the Now
+                // Playing comment composer's: an accent send button that pops in once
+                // there's something to send.
                 HStack(alignment: .bottom, spacing: 4) {
-                    TextField("", text: $viewModel.draft, prompt: Text(pendingAttachment != nil ? "Add a caption…" : "Message…").foregroundStyle(Color.vText3), axis: .vertical)
-                        .font(.appSubheadline)
+                    TextField("", text: Binding(
+                        get: { viewModel.draft },
+                        // The server's message cap (send_message*).
+                        set: { viewModel.draft = String($0.prefix(2000)) }
+                    ), prompt: Text(pendingAttachment != nil ? "Add a caption…" : "Message…").foregroundStyle(Color.vText3), axis: .vertical)
+                        .font(.appBody)
                         .foregroundStyle(Color.vText)
                         .tint(Color.vText)
                         .focused($inputFocused)
                         .lineLimit(1 ... 5)
                         .padding(.leading, 16)
+                        // Text keeps clear of the capsule's edge while the
+                        // send button is hidden.
+                        .padding(.trailing, canSend || viewModel.isSending ? 0 : 12)
                         .padding(.vertical, 10)
 
-                    Button {
-                        sendCurrent()
-                    } label: {
-                        LucideIcon(.send, .md)
-                            .foregroundStyle(canSend ? Color.vOnColor : Color.vText4)
-                            .frame(width: 32, height: 32)
-                            .background(canSend ? Color.vAccent : Color.vControl, in: Circle())
+                    NearLimitCounter(count: viewModel.draft.count, limit: 2000)
+                        .padding(.bottom, 12)
+                    if canSend || viewModel.isSending {
+                        SendButton(busy: viewModel.isSending) { sendCurrent() }
+                            .padding(4)
+                            .transition(.scale.combined(with: .opacity))
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!canSend)
-                    .padding(4)
-                    .accessibilityLabel("Send")
                 }
                 .frame(minHeight: 40)
                 .background(Color.vField, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .animation(.easeOut(duration: 0.15), value: canSend)
+                .animation(.easeOut(duration: 0.15), value: viewModel.isSending)
             }
         }
         .padding(.horizontal, ViewConst.screenPaddings)
@@ -704,7 +754,6 @@ struct ChatThread: View {
             // so the bar simply pins to the bottom: above the keyboard when typing,
             // above the home indicator otherwise. The fill bleeds into the inset.
             Color.vBase
-                .overlay(alignment: .top) { Rectangle().fill(Color.vDivider).frame(height: 1) }
                 .ignoresSafeArea(edges: .bottom)
         }
     }
@@ -739,10 +788,11 @@ struct ChatThread: View {
             Button {
                 withAnimation(.easeOut(duration: 0.2)) { pendingAttachment = nil }
             } label: {
-                LucideIcon(.x, .sm)
+                LucideIcon(.x, .md)
                     .foregroundStyle(Color.vText2)
                     .frame(width: 30, height: 30)
                     .background(Color.vControl, in: Circle())
+                    .minimumHitArea(for: 30)
             }
             .buttonStyle(.plain)
         }
@@ -791,8 +841,18 @@ struct ChatThread: View {
     /// Stages the picked file in the input bar (does not send).
     private func handleFile(_ result: Result<[URL], Error>) {
         guard case let .success(urls) = result, let url = urls.first else { return }
-        // Shared scoped-access dance; denied access or a failed read = silent skip.
-        guard let data = (try? SecurityScopedFile.read(url)) ?? nil else { return }
+        // Shared scoped-access dance; denied access or a failed read = silent
+        // skip, but an over-cap file says so (checked before it's read in).
+        let data: Data
+        do {
+            guard let read = try SecurityScopedFile.read(url, maxBytes: StorageBucket.messageAttachments.maxUploadBytes) else { return }
+            data = read
+        } catch let error as FileTooLargeError {
+            viewModel.attachmentError = error.localizedDescription
+            return
+        } catch {
+            return
+        }
         let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
         let preview = mime.hasPrefix("image") ? UIImage(data: data) : nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -904,14 +964,15 @@ private struct ChatImageBubble: View {
             if hasCaption {
                 Text(caption)
                     .font(.appCalloutRegular)
-                    .foregroundStyle(Color.vText)
+                    .foregroundStyle(isFromMe ? Color.vOnColor : Color.vText)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 9)
                     .frame(width: size.width, alignment: .leading)
             }
         }
-        .background(isFromMe ? Color.vSurface2 : Color.vSurface)
+        // A sent photo's caption sits on your accent, like your text bubbles.
+        .background(isFromMe ? Color.vAccent : Color.vSurface)
         .clipShape(shape)
         .overlay { shape.strokeBorder(Color.ink(0.08), lineWidth: 0.5) }
         .contentShape(shape)
@@ -978,7 +1039,7 @@ private struct AttachSheet: View {
 
             HStack(spacing: 12) {
                 tile(icon: .image, title: "Photos", caption: "From your library",
-                     fill: Color.vAccent, glyph: Color.vOnColor, action: onPhotos)
+                     fill: Color.vInverse, glyph: Color.vOnInverse, action: onPhotos)
                 tile(icon: .file, title: "Files", caption: "Docs, audio, video",
                      fill: Color.vInverse, glyph: Color.vOnInverse, action: onFiles)
             }

@@ -85,9 +85,10 @@ struct WorkspaceActivityRail: View {
                     .shadow(color: .black.opacity(selected ? 0.25 : 0), radius: 8, y: 4)
                     .frame(width: 66, height: 66)
                 Text("@\(g.username ?? "user")")
-                    // Unchanged when selected — the accent bar marks it.
-                    .font(.appCaption)
-                    .foregroundStyle(Color.vText2)
+                    // Regular 13pt in full ink. Unchanged when selected — the
+                    // accent bar marks it.
+                    .font(.appFootnote)
+                    .foregroundStyle(Color.vText)
                     .lineLimit(1)
                 Capsule()
                     .fill(Color.vAccent)
@@ -112,11 +113,11 @@ struct WorkspaceActivityRail: View {
                 AvatarView(url: workspace.activityAvatarURL(g.avatar), name: g.username, size: 40)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("@\(g.username ?? "user")")
-                        .font(.appSubheadlineSemibold)
+                        .font(.appSubheadline)
                         .foregroundStyle(Color.vText)
                         .lineLimit(1)
                     Text("\(g.events.count) \(g.events.count == 1 ? "update" : "updates") this month")
-                        .font(.appCaption)
+                        .font(.appFootnote)
                         .foregroundStyle(Color.vText3)
                         .lineLimit(1)
                 }

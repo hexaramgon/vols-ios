@@ -39,13 +39,26 @@ enum ProfileTab: String, CaseIterable, Hashable {
     case tracks = "Tracks"
     case featuredOn = "Featured On"
     case market = "Market"
+    /// The artist's marketplace packs (shown only when they have some).
+    case packs = "Packs"
 
-    /// Tab label — the collab-listings tab reads "Listings" (web parity).
+    /// Tab name (VoiceOver) — the collab-listings tab reads "Listings" (web parity).
     var title: String {
         switch self {
         case .tracks: "Tracks"
         case .featuredOn: "Featured On"
         case .market: "Listings"
+        case .packs: "Marketplace"
+        }
+    }
+
+    /// The tab bar's glyph (icons, so four tabs fit the bar).
+    var icon: LucideIcon.Name {
+        switch self {
+        case .tracks: .music
+        case .featuredOn: .users
+        case .market: .megaphone
+        case .packs: .package
         }
     }
 }

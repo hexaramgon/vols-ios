@@ -72,6 +72,12 @@ final class AnalyticsViewModel {
         tracks.first { $0.id == selectedId } ?? tracks.first
     }
 
+    /// Pull-to-refresh: past the response cache.
+    func refresh() async {
+        await supabaseService.invalidateAnalytics()
+        await load()
+    }
+
     func load() async {
         do {
             tracks = try await supabaseService.getMyTrackAnalytics().map { row in

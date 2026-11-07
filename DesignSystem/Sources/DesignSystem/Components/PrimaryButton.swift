@@ -13,6 +13,24 @@
 
 import SwiftUI
 
+/// Label sizing shared by `PrimaryButton` / `SecondaryButton`. A hugging
+/// capsule takes the label's natural width; a full-width one keeps the label
+/// inside with side padding — shrinking slightly, then truncating — instead of
+/// letting a long title spill past the capsule.
+struct CapsuleLabelFit: ViewModifier {
+    let expands: Bool
+
+    func body(content: Content) -> some View {
+        if expands {
+            content
+                .minimumScaleFactor(0.85)
+                .padding(.horizontal, 16)
+        } else {
+            content.fixedSize()
+        }
+    }
+}
+
 public struct PrimaryButton: View {
     public enum Size {
         /// 52pt full-width — the bottom CTA of forms and sheets.
@@ -25,6 +43,7 @@ public struct PrimaryButton: View {
     }
 
     private let title: String
+    private let icon: LucideIcon.Name?
     private let size: Size
     private let expands: Bool
     private let busy: Bool
@@ -32,11 +51,13 @@ public struct PrimaryButton: View {
     private let action: () -> Void
 
     /// - Parameters:
+    ///   - icon: optional leading Lucide glyph (same slot as `SecondaryButton`'s).
     ///   - expands: false renders a hugging capsule instead of full width.
     ///   - busy: shows a spinner in place of the label and blocks taps.
     ///   - enabled: false blocks taps and shows the disabled capsule.
     public init(
         _ title: String,
+        icon: LucideIcon.Name? = nil,
         size: Size = .full,
         expands: Bool = true,
         busy: Bool = false,
@@ -44,6 +65,7 @@ public struct PrimaryButton: View {
         action: @escaping () -> Void
     ) {
         self.title = title
+        self.icon = icon
         self.size = size
         self.expands = expands
         self.busy = busy
@@ -57,13 +79,18 @@ public struct PrimaryButton: View {
                 if busy {
                     ProgressView().tint(Color.vOnInverse)
                 } else {
-                    Text(title).font(size.font)
+                    HStack(spacing: 6) {
+                        if let icon { LucideIcon(icon, .md) }
+                        Text(title).font(size.font).lineLimit(1)
+                    }
+                    .modifier(CapsuleLabelFit(expands: expands))
                 }
             }
             .foregroundStyle(enabled ? Color.vOnInverse : Color.vText4)
             .frame(maxWidth: expands ? .infinity : nil)
             .frame(height: size.height)
-            .padding(.horizontal, expands ? 0 : 32)
+            // Hugging: the glyph already widens it, so less side padding.
+            .padding(.horizontal, expands ? 0 : (icon == nil ? 32 : 20))
             .background(enabled ? Color.vInverse : Color.vControl, in: Capsule())
             .contentShape(Capsule())
         }

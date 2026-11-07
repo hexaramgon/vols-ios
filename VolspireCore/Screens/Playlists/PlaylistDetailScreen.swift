@@ -21,7 +21,6 @@ struct PlaylistDetailScreen: View {
     @Environment(SocialStore.self) private var socialStore
 
     @State private var viewModel: PlaylistDetailViewModel
-    @State private var showDeleteConfirm = false
     @State private var showOptions = false
     @State private var showAddTracks = false
     let title: String
@@ -75,15 +74,15 @@ struct PlaylistDetailScreen: View {
                 await viewModel.load()
             }
             .sheet(isPresented: $showOptions) { optionsSheet }
-            .sheet(isPresented: $viewModel.showEdit) { editSheet }
+            // Full screen, laid out like Edit Track.
+            .fullScreenCover(isPresented: $viewModel.showEdit) {
+                EditPlaylistScreen(viewModel: viewModel)
+            }
             .sheet(isPresented: $showAddTracks) {
                 AddTracksSheet(
                     playlistId: viewModel.playlistId,
                     existingIds: Set(viewModel.tracks.map(\.trackId))
                 ) { Task { await viewModel.load() } }
-            }
-            .destructiveConfirm("Delete this playlist?", isPresented: $showDeleteConfirm) {
-                Task { if await viewModel.deletePlaylist() { dismiss() } }
             }
     }
 
@@ -103,7 +102,8 @@ struct PlaylistDetailScreen: View {
                 listMeta: listMeta,
                 currentPlaylistId: viewModel.playlistId,
                 onRemoveFromPlaylist: isOwner ? { media in await viewModel.removeTrack(trackId: media.id.value) } : nil,
-                playlistHeader: header
+                playlistHeader: header,
+                onRefresh: { await viewModel.load() }
             )
         }
     }
@@ -132,9 +132,16 @@ private extension PlaylistDetailScreen {
                 .init(icon: .squarePen, title: "Edit playlist") {
                     viewModel.startEditing()
                 },
-                .init(icon: .trash2, title: "Delete playlist", isDestructive: true) {
-                    showDeleteConfirm = true
-                },
+                .init(
+                    icon: .trash2, title: "Delete playlist", isDestructive: true,
+                    confirm: DestructiveConfirm(
+                        title: "Delete this playlist?",
+                        message: "The tracks in it stay where they are."
+                    ) {
+                        dependencies.contentActions.deletePlaylist(id: viewModel.playlistId)
+                        dismiss()
+                    }
+                ),
             ]
         )
         // Detents come from TrackOptionsSheet itself (sized to its rows).
@@ -142,28 +149,36 @@ private extension PlaylistDetailScreen {
     }
 }
 
-// MARK: - Edit sheet (cover · name · description)
+// MARK: - Edit playlist
 
-private extension PlaylistDetailScreen {
-    var editSheet: some View {
-        ItemFormSheet(
-            icon: .squarePen,
+/// Full-screen playlist edit (the shared Edit Track layout).
+struct EditPlaylistScreen: View {
+    let viewModel: PlaylistDetailViewModel
+
+    var body: some View {
+        @Bindable var viewModel = viewModel
+        EditDetailsScreen(
             title: "Edit Playlist",
-            subtitle: "Update its cover, name, and description",
+            subtitle: "Update cover, name, and details",
+            cover: .init(data: $viewModel.pickedCoverData,
+                         savedURL: viewModel.cover(viewModel.detail?.coverUrl),
+                         caption: "A square image, shown everywhere your playlist appears."),
             namePrompt: "Playlist name",
             name: $viewModel.editTitle,
             description: $viewModel.editDescription,
-            cover: .init(data: $viewModel.pickedCoverData, savedURL: viewModel.cover(viewModel.detail?.coverUrl)),
-            actionTitle: "Save Changes",
+            hasChanges: viewModel.hasEditChanges,
             busy: viewModel.isSaving,
-            onSubmit: { await viewModel.saveEdit() }
+            error: viewModel.editError,
+            onSave: { await viewModel.saveEdit() }
         )
+        .onAppear { viewModel.editError = nil }
     }
 }
 
 // MARK: - Immersive loading chrome
 
-private extension View {
+/// Shared by the playlist and release pages.
+extension View {
     /// Chrome for the error state: a transparent nav bar with the back button
     /// in the same top-left spot as the loaded page's. Swipe-back stays working.
     func immersiveLoadingChrome(onBack: @escaping () -> Void) -> some View {

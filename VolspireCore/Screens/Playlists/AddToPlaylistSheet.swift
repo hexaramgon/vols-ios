@@ -34,7 +34,7 @@ struct AddToPlaylistSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(
-                icon: .listMusic,
+                icon: .listPlus,
                 title: "Add to playlist",
                 subtitle: "Save this track to a playlist",
                 divider: false
@@ -82,7 +82,12 @@ struct AddToPlaylistSheet: View {
                 .padding(.top, 12)
                 .padding(.bottom, 20)
 
-                if libraryStore.playlists.isEmpty {
+                if libraryStore.playlists.isEmpty, case .error = libraryStore.playlistsLoadState {
+                    LoadErrorView(icon: .listMusic, title: "Couldn't load your playlists") {
+                        Task { await libraryStore.refreshPlaylists() }
+                    }
+                    .padding(.top, 24)
+                } else if libraryStore.playlists.isEmpty {
                     VStack(spacing: 8) {
                         LucideIcon(.listMusic, .hero).foregroundStyle(Color.vText3)
                         Text("No playlists yet").font(.appCalloutSemibold).foregroundStyle(Color.vText)
@@ -105,7 +110,7 @@ struct AddToPlaylistSheet: View {
             let playlistId = try await libraryStore.createPlaylist(title: title)
             _ = await libraryStore.addTrack(toPlaylist: playlistId, trackId: trackId)
             addedIds.insert(playlistId)
-            Haptics.impact(.soft)
+            // The store's create already buzzed (success).
             return true
         } catch {
             errorText = "Couldn't create the playlist. Please try again."

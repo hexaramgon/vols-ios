@@ -31,9 +31,42 @@ struct ExpandableNowPlaying: View {
     @AppStorage(SettingsKeys.visualizerLowPower) private var visualizerLowPower = false
     /// The Comments button → comment input morph.
     @Namespace private var composerNamespace
+    /// The one-time "tap to go full screen" coach mark (FullScreenTapHint),
+    /// then its second step in full-screen mode ("swipe up for the next track").
+    @State private var showTapHint = false
+    @State private var showSwipeHint = false
+    /// When the current track began playing — the hint lands 1.2s after it.
+    @State private var playbackStartedAt: Date?
+
+    /// When the coach mark may appear: open on the main panel, controls showing.
+    /// Keys off `expanded` (the open animation is covered by the task's delay)
+    /// — `isFullyExpanded` doesn't reliably flip on device.
+    private var tapHintWindow: Bool {
+        fullScreenAvailable && !stage.controlsMinimized && model.state.isPlaying
+    }
 
     var body: some View {
         expandableNowPlaying
+            // "Swipe left for comments" (once): the first time the player
+            // moves to another track — any way — while open on the artwork.
+            .modifier(CommentsSwipeHintHost(
+                trackId: model.state.currentMediaID?.value,
+                eligible: expanded && selectedPanel == 0 && !commentsLocked,
+                blocked: showTapHint || showSwipeHint,
+                dragPanels: { drag.pageDragX = $0 },
+                settlePanels: { open in
+                    withAnimation(.smooth(duration: 0.32)) {
+                        if open { selectedPanel = 1 }
+                        drag.pageDragX = 0
+                    }
+                }
+            ))
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                drag.keyboardUp = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                drag.keyboardUp = false
+            }
             .onChange(of: expanded) {
                 if expanded {
                     // A workspace file opens straight onto its comments.
@@ -55,8 +88,63 @@ struct ExpandableNowPlaying: View {
                     selectedPanel = panel
                 }
             }
-            .onChange(of: model.state.currentMediaID?.value) {
+            .onChange(of: model.state.currentMediaID?.value) { _, _ in
                 stage.trackDidChange(to: model.state.currentMediaID)
+                playbackStartedAt = model.state.isPlaying ? .now : nil
+            }
+            .onChange(of: model.state.isPlaying) { _, playing in
+                if playing, playbackStartedAt == nil { playbackStartedAt = .now }
+            }
+            .overlay {
+                if showTapHint {
+                    FullScreenTapHintOverlay {
+                        FullScreenTapHint.markSeen()
+                        withAnimation(.easeOut(duration: 0.2)) { showTapHint = false }
+                        onPlayerTap()
+                        // Step two once the controls have tucked away.
+                        Task {
+                            try? await Task.sleep(for: .seconds(0.7))
+                            guard feedSwipeEnabled else { return }
+                            withAnimation(.easeOut(duration: 0.25)) { showSwipeHint = true }
+                        }
+                    }
+                    .transition(.opacity)
+                }
+                if showSwipeHint {
+                    // Its swipe drives the real feed: the next track rides
+                    // the finger, and a full swipe moves to it.
+                    FullScreenSwipeHintOverlay(
+                        onDrag: { stage.dragFeed($0, height: UIScreen.size.height) },
+                        onRelease: { projected in
+                            let height = UIScreen.size.height
+                            stage.settleFeed(projected: max(projected, -height), height: height, controller: model)
+                            // A real swipe ends the hint even with no next
+                            // track to move to (the feed just springs back).
+                            if projected < -height * 0.18 {
+                                withAnimation(.easeOut(duration: 0.2)) { showSwipeHint = false }
+                            }
+                        }
+                    )
+                    .transition(.opacity)
+                }
+            }
+            // Leaving full-screen / the player takes step two with it.
+            .onChange(of: feedSwipeEnabled) { _, on in
+                if !on, showSwipeHint { withAnimation(.easeOut(duration: 0.2)) { showSwipeHint = false } }
+            }
+            // A beat after the player settles open; gone if it closes first.
+            .task(id: tapHintWindow) {
+                guard tapHintWindow else {
+                    if showTapHint { withAnimation(.easeOut(duration: 0.2)) { showTapHint = false } }
+                    return
+                }
+                guard FullScreenTapHint.shouldShow else { return }
+                // 1.2s after the track started playing; if it's been playing
+                // longer, just a beat for the player to finish opening.
+                let elapsed = playbackStartedAt.map { Date.now.timeIntervalSince($0) } ?? 0
+                try? await Task.sleep(for: .seconds(max(0.4, 1.2 - elapsed)))
+                guard !Task.isCancelled, tapHintWindow, FullScreenTapHint.shouldShow else { return }
+                withAnimation(.easeOut(duration: 0.25)) { showTapHint = true }
             }
             .onChange(of: selectedPanel) { _, panel in
                 if panel == 1 { stage.commentsDidOpen() } else { stage.commentsDidClose() }
@@ -313,14 +401,25 @@ private extension ExpandableNowPlaying {
             // otherwise the dead-zone translation lands in one frame and the
             // player visibly snaps down as the drag starts.
             drag.baselineY = dy
+            // Typing a comment: a pull down only puts the keyboard away — it
+            // must not take the player with it.
+            drag.startedTyping = drag.keyboardUp
             // Decide up front whether this vertical drag dismisses or scrolls the
             // comments: only arm dismiss when no scrollable comments are showing, or
             // when they're pinned to the top and the drag is heading down.
-            drag.dismissArmed = !commentsShowing || (commentsAtTop && dy > 0)
+            drag.dismissArmed = !drag.startedTyping && (!commentsShowing || (commentsAtTop && dy > 0))
             // Full-screen mode: a pull down from the top edge still dismisses.
-            drag.dismissFromTop = feedSwipeEnabled && axis == .vertical && dy > 0
+            drag.dismissFromTop = !drag.startedTyping && feedSwipeEnabled && axis == .vertical && dy > 0
                 && value.startLocation.y < ViewConst.safeAreaInsets.top + 160
-            // Any drag (panel swipe or dismiss) should put the keyboard away.
+        }
+        // A real panel swipe or dismiss pull puts the keyboard away — but only
+        // once it's clearly one (~60pt), not on the first 10pt of any drag
+        // (that closed it on every small nudge). Scrolling the comments
+        // dismisses it the list's own interactive way.
+        if !drag.keyboardPutAway,
+           (drag.axis == .horizontal && abs(dx) > 60)
+            || (drag.axis == .vertical && drag.dismissArmed && dy - drag.baselineY > 60) {
+            drag.keyboardPutAway = true
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
         // Horizontal swipe: slide the panels live under the finger, with a little
@@ -357,8 +456,19 @@ private extension ExpandableNowPlaying {
         let armed = drag.dismissArmed
         let baseline = drag.baselineY
         let topDismiss = drag.dismissFromTop
+        let typing = drag.startedTyping
         drag.resetGesture()
         drag.setCommentsScrollLocked(false)
+
+        // Began while typing a comment: a pull down puts the keyboard away on
+        // release (not yanked mid-drag) and never dismisses the player.
+        if typing, axis == .vertical {
+            if value.translation.height - baseline > 60 {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+            stage.cancelFeedDrag()
+            return
+        }
 
         // Horizontal swipe → settle to the nearest panel (with a slide).
         if axis == .horizontal {

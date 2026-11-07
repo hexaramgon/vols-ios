@@ -111,9 +111,7 @@ public struct PlayerButtonConfig {
                         .frame(width: 34, height: 34)
 
                 },
-                onEnded: {
-                    print("onEnded Button")
-                }
+                onEnded: {}
             )
         }
     }

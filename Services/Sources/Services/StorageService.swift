@@ -22,11 +22,27 @@ public enum StorageBucket: String, Sendable {
     case packs = "packs"
     case applicationUploads = "application-uploads"
     case trackAssets = "track-assets"
+    /// Track audio + visual-track video — private; streamed via signed links.
+    case trackMedia = "track-media"
 
     /// Private buckets require signed URLs; public buckets use getPublicURL.
+    /// Per-file upload cap — mirrors each bucket's `file_size_limit` in
+    /// `storage.buckets` (the server enforces it; this lets the app refuse a
+    /// file before reading it into memory or spending the upload).
+    public var maxUploadBytes: Int {
+        switch self {
+        case .postUploads: return 100 * 1_048_576
+        case .files: return 30 * 1_048_576
+        case .packs: return 50 * 1_048_576
+        case .trackAssets: return 500 * 1_048_576
+        case .trackMedia: return 200 * 1_048_576
+        case .messageAttachments, .userAvatars, .userBanners, .applicationUploads: return 20 * 1_048_576
+        }
+    }
+
     public var isPrivate: Bool {
         switch self {
-        case .files, .messageAttachments, .trackAssets: return true
+        case .files, .messageAttachments, .trackAssets, .trackMedia: return true
         default: return false
         }
     }
@@ -208,11 +224,44 @@ public final class StorageService: Sendable {
         publicUrl(bucket: .postUploads, pathOrUrl: pathOrUrl)
     }
 
+    // MARK: - Track media (private, signed at load time)
+
+    /// Placeholder scheme for track media. Track audio (and visual-track video)
+    /// lives in the private `track-media` bucket, so screens hold a stable
+    /// `volspire-media:///<path>` URL and whatever loads the bytes — the player,
+    /// Save to Files — swaps it for a signed link at that moment
+    /// (`playableURL`). Stable identity keeps the player's prefetch cache and
+    /// "same track?" checks working across re-signs, and a cached list never
+    /// holds an expired link.
+    public static let trackMediaScheme = "volspire-media"
+
+    /// The placeholder URL for a track's `audio_url` (a bare `track-media`
+    /// object name). Keeps the file extension, so video detection still works.
+    public func trackMediaURL(_ path: String?) -> URL? {
+        guard let path, !path.isEmpty else { return nil }
+        if path.hasPrefix("http") { return URL(string: path) }
+        var c = URLComponents()
+        c.scheme = Self.trackMediaScheme
+        c.host = ""
+        c.path = "/" + path
+        return c.url
+    }
+
+    /// A fetchable URL for `url`: a track-media placeholder becomes a signed
+    /// `track-media` link (memoized, batch-friendly); anything else passes
+    /// through. nil when signing is refused (no access) or fails.
+    public func playableURL(_ url: URL) async -> URL? {
+        guard url.scheme == Self.trackMediaScheme else { return url }
+        let path = String(url.path.drop(while: { $0 == "/" }))
+        return await signUrl(bucket: .trackMedia, pathOrUrl: path).flatMap { URL(string: $0) }
+    }
+
     // MARK: - Folder File URL Signing
 
     /// Signs folder file URLs:
     /// - Regular files (private `files` bucket) → signed URLs
-    /// - Track references → public `post-uploads` URLs for audio/cover
+    /// - Track references → public `post-uploads` cover + a track-media
+    ///   placeholder for the audio (signed when it plays)
     public func signFolderFileUrls(files: [ApiFolderFile]) async -> [ApiFolderFile] {
         var results = files
 
@@ -225,16 +274,15 @@ public final class StorageService: Sendable {
             let paths = regularIndices.map { files[$0].fileUrl }
             let signed = await signUrls(bucket: .files, paths: paths)
             for (i, fileIndex) in regularIndices.enumerated() {
-                results[fileIndex] = results[fileIndex].withSignedFileUrl(signed[i])
+                results[fileIndex].fileUrl = signed[i]
             }
         }
 
         // Resolve public URLs for track references
         for idx in trackIndices {
-            let file = results[idx]
-            results[idx] = file
-                .withSignedTrackCoverUrl(publicUrl(bucket: .postUploads, pathOrUrl: file.trackCoverUrl))
-                .withSignedTrackAudioUrl(publicUrl(bucket: .postUploads, pathOrUrl: file.trackAudioUrl))
+            results[idx].trackCoverUrl = publicUrl(bucket: .postUploads, pathOrUrl: results[idx].trackCoverUrl)
+            results[idx].trackAudioUrl = trackMediaURL(results[idx].trackAudioUrl)?.absoluteString
+            results[idx].fileUrl = results[idx].trackAudioUrl
         }
 
         return results
@@ -262,45 +310,5 @@ public final class StorageService: Sendable {
     /// Resolves a user banner URL (public bucket).
     public func bannerUrl(pathOrUrl: String?) -> String? {
         publicUrl(bucket: .userBanners, pathOrUrl: pathOrUrl)
-    }
-}
-
-// MARK: - ApiFolderFile Signing Helpers
-
-extension ApiFolderFile {
-    func withSignedFileUrl(_ url: String?) -> ApiFolderFile {
-        ApiFolderFile(
-            fileId: fileId, name: name, fileUrl: url, fileType: fileType,
-            fileSize: fileSize, timespan: timespan, ownerId: ownerId,
-            createdAt: createdAt, uploaderUsername: uploaderUsername,
-            uploaderProfileImageUrl: uploaderProfileImageUrl, type: type,
-            trackId: trackId, trackTitle: trackTitle, trackArtist: trackArtist,
-            trackArtistId: trackArtistId, trackCoverUrl: trackCoverUrl,
-            trackAudioUrl: trackAudioUrl, trackVisibility: trackVisibility
-        )
-    }
-
-    func withSignedTrackCoverUrl(_ url: String?) -> ApiFolderFile {
-        ApiFolderFile(
-            fileId: fileId, name: name, fileUrl: fileUrl, fileType: fileType,
-            fileSize: fileSize, timespan: timespan, ownerId: ownerId,
-            createdAt: createdAt, uploaderUsername: uploaderUsername,
-            uploaderProfileImageUrl: uploaderProfileImageUrl, type: type,
-            trackId: trackId, trackTitle: trackTitle, trackArtist: trackArtist,
-            trackArtistId: trackArtistId, trackCoverUrl: url,
-            trackAudioUrl: trackAudioUrl, trackVisibility: trackVisibility
-        )
-    }
-
-    func withSignedTrackAudioUrl(_ url: String?) -> ApiFolderFile {
-        ApiFolderFile(
-            fileId: fileId, name: name, fileUrl: fileUrl, fileType: fileType,
-            fileSize: fileSize, timespan: timespan, ownerId: ownerId,
-            createdAt: createdAt, uploaderUsername: uploaderUsername,
-            uploaderProfileImageUrl: uploaderProfileImageUrl, type: type,
-            trackId: trackId, trackTitle: trackTitle, trackArtist: trackArtist,
-            trackArtistId: trackArtistId, trackCoverUrl: trackCoverUrl,
-            trackAudioUrl: url, trackVisibility: trackVisibility
-        )
     }
 }

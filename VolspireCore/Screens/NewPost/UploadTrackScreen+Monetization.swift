@@ -92,7 +92,7 @@ extension UploadTrackScreen {
                     Button {
                         viewModel.clearAsset(kind: kind)
                     } label: {
-                        LucideIcon(.trash2, .sm)
+                        LucideIcon(.trash2, .md)
                             .foregroundStyle(Color.vText3)
                             .frame(width: 40, height: 40)
                             .contentShape(.rect)
@@ -221,18 +221,20 @@ extension UploadTrackScreen {
     }
 
     // MARK: - Collaboration flag
+    // Hidden for now (2026-11-06) — bring back by uncommenting this and its
+    // line in UploadTrackScreen's step 3.
 
-    var collaborationSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            UploadSectionDivider("Collaboration")
-
-            UploadToggleRow(
-                label: "Looking for collaborators on this track",
-                hint: "Your track shows in the Looking for Collab feed. Other artists can DM you to offer.",
-                isOn: $viewModel.lookingForCollab
-            )
-        }
-    }
+    // var collaborationSection: some View {
+    //     VStack(alignment: .leading, spacing: 8) {
+    //         UploadSectionDivider("Collaboration")
+    //
+    //         UploadToggleRow(
+    //             label: "Looking for collaborators on this track",
+    //             hint: "Your track shows in the Looking for Collab feed. Other artists can DM you to offer.",
+    //             isOn: $viewModel.lookingForCollab
+    //         )
+    //     }
+    // }
 
     // MARK: - Privacy
 
@@ -240,7 +242,7 @@ extension UploadTrackScreen {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Privacy & Release")
 
-            UploadVisibilityPicker(visibility: $viewModel.visibility)
+            UploadVisibilityPicker(visibility: $viewModel.visibility, allowsUnlisted: true)
         }
     }
 }

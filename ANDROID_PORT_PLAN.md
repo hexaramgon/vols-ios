@@ -290,6 +290,7 @@ Group by feature; check off as each is wired + decode-tested on Android.
 - **Folders (11):** `get_user_folders` · `create_folder` · `update_folder` · `delete_folder` · `get_folder_files` · `add_track_to_folder` · `remove_track_from_folder` · `get_folders_for_track` · `upload_file_metadata` · `delete_file` · `get_workspace_activity`
 - **Folder members (4):** `get_folder_members` · `add_folder_member` · `remove_folder_member` · `update_folder_member_role`
 - **Playlists (8):** `get_user_playlists` · `get_playlist` · `create_playlist` · `update_playlist` · `delete_playlist` · `add_track_to_playlist` · `remove_track_from_playlist` · `get_playlists_for_track`
+- **Releases (9, added 2026-10-29 — grouped releases on a profile; RPC-only, tables have no client grants):** `get_user_releases` · `get_release` · `get_releases_for_track` · `create_release` · `update_release` · `delete_release` · `add_tracks_to_release` · `remove_track_from_release` · `reorder_release`
 - **Listings (13):** `get_listings` · `get_user_listings` · `get_listing` · `create_listing` · `update_listing` · `delete_listing` · `respond_to_listing` · `save_listing` · `unsave_listing` · `get_listing_comments` · `post_listing_comment` · `delete_listing_comment` · `get_listing_responses`
 - **Packs (3):** `get_pack` · `create_pack` · `update_pack`
 - **Services (3):** `get_service_detail` · `create_service` · `update_service`

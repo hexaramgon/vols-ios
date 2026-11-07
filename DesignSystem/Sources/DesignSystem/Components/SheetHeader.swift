@@ -3,8 +3,9 @@
 //  DesignSystem
 //
 //  The shared header for slide-up bottom sheets — a leading icon/avatar tile, a
-//  title + optional subtitle, and a trailing "X" close button, capped by a
-//  hairline divider. Mirrors the CollabRequestSheet look so every sheet reads as
+//  title + optional subtitle, and a trailing "X" close button. No hairline
+//  under it by default (2026-10-24: the sheets read cleaner without it; pass
+//  `divider: true` for one that needs it). Mirrors the CollabRequestSheet look so every sheet reads as
 //  one family. Use the `icon:` convenience for a Lucide-glyph tile, or the
 //  trailing-closure form to supply a custom leading view (e.g. an avatar).
 //
@@ -22,12 +23,16 @@ public struct SheetHeader<Leading: View>: View {
     /// The hairline under the header; off for list pickers (Add to
     /// playlist / Workspace), where the rows start right under it.
     private let divider: Bool
+    /// Space above the row. 24 clears a sheet's drag indicator; full-screen
+    /// flows (New post pages) have no indicator and pass less.
+    private let topPadding: CGFloat
 
     public init(
         title: String,
         subtitle: String? = nil,
         prominent: Bool = false,
-        divider: Bool = true,
+        divider: Bool = false,
+        topPadding: CGFloat = 24,
         onClose: @escaping () -> Void,
         @ViewBuilder leading: () -> Leading
     ) {
@@ -35,6 +40,7 @@ public struct SheetHeader<Leading: View>: View {
         self.subtitle = subtitle
         self.prominent = prominent
         self.divider = divider
+        self.topPadding = topPadding
         self.onClose = onClose
         self.leading = leading()
     }
@@ -56,16 +62,16 @@ public struct SheetHeader<Leading: View>: View {
                 }
                 Spacer(minLength: 0)
                 Button(action: onClose) {
-                    LucideIcon(.x, .lg)
+                    LucideIcon(.x, .xl)
                         .foregroundStyle(Color.vText3)
                         .frame(width: 32, height: 32)
-                        .contentShape(.rect)
+                        .minimumHitArea(for: 32)
                 }
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 20)
-            // Extra top padding so the header clears the drag indicator / sheet edge.
-            .padding(.top, 24)
+            // Top padding clears the drag indicator / sheet edge (see topPadding).
+            .padding(.top, topPadding)
             .padding(.bottom, 14)
 
             if divider {
@@ -97,10 +103,12 @@ public extension SheetHeader where Leading == SheetHeaderIcon {
         title: String,
         subtitle: String? = nil,
         prominent: Bool = false,
-        divider: Bool = true,
+        divider: Bool = false,
+        topPadding: CGFloat = 24,
         onClose: @escaping () -> Void
     ) {
-        self.init(title: title, subtitle: subtitle, prominent: prominent, divider: divider, onClose: onClose) {
+        self.init(title: title, subtitle: subtitle, prominent: prominent, divider: divider,
+                  topPadding: topPadding, onClose: onClose) {
             SheetHeaderIcon(icon)
         }
     }

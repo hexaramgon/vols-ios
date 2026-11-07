@@ -16,7 +16,7 @@ struct ProfileFeaturedTab: View {
         if viewModel.creditedTracks.isEmpty && !viewModel.creditedLoaded {
             SkeletonRows(count: 5, thumb: .rounded(size: 40), line2: nil)
         } else if viewModel.creditedTracks.isEmpty {
-            ProfileEmptyState(icon: .users, title: "Not featured yet")
+            ProfileEmptyState(icon: ProfileTab.featuredOn.icon, title: "Not featured yet")
         } else {
             list
         }
@@ -47,17 +47,17 @@ struct ProfileFeaturedTab: View {
         .padding(.horizontal, 8)
     }
 
-    /// The credited role as a quiet chip — same scale as the category chips
-    /// but neutral (roles are metadata, not a brand accent). Tombstones
-    /// ("Private"/"Unavailable") share the shape, dimmed.
+    /// The credited role as the app's quiet capsule tag (the control fill,
+    /// like the listing tags / secondary pills) — neutral, roles are metadata.
+    /// Tombstones ("Private"/"Unavailable") share the shape, dimmed.
     private func roleChip(_ text: String, dimmed: Bool = false) -> some View {
         Text(text)
             .font(.appCaption2Semibold)
-            .foregroundStyle(dimmed ? Color.vText3 : Color.vText2)
+            .foregroundStyle(dimmed ? Color.vText3 : Color.vTextRow)
             .lineLimit(1)
             .fixedSize()
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Color.vSurface, in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.vControl, in: Capsule())
     }
 }

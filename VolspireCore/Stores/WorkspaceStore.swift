@@ -4,6 +4,7 @@
 //
 //
 
+import DesignSystem
 import Foundation
 import Observation
 import Services
@@ -33,6 +34,9 @@ final class WorkspaceStore {
     /// Defensive: flips on a confirmed response only, so the Workspace tab
     /// shows its skeleton — never "No folders yet" — while the fetch runs.
     private(set) var foldersLoaded = false
+    /// The folders load failed with none on screen — Workspace shows
+    /// "Couldn't load" + Try again instead of skeletons forever.
+    private(set) var foldersFailed = false
     /// Collaborators' actions across shared folders in the past month
     /// (Workspace tab rail), newest first.
     private(set) var workspaceActivity: [ApiWorkspaceActivity] = []
@@ -40,6 +44,9 @@ final class WorkspaceStore {
     /// screens load, patched by every file mutation.
     private var filesByFolder: [String: [ApiFolderFile]] = [:]
     private var fileLoadStates: [String: LoadState] = [:]
+    /// Packs linked into each loaded folder (references, not files) —
+    /// fetched alongside its files.
+    private var packsByFolder: [String: [ApiFolderPack]] = [:]
 
     /// Activity grouped per collaborator for the stories-style rail.
     var activityGroups: [WorkspaceActivityGroup] {
@@ -82,6 +89,7 @@ final class WorkspaceStore {
         fileTasks = [:]
         folders = []
         foldersLoaded = false
+        foldersFailed = false
         workspaceActivity = []
         filesByFolder = [:]
         fileLoadStates = [:]
@@ -112,8 +120,10 @@ final class WorkspaceStore {
         do {
             folders = try await service.getUserFolders()
             foldersLoaded = true
+            foldersFailed = false
         } catch {
             debugLog("[WorkspaceStore] folders load failed: \(error)")
+            foldersFailed = folders.isEmpty
         }
         workspaceActivity = (try? await activity) ?? workspaceActivity
     }
@@ -126,6 +136,8 @@ final class WorkspaceStore {
         let folderId = try await service.createFolder(name: name, description: description)
         folders = (try? await service.getUserFolders()) ?? folders
         foldersLoaded = true
+        // Every "new folder" path (Workspace, the folder pickers) lands here.
+        Haptics.success()
         return folderId
     }
 
@@ -137,11 +149,20 @@ final class WorkspaceStore {
     }
 
     /// Deletes a folder and drops every copy we hold.
+    /// Optimistic: the folder leaves the list now; a refusal puts it back
+    /// where it was (and rethrows for the caller's message).
     func deleteFolder(folderId: String) async throws {
-        try await service.deleteFolder(folderId: folderId)
-        folders.removeAll { $0.folderId == folderId }
-        filesByFolder[key(folderId)] = nil
-        fileLoadStates[key(folderId)] = nil
+        let index = folders.firstIndex { $0.folderId == folderId }
+        let removed = index.map { folders[$0] }
+        if let index { folders.remove(at: index) }
+        do {
+            try await service.deleteFolder(folderId: folderId)
+            filesByFolder[key(folderId)] = nil
+            fileLoadStates[key(folderId)] = nil
+        } catch {
+            if let removed { folders.insert(removed, at: min(index ?? 0, folders.count)) }
+            throw error
+        }
     }
 
     func folder(_ folderId: String) -> ApiUserFolder? {
@@ -152,6 +173,10 @@ final class WorkspaceStore {
 
     func files(in folderId: String) -> [ApiFolderFile] {
         filesByFolder[key(folderId)] ?? []
+    }
+
+    func packs(in folderId: String) -> [ApiFolderPack] {
+        packsByFolder[key(folderId)] ?? []
     }
 
     func fileLoadState(_ folderId: String) -> LoadState {
@@ -177,14 +202,17 @@ final class WorkspaceStore {
     private func fetchFiles(folderId: String, initial: Bool) async {
         let k = key(folderId)
         do {
+            // Packs ride along; a failure there never fails the files.
+            async let packs = service.getFolderPacks(folderId: folderId)
             let rawFiles = try await service.getFolderFiles(folderId: folderId)
+            if let packs = try? await packs { packsByFolder[k] = packs }
             // Resolve raw storage paths into usable URLs: private `files` get signed
             // URLs, track references get public `post-uploads` URLs.
             filesByFolder[k] = await storage.signFolderFileUrls(files: rawFiles)
             fileLoadStates[k] = .loaded
         } catch {
             debugLog("[WorkspaceStore] files load failed: \(error)")
-            if initial || (filesByFolder[k] ?? []).isEmpty {
+            if !error.isCancellation, initial || (filesByFolder[k] ?? []).isEmpty {
                 fileLoadStates[k] = .error(error.localizedDescription)
             }
         }
@@ -198,15 +226,51 @@ final class WorkspaceStore {
         await refreshLoadedFiles(folderId: folderId)
     }
 
+    /// Optimistic: the track row leaves the folder now; restored on refusal.
     func removeTrack(trackId: String, folderId: String) async throws {
-        try await service.removeTrackFromFolder(trackId: trackId, folderId: folderId)
+        let k = key(folderId)
+        let before = filesByFolder[k]
+        filesByFolder[k]?.removeAll { $0.trackId.map(key) == key(trackId) }
+        do {
+            try await service.removeTrackFromFolder(trackId: trackId, folderId: folderId)
+        } catch {
+            filesByFolder[k] = before
+            throw error
+        }
+    }
+
+    /// Links a pack into a folder; refreshes that folder's rows if a screen
+    /// has them loaded.
+    func addPack(packId: String, folderId: String) async throws {
+        try await service.addPackToFolder(packId: packId, folderId: folderId)
         await refreshLoadedFiles(folderId: folderId)
     }
 
-    /// Deletes a file row (the caller owns the human-readable error mapping).
+    /// Optimistic: the pack row leaves the folder now; restored on refusal.
+    func removePack(packId: String, folderId: String) async throws {
+        let k = key(folderId)
+        let before = packsByFolder[k]
+        packsByFolder[k]?.removeAll { key($0.packId) == key(packId) }
+        do {
+            try await service.removePackFromFolder(packId: packId, folderId: folderId)
+        } catch {
+            packsByFolder[k] = before
+            throw error
+        }
+    }
+
+    /// Deletes a file row — optimistic, restored on refusal (the caller owns
+    /// the human-readable error mapping).
     func deleteFile(fileId: String, folderId: String) async throws {
-        try await service.deleteFile(fileId: fileId, folderId: folderId)
-        filesByFolder[key(folderId)]?.removeAll { $0.fileId == fileId }
+        let k = key(folderId)
+        let before = filesByFolder[k]
+        filesByFolder[k]?.removeAll { $0.fileId == fileId }
+        do {
+            try await service.deleteFile(fileId: fileId, folderId: folderId)
+        } catch {
+            filesByFolder[k] = before
+            throw error
+        }
     }
 
     /// A new file landed in a folder (upload finished, attachment copied) —

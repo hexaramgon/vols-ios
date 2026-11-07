@@ -10,6 +10,7 @@
 
 import CoreTransferable
 import DesignSystem
+import Photos
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -35,19 +36,38 @@ struct UploadTrackScreen: View {
         }
     }
     @State var viewModel: UploadTrackViewModel
+    /// A file to start with (Workspace "Post as track"), applied once.
+    var prefill: TrackFilePrefill? = nil
+    @State private var prefillApplied = false
     @Environment(\.dismiss) var dismiss
     /// The app player — paused when a preview starts so they don't overlap.
     @Environment(PlayerController.self) var playerController
+    /// The user's releases, for the "Add to Release" picks.
+    @Environment(LibraryStore.self) var libraryStore
     @State var showAudioPicker = false
     @State var showCoverPicker = false
     @State var showVideoPicker = false
     @State var showGenrePicker = false
-    /// Measured height of the title+genre column so the cover box matches it.
-    @State var titleColumnHeight: CGFloat = 96
+    /// The credit whose role sheet is open.
+    @State var creditRoleTarget: TrackCredit?
     @State var showAssetPicker = false
     @State var pickingAssetKind: String?
     @State var selectedPhoto: PhotosPickerItem?
     @State var selectedVideo: PhotosPickerItem?
+    /// The camera roll for step 1's grid, and the tile picked from it (also
+    /// offers its frames as the cover).
+    @State var videoLibrary = VideoLibrary()
+    @State var selectedLibraryAsset: PHAsset?
+    /// Step 1's source: the camera-roll grid (default) or the Files picker.
+    @State var mediaSource: MediaSource = .library
+    /// Which side the current pick came from (nil = a prefill, shows on both).
+    @State var pickSource: MediaSource?
+    enum MediaSource: Hashable { case library, files }
+    /// Step 1's pinned pick: full preview, or a slim bar while the grid is
+    /// scrolled down. A new pick opens it back up.
+    @State var pickExpanded = true
+    /// The grid is being dragged / flung (not just re-laid-out).
+    @State var gridScrolling = false
     /// A freshly-picked cover awaiting crop in the full-screen cropper.
     @State var coverCropTarget: CropTarget?
     @FocusState var priceFieldFocused: Bool
@@ -76,23 +96,16 @@ struct UploadTrackScreen: View {
         VStack(spacing: 0) {
             header
 
-            // Industry-standard multi-step flow: 1) pick the media, 2) cover +
-            // details, 3) options + publish. Steps slide like a pager.
+            // 1) pick the media (video first, camera-roll grid), 2) the
+            // composer (cover, title, story), 3) options + publish. Steps
+            // slide like a pager.
             ZStack {
                 Group {
                     switch step {
                     case 0:
-                        stepScroll { publicPreviewSection }
+                        mediaStep
                     case 1:
-                        stepScroll {
-                            coverAndTitleRow
-                            UploadDescriptionField(
-                                text: $viewModel.description,
-                                prompt: "What's the story behind this track?",
-                                limit: 500
-                            )
-                            tagsSection
-                        }
+                        composerStep
                     default:
                         stepScroll {
                             collaboratorsSection
@@ -102,8 +115,9 @@ struct UploadTrackScreen: View {
                                 buyerDownloadsSection
                             }
                             distributionSection
-                            collaborationSection
+                            // collaborationSection — hidden for now
                             privacySection
+                            releaseSection
                         }
                     }
                 }
@@ -112,6 +126,11 @@ struct UploadTrackScreen: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomBar
             }
+        }
+        .task {
+            guard let prefill, !prefillApplied else { return }
+            prefillApplied = true
+            viewModel.applyPrefill(prefill)
         }
         // Flat app-base canvas — same as the sign-in/register pages.
         .background(Color.vBase.ignoresSafeArea())
@@ -124,17 +143,31 @@ struct UploadTrackScreen: View {
         .sheet(isPresented: $showGenrePicker) {
             GenrePickerSheet(genre: $viewModel.genre)
         }
+        .sheet(item: $creditRoleTarget) { credit in
+            ChoiceSheet(
+                title: "@\(credit.username)",
+                subtitle: "Their credit on this track",
+                icon: .userCheck,
+                choices: collaboratorRoles.map { role in
+                    SheetChoice(title: role, selected: credit.role == role) {
+                        viewModel.updateCreditRole(credit.userId, role: role)
+                    }
+                }
+            )
+        }
         // Each file importer sits on its own isolated view — two `.fileImporter`
         // (or a `.fileImporter` next to the cover `.fullScreenCover`) on the same
         // view shadow each other in SwiftUI, so the audio picker silently no-ops.
         .background {
+            // Step 1's Files side: audio, or a video file (compressed like
+            // a library pick).
             Color.clear.fileImporter(
                 isPresented: $showAudioPicker,
-                allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav],
+                allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav, .movie],
                 allowsMultipleSelection: false
             ) { result in
                 if case .success(let urls) = result, let url = urls.first {
-                    viewModel.handleAudioFile(result: .success(url))
+                    handlePickedFile(url)
                 } else if case .failure(let error) = result {
                     viewModel.handleAudioFile(result: .failure(error))
                 }
@@ -157,12 +190,22 @@ struct UploadTrackScreen: View {
         }
         .onChange(of: selectedVideo) { _, newValue in
             guard let newValue else { return }
+            // Picked through Browse — no grid tile is the selection now,
+            // but it's still a Library pick.
+            selectedLibraryAsset = nil
+            pickSource = .library
             // Loading a large camera-roll video out of Photos has no progress
             // signal of its own — flip this on right away so the drop zone
             // doesn't just sit there looking frozen while it loads.
             viewModel.isProcessingVideo = true
             Task {
-                if let picked = try? await newValue.loadTransferable(type: PickedVideoFile.self) {
+                let picked = try? await newValue.loadTransferable(type: PickedVideoFile.self)
+                // Something else was picked while this loaded — drop it.
+                guard selectedVideo == newValue else {
+                    if let picked { try? FileManager.default.removeItem(at: picked.url) }
+                    return
+                }
+                if let picked {
                     let ext = picked.url.pathExtension.isEmpty ? "mov" : picked.url.pathExtension.lowercased()
                     viewModel.handleVideoFile(at: picked.url, fileName: "video_\(UUID().uuidString).\(ext)")
                 } else {

@@ -39,12 +39,8 @@ struct ConversationScreen: View {
     @State private var viewModel: ConversationViewModel?
     /// Report / Block the other participant (App Store 1.2 UGC safety).
     @State private var showReportUser = false
-    @State private var showBlockConfirm = false
     @State private var showUserOptions = false
     @State private var pendingReport = false
-    @State private var pendingBlock = false
-    @State private var pendingRemoveCollab = false
-    @State private var showRemoveCollabConfirm = false
     /// LIVE collaborator state — the thread's request card keeps its historical
     /// "accepted" after a removal, so the menu option can't be gated on it.
     @State private var isActiveCollaborator = false
@@ -62,12 +58,18 @@ struct ConversationScreen: View {
                 if let listing = viewModel.linkedListing {
                     listingBanner(listing)
                 }
+                // An incoming collab request — answered from a strip of its
+                // own under the header (same band as the listing strip).
+                if let request = pendingCollabRequest {
+                    collabRequestBanner(request)
+                }
                 ChatThread(viewModel: viewModel, otherUsername: conversation.username)
             } else {
                 Color.clear
             }
         }
         .animation(.smooth(duration: 0.3), value: viewModel?.linkedListing?.listingId)
+        .animation(.smooth(duration: 0.3), value: pendingCollabRequest?.id)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.vBase.ignoresSafeArea())
         .task {
@@ -103,8 +105,14 @@ struct ConversationScreen: View {
         // pop (a hidden bar disables it) so back behaves like every other screen.
         .toolbar(.hidden, for: .navigationBar)
         .enableSwipeBack()
-        .onAppear { conversationState.activeConversation = conversation }
+        .onAppear {
+            conversationState.activeConversation = conversation
+            PushNotificationManager.shared.visibleConversationId = conversation.convoId
+        }
         .onDisappear {
+            if PushNotificationManager.shared.visibleConversationId == conversation.convoId {
+                PushNotificationManager.shared.visibleConversationId = nil
+            }
             // Keep whatever was typed — restored on the next open of this thread.
             if let viewModel {
                 inboxStore.setDraft(viewModel.draft, for: conversation.convoId)
@@ -115,33 +123,32 @@ struct ConversationScreen: View {
         }
         .sheet(isPresented: $showUserOptions, onDismiss: {
             if pendingReport { pendingReport = false; showReportUser = true }
-            if pendingBlock { pendingBlock = false; showBlockConfirm = true }
-            if pendingRemoveCollab { pendingRemoveCollab = false; showRemoveCollabConfirm = true }
         }) {
             UserOptionsSheet(
                 username: conversation.username,
                 onRemoveCollaborator: (isActiveCollaborator && conversation.otherUserId != nil)
-                    ? { pendingRemoveCollab = true; showUserOptions = false }
+                    ? {
+                        // The DM moves to Archived — leave it.
+                        if let otherId = conversation.otherUserId {
+                            dependencies.contentActions.removeCollaborator(userId: otherId, username: conversation.username)
+                        }
+                        isActiveCollaborator = false
+                        leaveThread()
+                    }
                     : nil,
                 onReport: { pendingReport = true; showUserOptions = false },
-                onBlock: { pendingBlock = true; showUserOptions = false }
+                onBlock: {
+                    if let otherId = conversation.otherUserId {
+                        dependencies.contentActions.block(userId: otherId, username: conversation.username)
+                    }
+                    leaveThread()
+                }
             )
-        }
-        .destructiveConfirm(
-            "Remove @\(conversation.username) as a collaborator?",
-            isPresented: $showRemoveCollabConfirm,
-            actionLabel: "Remove",
-            message: "You'll no longer be collaborators, and this conversation moves to your inbox's Archived section. You can send a new collab request anytime."
-        ) {
-            removeCollaborator()
         }
         .sheet(isPresented: $showReportUser) {
             if let otherId = conversation.otherUserId {
                 ReportSheet(targetType: .user, targetId: otherId, subject: "@\(conversation.username)")
             }
-        }
-        .blockUserDialog(username: conversation.username, isPresented: $showBlockConfirm) {
-            blockOtherUser()
         }
     }
 
@@ -204,7 +211,7 @@ struct ConversationScreen: View {
                 LucideIcon(.chevronLeft, size: ViewConst.backIconSize)
                     .foregroundStyle(Color.vText)
                     .frame(width: 36, height: 40)
-                    .contentShape(.rect)
+                    .minimumHitArea(for: 36)
             }
             .buttonStyle(.plain)
 
@@ -230,13 +237,6 @@ struct ConversationScreen: View {
 
             Spacer(minLength: 0)
 
-            // A pending collab request the other person sent → decline / accept
-            // right here in the header (✕ / ✓), instead of buttons in the thread.
-            // One I sent → a grey Pending chip in the same spot until they respond.
-            // (A request I sent needs no chip — the subtitle already says so.)
-            if let request = pendingCollabRequest {
-                collabResponseButtons(request)
-            }
             if conversation.otherUserId != nil {
                 conversationMenu
             }
@@ -301,35 +301,26 @@ struct ConversationScreen: View {
             .accessibilityLabel("Conversation options")
     }
 
-    /// Blocks the other participant, then pops back to the message list.
-    private func blockOtherUser() {
-        guard let otherId = conversation.otherUserId else { return }
-        Task {
-            try? await dependencies.supabaseService.blockUser(otherId)
-            dismiss()
-        }
-    }
-
-    /// Ends the collaboration — the backend archives this DM for us, so pop
-    /// back to the inbox. The archived flag is server-computed, so refetch the
-    /// list (one call) to regroup the thread under Archived, and reset the
-    /// shared collab overlay for any mounted profile.
-    private func removeCollaborator() {
-        guard let otherId = conversation.otherUserId else { return }
-        Task {
-            try? await dependencies.supabaseService.removeCollaborator(userId: otherId)
-            isActiveCollaborator = false
-            socialStore.setCollabStatus("none", userId: otherId)
-            await inboxStore.refreshConversations()
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            dismiss()
-        }
+    /// Leave the thread after a confirmed block / collaborator removal.
+    private func leaveThread() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        dismiss()
     }
 
     /// The one pending collab request the other user sent me (rate-limited to one
-    /// per week, so at most one), drives the header accept/decline controls.
+    /// per week, so at most one), drives the request strip's accept/decline.
+    /// Also closed once the shared SocialStore says the pair's status moved on
+    /// (answered from Notifications or a profile while this thread was loaded).
     private var pendingCollabRequest: ChatMessage? {
-        viewModel?.messages.first { $0.isCollabRequest && !$0.isFromMe && $0.isPendingRequest }
+        guard let request = viewModel?.messages.first(where: { $0.isCollabRequest && !$0.isFromMe && $0.isPendingRequest })
+        else { return nil }
+        // Answered from the notification row since it was sent (the thread's
+        // own copy catches up on the next poll).
+        if let otherId = conversation.otherUserId,
+           socialStore.collabAnswer(from: otherId, after: request.createdAt) != nil {
+            return nil
+        }
+        return request
     }
 
     /// The mirror case — a request I sent that the other party hasn't answered.
@@ -337,27 +328,34 @@ struct ConversationScreen: View {
         viewModel?.messages.first { $0.isCollabRequest && $0.isFromMe && $0.isPendingRequest }
     }
 
-    private func collabResponseButtons(_ request: ChatMessage) -> some View {
-        HStack(spacing: 8) {
-            Button { Task { await viewModel?.respondToRequest(request, accept: false) } } label: {
-                LucideIcon(.x, .md)
-                    .foregroundStyle(Color.vControlLabel)
-                    .frame(width: 32, height: 32)
-                    .background(Color.vControl, in: Circle())
+    /// The incoming-request strip — the listing strip's band holding a
+    /// handshake glyph + one line of copy over equal-width Decline / Accept,
+    /// the notifications row's text buttons.
+    private func collabRequestBanner(_ request: ChatMessage) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                LucideIcon(.handshake, .md)
+                    .foregroundStyle(Color.vText2)
+                let name = Text("@\(conversation.username)").font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
+                let rest = Text(" wants to collaborate").font(.appSubheadline).foregroundStyle(Color.vText2)
+                Text("\(name)\(rest)")
+                    .lineLimit(1)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Decline")
 
-            Button { Task { await viewModel?.respondToRequest(request, accept: true) } } label: {
-                LucideIcon(.check, .md)
-                    .foregroundStyle(Color.vOnInverse)
-                    .frame(width: 32, height: 32)
-                    .background(Color.vInverse, in: Circle())
+            HStack(spacing: 8) {
+                SecondaryButton("Decline", icon: .x, size: .inline) {
+                    Task { await viewModel?.respondToRequest(request, accept: false) }
+                }
+                PrimaryButton("Accept", icon: .check, size: .inline) {
+                    Task { await viewModel?.respondToRequest(request, accept: true) }
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Accept")
         }
-        .transition(.scale.combined(with: .opacity))
+        .padding(.horizontal, ViewConst.screenPaddings)
+        .padding(.vertical, 12)
+        .background(Color.vCardSolid)
+        .overlay(alignment: .bottom) { Rectangle().fill(Color.vDivider).frame(height: 1) }
+        .transition(.opacity)
     }
 
     private var avatar: some View {
@@ -366,7 +364,9 @@ struct ConversationScreen: View {
 }
 
 /// The listing strip's band: `vCardSolid`, highlighting to `vSurface` on press.
-private struct ListingStripButtonStyle: ButtonStyle {
+/// The full-width context strip's fill + press state (the listing strip here,
+/// the Analytics "Followers & collaborators" strip).
+struct ListingStripButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .background(configuration.isPressed ? Color.vSurface : Color.vCardSolid)

@@ -27,8 +27,8 @@ struct PlaylistCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 cover
                 Text(playlist.title)
-                    .font(.appSubheadlineMedium)
-                    .foregroundStyle(Color.vTextRow)
+                    .font(.appFont.cardTitle)
+                    .foregroundStyle(Color.vText)
                     .lineLimit(1)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
@@ -80,8 +80,8 @@ struct PlaylistCoverFallback: View {
     let name: String
     var iconSize: IconSize = .xl
     var volspireMark = false
-    /// The glyph on the mesh (marketplace packs / services use their own).
-    var icon: LucideIcon.Name = .listMusic
+    /// The glyph on the mesh (services use their own; nil = bare mesh).
+    var icon: LucideIcon.Name? = .listMusic
 
     var body: some View {
         let mesh = Self.mesh(for: name)
@@ -92,7 +92,7 @@ struct PlaylistCoverFallback: View {
                         VolspireAppMark(size: min(geo.size.width, geo.size.height) * 0.42, color: .white)
                             .frame(width: geo.size.width, height: geo.size.height)
                     }
-                } else {
+                } else if let icon {
                     LucideIcon(icon, iconSize).foregroundStyle(Color.vOnColor.opacity(0.64))
                 }
             }
@@ -192,5 +192,64 @@ struct PlaylistCardSkeleton: View {
         .frame(width: width, alignment: .leading)
         .background(Color.vCard)
         .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+    }
+}
+
+// MARK: - Grid cover card
+
+/// The grid card shared by the Workspace folders and Library playlists (the
+/// Marketplace pack card's anatomy): square art with the cover shadow, the
+/// name over a quiet caption. Tap opens; press and hold opens the item's
+/// options (no "…").
+struct GridCoverCard<Art: View>: View {
+    let title: String
+    let caption: String?
+    /// Accessibility name for the hold action ("Folder options").
+    var optionsLabel = "Options"
+    var onLongPress: (() -> Void)? = nil
+    let action: () -> Void
+    @ViewBuilder let art: () -> Art
+
+    /// CardPress's press feedback, driven by the gestures below (a Button
+    /// would also fire its tap when a long press is released).
+    @State private var pressed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Sized placeholder + art in its overlay (fill-images rule).
+            Color.vSurface
+                .aspectRatio(1, contentMode: .fit)
+                .overlay { art() }
+                .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
+                .coverShadow()
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.appFont.cardTitle)
+                    .foregroundStyle(Color.vText)
+                    .lineLimit(1)
+                if let caption {
+                    Text(caption)
+                        .font(.appFont.cardSubtitle)
+                        .foregroundStyle(Color.vText3)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
+        .scaleEffect(pressed ? 0.97 : 1)
+        .opacity(pressed ? 0.92 : 1)
+        .animation(.easeOut(duration: 0.15), value: pressed)
+        // Long press first, so a recognised hold cancels the tap.
+        .onLongPressGesture(minimumDuration: 0.4) {
+            guard let onLongPress else { return }
+            Haptics.impact(.medium)
+            onLongPress()
+        } onPressingChanged: { pressed = $0 }
+        .onTapGesture(perform: action)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: optionsLabel) { onLongPress?() }
     }
 }

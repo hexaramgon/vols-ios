@@ -44,8 +44,6 @@ final class FeedStore {
     private(set) var artistsHasMore = true
     /// Tracks flagged open for collab — the More-artists "Open for collab on" row.
     private(set) var collabTracks: [HomeTrack] = []
-    /// Card details by lowercased user id.
-    private(set) var artistDetails: [String: ArtistCardDetails] = [:]
     /// Open-to-collab artists with a mappable city, for `locationsRoles`.
     private(set) var artistLocations: [LocatedArtist] = []
     private(set) var locationsLoaded = false
@@ -74,7 +72,6 @@ final class FeedStore {
     private var locationsGeneration = 0
     private var locationsRolesKey: String?
     private var collabTracksLoaded = false
-    private var detailsRequested: Set<String> = []
     private var observers: [NSObjectProtocol] = []
 
     init(service: SupabaseService, storage: StorageService) {
@@ -115,8 +112,6 @@ final class FeedStore {
         artistsHasMore = true
         collabTracks = []
         collabTracksLoaded = false
-        artistDetails = [:]
-        detailsRequested = []
         artistLocations = []
         locationsLoaded = false
         locationsRolesKey = nil
@@ -156,7 +151,7 @@ final class FeedStore {
             loadState = .loaded
             prefetchCovers(popularTracks + demos + samples)
         } catch {
-            loadState = .error(error.localizedDescription)
+            loadState.fail(error, ifEmpty: true)
         }
     }
 
@@ -281,29 +276,6 @@ final class FeedStore {
         return collabTracks.first { $0.artistId?.lowercased() == id }
     }
 
-    /// Fetches card details for any of `ids` not yet requested, 20 at a time
-    /// (web `useArtistDetails` page size).
-    func loadArtistDetails(for ids: [String]) async {
-        let missing = ids.map { $0.lowercased() }.filter { !detailsRequested.contains($0) }
-        guard !missing.isEmpty else { return }
-        missing.forEach { detailsRequested.insert($0) }
-        for start in stride(from: 0, to: missing.count, by: 20) {
-            let chunk = Array(missing[start ..< min(start + 20, missing.count)])
-            do {
-                let rows = try await service.getArtistDetails(ids: chunk)
-                for (id, d) in rows {
-                    artistDetails[id] = ArtistCardDetails(
-                        location: Geo.resolve(d.location)?.name ?? d.location,
-                        latestTrack: d.latestTrack.map(mapLatest)
-                    )
-                }
-            } catch {
-                chunk.forEach { detailsRequested.remove($0) }
-                debugLog("[FeedStore] artist details: \(error)")
-            }
-        }
-    }
-
     // MARK: - Collab map
 
     /// Open-to-collab artists (for the current roles) with a mappable city:
@@ -360,16 +332,31 @@ final class FeedStore {
     }
 
     /// Refetches every loaded surface after a block/unblock — only re-runs
-    /// what had loaded.
+    /// what had loaded, and silently: the current rows stay up (no skeleton
+    /// flash) until the fresh ones land. A block already stripped the user's
+    /// rows locally (`removeContent(byUser:)`).
     func refreshAfterBlockChange() async {
         let hadFollowing = followingLoaded
         let hadLocations = locationsLoaded
-        loadState = .idle
-        async let home: Void = loadHomeData()
+        async let home: Void = refreshAfterOwnPost()
         async let artistsDone: Void = reloadArtists()
         _ = await (home, artistsDone)
         if hadFollowing { await reloadFollowing() }
         if hadLocations { await reloadLocations() }
+    }
+
+    /// A user was blocked — drop everything of theirs from every rail now,
+    /// before the server round-trip (the silent refresh confirms it after).
+    func removeContent(byUser userId: String) {
+        let id = userId.lowercased()
+        let theirs: (HomeTrack) -> Bool = { $0.artistId?.lowercased() == id }
+        popularTracks.removeAll(where: theirs)
+        demos.removeAll(where: theirs)
+        samples.removeAll(where: theirs)
+        followingTracks.removeAll(where: theirs)
+        collabTracks.removeAll(where: theirs)
+        artists.removeAll { $0.id.lowercased() == id }
+        artistLocations.removeAll { $0.artist.id.lowercased() == id }
     }
 
     /// A track was deleted anywhere in the app — strip every copy so the rails
@@ -395,14 +382,15 @@ final class FeedStore {
     }
 
     private func mapTracks(_ apiTracks: [ApiHomeTrack]?) -> [HomeTrack] {
-        // cover_url / audio_url come back as bare `post-uploads` paths — resolve them.
+        // cover_url is a bare `post-uploads` path; audio_url a `track-media` object
+        // (a placeholder URL the player signs when it plays).
         apiTracks?.map { track in
             HomeTrack(
                 id: track.id,
                 title: track.title,
                 artist: track.artist ?? "unknown",
                 coverURL: url(track.coverUrl),
-                audioURL: url(track.audioUrl),
+                audioURL: storage.trackMediaURL(track.audioUrl),
                 streams: track.streams,
                 durationMs: track.durationMs
             )
@@ -416,7 +404,7 @@ final class FeedStore {
                 title: t.title,
                 artist: t.artist ?? "unknown",
                 coverURL: url(t.coverUrl),
-                audioURL: url(t.audioUrl),
+                audioURL: storage.trackMediaURL(t.audioUrl),
                 streams: t.streams,
                 durationMs: t.durationMs,
                 artistId: t.artistId,
@@ -426,22 +414,6 @@ final class FeedStore {
                 lookingForCollab: t.lookingForCollab ?? false
             )
         }
-    }
-
-    private func mapLatest(_ t: ApiArtistLatestTrack) -> HomeTrack {
-        HomeTrack(
-            id: t.trackId,
-            title: t.title,
-            artist: "",
-            coverURL: url(t.coverUrl),
-            audioURL: url(t.audioUrl),
-            streams: t.streams,
-            durationMs: t.durationMs,
-            artistId: t.createdBy,
-            genre: t.genre,
-            hasVisual: t.hasVisual ?? false,
-            createdAt: t.createdAt
-        )
     }
 
     func mapArtists(_ items: [ApiExploreArtist]) -> [ExploreArtistItem] {

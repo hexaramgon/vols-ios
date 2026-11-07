@@ -7,6 +7,8 @@
 //  render from the shared `WorkspaceStore` — the Home Workspace tab mounts
 //  them (folders live on the Workspace tab):
 //  - `WorkspaceFolderRow` — a flat folder row (FolderArt sm + name + caption).
+//  - `WorkspaceFolderCard` — the grid card (experiment, behind
+//    `FeatureFlags.workspaceFolderGrid`): the Marketplace pack card's anatomy.
 //
 
 import DesignSystem
@@ -30,13 +32,14 @@ struct WorkspaceFolderRow: View {
                 // Same 44pt / radius-8 tile as a track row's cover.
                 FolderArt(id: folder.folderId, name: folder.name, size: .row)
                 VStack(alignment: .leading, spacing: 2) {
+                    // The shared row pair (AppFont.trackTitle / trackSubtitle).
                     Text(folder.name)
-                        .font(.appSubheadlineMedium)
+                        .font(.appFont.trackTitle)
                         .foregroundStyle(Color.vText)
                         .lineLimit(1)
                     Text(caption)
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vText2)
+                        .font(.appFont.trackSubtitle)
+                        .foregroundStyle(Color.vText3)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -69,5 +72,29 @@ struct WorkspaceFolderRow: View {
         }
         let access = folder.role == "editor" ? "You can edit" : "View only"
         return desc.isEmpty ? access : "\(desc) · \(access)"
+    }
+}
+
+// MARK: - Folder card (grid experiment)
+
+/// A folder as a grid card (`GridCoverCard`): its name mesh, the name over
+/// "12 items · 3 days ago" (created). Tap opens the folder; press and hold
+/// opens its options.
+struct WorkspaceFolderCard: View {
+    let folder: ApiUserFolder
+    var onLongPress: (() -> Void)? = nil
+    let action: () -> Void
+
+    private var caption: String {
+        let created = MessageTime.agoLong(iso: folder.createdAt)
+        guard let n = folder.fileCount else { return created }
+        return "\(n == 1 ? "1 item" : "\(n.compactCount) items") · \(created)"
+    }
+
+    var body: some View {
+        GridCoverCard(title: folder.name, caption: caption, optionsLabel: "Folder options",
+                      onLongPress: onLongPress, action: action) {
+            PlaylistCoverFallback(name: folder.name, icon: nil)
+        }
     }
 }

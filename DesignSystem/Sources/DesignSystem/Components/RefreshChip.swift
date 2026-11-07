@@ -41,6 +41,20 @@ public extension View {
     }
 }
 
+/// Runs a pull-to-refresh behind a `refreshChip`: sets `isRefreshing`, does
+/// the work, and keeps the chip up at least ~0.6s — a fast refresh otherwise
+/// flashed it for a frame and read as "nothing happened".
+@MainActor
+public func runRefresh(_ isRefreshing: Binding<Bool>, _ work: () async -> Void) async {
+    isRefreshing.wrappedValue = true
+    let start = ContinuousClock.now
+    await work()
+    let minimum = Duration.milliseconds(600)
+    let elapsed = ContinuousClock.now - start
+    if elapsed < minimum { try? await Task.sleep(for: minimum - elapsed) }
+    isRefreshing.wrappedValue = false
+}
+
 #Preview {
     Color.appBase
         .refreshChip(true, topInset: 60)

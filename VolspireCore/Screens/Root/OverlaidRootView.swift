@@ -40,11 +40,11 @@ struct OverlaidRootView: View {
         conversationState.activeConversation != nil
     }
 
-    /// Slide the mini player away for a full-screen conversation OR while a
+    /// Slide the mini player away for a full-screen conversation, while a
     /// bottom composer's keyboard is up — same reason as the tab bar: it must
-    /// not float wedged above the keyboard.
+    /// not float wedged above the keyboard — or under Explore's search.
     private var hideBottomChrome: Bool {
-        isConversationActive || conversationState.composerActive
+        isConversationActive || conversationState.composerActive || conversationState.searchOpen
     }
 
     private var collapsedFrame: CGRect {
@@ -91,12 +91,18 @@ struct OverlaidRootView: View {
                         // animation so it can't merge and overshoot.
                         .animation(.smooth(duration: 0.35), value: isConversationActive)
                         .animation(.easeInOut(duration: 0.25), value: conversationState.composerActive)
+                        .animation(.easeInOut(duration: 0.25), value: conversationState.searchOpen)
                         // Slide up + fade in when a track starts (reverse on clear)
                         // instead of popping in/out.
                         .transition(.offset(y: 70).combined(with: .opacity))
                     }
                 }
                 .animation(.smooth(duration: 0.4), value: showMiniPlayer)
+                // Like the tab bar (RootTabView), the player stays put when a
+                // keyboard opens — it slides under it instead of riding up
+                // over the page. (Composers that own the bottom hide it via
+                // hideBottomChrome.)
+                .ignoresSafeArea(.keyboard)
             }
             // In-hierarchy so its glass material can blur the player beneath
             // (a fullScreenCover's material can't see through the presentation).
@@ -104,6 +110,16 @@ struct OverlaidRootView: View {
             // Above the mini-player + tab bar so the avatar zoom covers everything.
             .overlay { avatarPreviewOverlay }
             .overlay { uploadConfirmationOverlay }
+            // Action toasts ("Track deleted", "Blocked @user") — just above the
+            // tab bar / mini-player. The overlay already sits inside the safe
+            // area, so no window inset here: reading UIKit's safeAreaInsets in
+            // this body made a cold launch from a stored session re-enter the
+            // graph (an AttributeGraph cycle) and froze every overlay below —
+            // intro tips showed their dim with no content.
+            .overlay(alignment: .bottom) {
+                ToastHost()
+                    .padding(.bottom, playerController.tabBarHeight + playerController.miniPlayerAllowance + 10)
+            }
             // First-visit section explainers (IntroModal.swift), over everything.
             .overlay { IntroModalHost() }
             .environment(conversationState)
@@ -120,6 +136,7 @@ struct OverlaidRootView: View {
                         listingId: note.userInfo?["listingId"] as? String
                     )
                     withAnimation(.easeOut(duration: 0.22)) { uploadConfirmation = confirmation }
+                    Haptics.success()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
                         // Don't clear a newer card that replaced this one mid-flight.
                         guard uploadConfirmation == confirmation else { return }
@@ -558,6 +575,9 @@ extension Notification.Name {
     /// flashes the confirmation card from `confirmationTitle`/`-Subtitle`
     /// userInfo once the form's sheet has slid away.
     static let ownContentPosted = Notification.Name("ownContentPosted")
+    /// A pack was created or edited (its cached responses are already
+    /// dropped) — the Marketplace tab, saved packs and profiles refetch.
+    static let packsChanged = Notification.Name("packsChanged")
     /// Posted by the confirmation card's dismissal when the post carries an id —
     /// RootTabView opens the content (userInfo: "trackId" or "listingId").
     static let openOwnPost = Notification.Name("openOwnPost")
@@ -585,4 +605,5 @@ enum PushInbox {
         .environment(dependencies.inboxStore)
         .environment(dependencies.listingsStore)
         .environment(dependencies.feedStore)
+        .environment(dependencies.packsStore)
 }

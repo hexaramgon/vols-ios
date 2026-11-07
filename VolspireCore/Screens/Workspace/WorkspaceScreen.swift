@@ -18,9 +18,13 @@ struct WorkspaceScreen: View {
     @Environment(Router.self) var router
     @Environment(PlayerController.self) private var playerController
     @Environment(WorkspaceStore.self) var workspaceStore
+    @Environment(Dependencies.self) private var dependencies
     @Environment(InboxStore.self) private var inboxStore
 
     @State var folderQuery = ""
+    /// The folder search field is open (from the header's search icon).
+    @State private var showFolderSearch = false
+    @FocusState private var folderSearchFocused: Bool
     /// The Activity rail's open avatar (nil = closed).
     @State var activityExpanded: String?
     @State var showCreateFolder = false
@@ -35,23 +39,31 @@ struct WorkspaceScreen: View {
     @State private var editName = ""
     @State private var editDescription = ""
     @State private var isSavingEdit = false
-    @State private var folderToDelete: ApiUserFolder?
+    /// The folder sheet's in-place Delete confirm.
+    @State private var folderConfirm: DestructiveConfirm?
+    /// The folder whose Members sheet is open (the same sheet as its page).
+    @State private var membersModel: FolderContentsViewModel?
 
     var pad: CGFloat { ViewConst.screenPaddings }
+    /// The page has scrolled under the header (shows its hairline).
+    @State private var scrolled = false
 
     var body: some View {
         VStack(spacing: 0) {
             // First-visit explainer (IntroModal.swift) — a zero-height anchor.
-            Color.clear.frame(height: 0).introModal(.workspace)
-            ScreenHeader("Workspace") {
-                HeaderIconButton(icon: .bell, showDot: inboxStore.unreadNotifications > 0) {
-                    router.navigateToNotifications()
+            Color.clear.frame(height: 0).introModal(.workspace, ready: workspaceStore.foldersLoaded)
+            ScreenHeader("Workspace", scrolled: scrolled) {
+                // Search opens the folder filter under the header (the field
+                // used to sit there permanently).
+                if !workspaceStore.folders.isEmpty {
+                    HeaderIconButton(icon: .search) {
+                        withAnimation(.smooth(duration: 0.22)) { showFolderSearch = true }
+                        folderSearchFocused = true
+                    }
+                    .accessibilityLabel("Search folders")
                 }
-                .accessibilityLabel("Notifications")
-                HeaderIconButton(icon: .messageCircle, showDot: inboxStore.inboxHasUnread) {
-                    router.navigateToMessages()
-                }
-                .accessibilityLabel("Messages")
+                HeaderIconButton(icon: .plus, size: 36) { showCreateFolder = true }
+                    .accessibilityLabel("New folder")
             }
             .zIndex(1)
             ScrollViewReader { proxy in
@@ -61,7 +73,8 @@ struct WorkspaceScreen: View {
                         workspaceContent
                             .loadingCrossfade(workspaceStore.foldersLoaded)
                     }
-                    .padding(.top, 16)
+                    // Tight under the 44pt header bar (Settings' spacing).
+                    .padding(.top, 4)
                     .padding(.bottom, playerController.contentBottomInset + 24)
                     // Activity overview open: a tap anywhere outside closes it
                     // (buttons inside still win; inactive when closed).
@@ -70,6 +83,7 @@ struct WorkspaceScreen: View {
                              including: activityExpanded != nil ? .all : .subviews)
                 }
                 .scrollIndicators(.hidden)
+                .trackScrolledPastTop($scrolled)
                 .refreshable { await workspaceStore.refreshFolders() }
                 .onChange(of: router.rootResetTick) { _, _ in
                     withAnimation(.smooth(duration: 0.35)) { proxy.scrollTo("top", anchor: .top) }
@@ -92,38 +106,39 @@ struct WorkspaceScreen: View {
                 onSubmit: { await createFolder() }
             )
         }
-        .sheet(item: $folderForOptions, onDismiss: runPendingFolderAction) { folderOptionsSheet($0) }
-        .sheet(item: $editingFolder) { folder in
-            FolderFormSheet(
-                icon: .pencil,
+        .sheet(item: $folderForOptions, onDismiss: {
+            folderConfirm = nil
+            runPendingFolderAction()
+        }) { folderOptionsSheet($0) }
+        // Full screen, like the other edit pages.
+        .fullScreenCover(item: $editingFolder) { folder in
+            EditDetailsScreen(
                 title: "Edit Folder",
+                subtitle: "Update its name and description",
+                nameLabel: "Folder name",
+                namePrompt: "e.g. Album Sessions, Client Work…",
                 name: $editName,
+                descriptionPrompt: "What's this folder for?",
                 description: $editDescription,
-                actionTitle: "Save changes",
+                hasChanges: folderEditChanged(folder),
                 busy: isSavingEdit,
-                isEdit: true,
-                originalName: folder.name,
-                originalDescription: folder.description ?? "",
-                onSubmit: { await saveEdit(folder) }
+                onSave: { await saveEdit(folder) }
             )
         }
-        .destructiveConfirm(
-            "Delete \"\(folderToDelete?.name ?? "folder")\"?",
-            isPresented: Binding(get: { folderToDelete != nil }, set: { if !$0 { folderToDelete = nil } }),
-            actionLabel: "Delete folder",
-            message: "Its files will be removed for everyone in it."
-        ) {
-            guard let folder = folderToDelete else { return }
-            Task { try? await workspaceStore.deleteFolder(folderId: folder.folderId) }
+        .sheet(isPresented: Binding(get: { membersModel != nil }, set: { if !$0 { membersModel = nil } })) {
+            if let membersModel {
+                ManageMembersSheet(viewModel: membersModel)
+            }
         }
     }
 
     // MARK: Folder "…" options
 
-    enum FolderRowAction { case open, edit, delete }
+    enum FolderRowAction { case open, edit, members }
 
-    /// The "…" sheet for a folder row: folder art + name, then Open, and —
-    /// for your own folders — Edit and Delete (like a track's options).
+    /// The press-and-hold sheet for a folder: folder art + name, then Open,
+    /// and — for your own folders — Edit, Manage members and Delete (the same
+    /// options as the folder's own page).
     private func folderOptionsSheet(_ folder: ApiUserFolder) -> some View {
         let owner = folder.role == "owner"
         return VStack(alignment: .leading, spacing: 0) {
@@ -144,12 +159,20 @@ struct WorkspaceScreen: View {
                     OptionSheetRow(icon: .pencil, title: "Edit folder") {
                         pendingFolderAction = (.edit, folder); folderForOptions = nil
                     }
+                    OptionSheetRow(icon: .userPlus, title: "Manage members") {
+                        pendingFolderAction = (.members, folder); folderForOptions = nil
+                    }
                     OptionSheetRow(icon: .trash2, title: "Delete folder", tint: .vError) {
-                        pendingFolderAction = (.delete, folder); folderForOptions = nil
+                        folderConfirm = DestructiveConfirm(
+                            title: "Delete \"\(folder.name)\"?",
+                            message: "Its files will be removed for everyone in it.",
+                            actionLabel: "Delete folder"
+                        ) { dependencies.contentActions.deleteFolder(id: folder.folderId) }
                     }
                 }
             }
             .padding(.top, 6)
+            .confirmModal($folderConfirm)
         }
         .selfSizedDetent()
         .sheetBackground()
@@ -165,9 +188,21 @@ struct WorkspaceScreen: View {
             editName = folder.name
             editDescription = folder.description ?? ""
             editingFolder = folder
-        case .delete:
-            folderToDelete = folder
+        case .members:
+            // The folder page's own model, pointed at this folder; its role
+            // comes from the shared folder list (owner = can manage).
+            let model = FolderContentsViewModel(folderId: folder.folderId, folderName: folder.name)
+            model.workspace = workspaceStore
+            membersModel = model
+            Task { await model.loadFolderMeta() }
         }
+    }
+
+    private func folderEditChanged(_ folder: ApiUserFolder) -> Bool {
+        editName.trimmingCharacters(in: .whitespacesAndNewlines)
+            != folder.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            || editDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            != (folder.description ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func saveEdit(_ folder: ApiUserFolder) async {
@@ -211,9 +246,34 @@ extension WorkspaceScreen {
         }
     }
 
+    /// Two square-art columns (the grid experiment), like Marketplace.
+    private var folderColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 14, alignment: .top), count: 2)
+    }
+
     @ViewBuilder
     private var workspaceContent: some View {
-        if !workspaceStore.foldersLoaded {
+        if !workspaceStore.foldersLoaded, workspaceStore.foldersFailed {
+            // Offline / load failure with nothing to show — never "empty".
+            LoadErrorView(icon: .folder, title: "Couldn't load your folders") {
+                Task { await workspaceStore.refreshFolders() }
+            }
+            .padding(.horizontal, pad)
+            .padding(.top, 40)
+        } else if !workspaceStore.foldersLoaded, FeatureFlags.workspaceFolderGrid {
+            LazyVGrid(columns: folderColumns, alignment: .leading, spacing: 20) {
+                ForEach(0 ..< 4, id: \.self) { _ in
+                    VStack(alignment: .leading, spacing: 10) {
+                        RoundedRectangle(cornerRadius: Radius.tile, style: .continuous).fill(Color.vSkeleton)
+                            .aspectRatio(1, contentMode: .fit)
+                        Capsule().fill(Color.vSkeleton).frame(width: 110, height: 10)
+                        Capsule().fill(Color.vSkeleton).frame(width: 70, height: 8)
+                    }
+                }
+            }
+            .padding(.horizontal, pad)
+            .shimmering()
+        } else if !workspaceStore.foldersLoaded {
             VStack(spacing: 0) {
                 ForEach(0 ..< 6, id: \.self) { _ in
                     HStack(spacing: 12) {
@@ -230,36 +290,56 @@ extension WorkspaceScreen {
             }
             .shimmering()
         } else if workspaceStore.folders.isEmpty {
-            FolderEmptyState(
-                artId: "workspace", artName: "W",
+            // The animated ghost-rows empty state (My Network / Messages / Library).
+            HomeEmpty(
                 title: "Your workspace is empty",
-                message: "Folders hold what you share with collaborators: stems, bounces, references.",
-                actionTitle: "New folder",
-                action: { showCreateFolder = true }
-            )
-            .padding(.top, 40)
+                message: "Folders hold what you share with collaborators: stems, bounces, references."
+            ) {
+                GhostListRows(coverRadius: Radius.tile)
+            } action: {
+                PrimaryButton("New folder", size: .inline, expands: false) { showCreateFolder = true }
+            }
+            .padding(.horizontal, pad)
         } else {
             let shown = matchingFolders
             let mine = shown.filter { $0.role.lowercased() == "owner" }
             let shared = shown.filter { $0.role.lowercased() != "owner" }
             VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 12) {
+                // Shown from the header's search icon; × closes it and clears.
+                if showFolderSearch {
                     HStack(spacing: 8) {
-                        LucideIcon(.search, .md).foregroundStyle(Color.vText3)
+                        LucideIcon(.search, .sm).foregroundStyle(Color.vText3)
                         TextField("", text: $folderQuery, prompt: Text("Search folders…").foregroundColor(Color.vText3))
-                            .font(.appSubheadline)
+                            .font(.appCalloutRegular)
                             .foregroundStyle(Color.vText)
                             .autocorrectionDisabled()
+                            .focused($folderSearchFocused)
+                            .submitLabel(.search)
+                        Button {
+                            folderSearchFocused = false
+                            withAnimation(.smooth(duration: 0.22)) {
+                                showFolderSearch = false
+                                folderQuery = ""
+                            }
+                        } label: {
+                            LucideIcon(.x, .md)
+                                .foregroundStyle(Color.vText3)
+                                .frame(width: 28, height: 28)
+                                .minimumHitArea(for: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close search")
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    .padding(.leading, 14)
+                    .padding(.trailing, 6)
+                    .padding(.vertical, 6)
                     .background(Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-                    NewCapsuleButton { showCreateFolder = true }
+                    .padding(.horizontal, pad)
+                    .padding(.bottom, 24)
+                    .transition(.opacity)
                 }
-                .padding(.horizontal, pad)
 
                 WorkspaceActivityRail(expanded: $activityExpanded)
-                    .padding(.top, 24)
 
                 if shown.isEmpty {
                     Text("No folders match \"\(folderQuery)\"")
@@ -276,23 +356,44 @@ extension WorkspaceScreen {
         }
     }
 
+    /// A group heading in the profile's section-title type.
+    private func folderGroupHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.appFont.sectionTitle)
+            .foregroundStyle(Color.vText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, pad)
+        .padding(.bottom, FeatureFlags.workspaceFolderGrid ? 6 : 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+
     @ViewBuilder
     private func folderGroup(_ title: String, _ folders: [ApiUserFolder]) -> some View {
         if !folders.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                Text(title)
-                    .font(.appFont.sectionLabel)
-                    .foregroundStyle(Color.vText3)
-                    .padding(.horizontal, pad)
-                    .padding(.bottom, 4)
-                ForEach(Array(folders.enumerated()), id: \.element.id) { i, f in
-                    WorkspaceFolderRow(folder: f, onMore: { folderForOptions = f }) {
-                        router.navigateToFolder(folderId: f.folderId, folderName: f.name)
+                folderGroupHeader(title)
+                if FeatureFlags.workspaceFolderGrid {
+                    LazyVGrid(columns: folderColumns, alignment: .leading, spacing: 20) {
+                        ForEach(Array(folders.enumerated()), id: \.element.id) { i, f in
+                            WorkspaceFolderCard(folder: f, onLongPress: { folderForOptions = f }) {
+                                router.navigateToFolder(folderId: f.folderId, folderName: f.name)
+                            }
+                            .staggeredAppear(i, in: "workspace.\(title)")
+                        }
                     }
-                    .staggeredAppear(i, in: "workspace.\(title)")
+                    .padding(.horizontal, pad)
+                    .padding(.top, 6)
+                } else {
+                    ForEach(Array(folders.enumerated()), id: \.element.id) { i, f in
+                        WorkspaceFolderRow(folder: f, onMore: { folderForOptions = f }) {
+                            router.navigateToFolder(folderId: f.folderId, folderName: f.name)
+                        }
+                        .staggeredAppear(i, in: "workspace.\(title)")
+                    }
                 }
             }
-            .padding(.top, 24)
+            .padding(.top, 28)
         }
     }
 }

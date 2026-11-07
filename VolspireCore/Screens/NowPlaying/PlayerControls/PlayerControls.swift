@@ -62,9 +62,9 @@ struct PlayerControls: View {
             }
             .padding(.bottom, transportInset(controlsHeight: geo.size.height))
             // The bottom bar (action row / comment input) floats at the very bottom —
-            // hidden when minimized. Faded rather than unmounted: the AirPlay
-            // button wraps a UIKit AVRoutePickerView, and re-creating it on every
-            // reveal hitches the first frame of the animation.
+            // hidden when minimized. Faded rather than unmounted (it used to hold the
+            // UIKit AirPlay picker, and re-creating that on every
+            // reveal hitched the first frame of the animation).
             .overlay(alignment: .bottom) {
                 bottomBar
                     .padding(.bottom, commentsOpen ? 0 : max(ViewConst.safeAreaInsets.bottom, 12) + 10)
@@ -80,8 +80,12 @@ struct PlayerControls: View {
         .sheet(isPresented: Bindable(model).showingEffectsSheet) {
             AudioEffectsSheet()
                 .environment(model)
-                .presentationDetents([.height(440)])
+                .presentationDetents([.height(560)])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: Bindable(model).showingQueue) {
+            PlayerQueueSheet()
+                .environment(model)
         }
     }
 
@@ -152,7 +156,7 @@ private extension PlayerControls {
         UIColor.palette.playerCard.self
     }
 
-    /// The bottom row morphs between the action row (AirPlay · Comments · "…")
+    /// The bottom row morphs between the action row (Queue · Comments · "…")
     /// and the comment input bar when comments open.
     @ViewBuilder
     var bottomBar: some View {
@@ -165,18 +169,15 @@ private extension PlayerControls {
         }
     }
 
-    /// Bottom row pinned under the transport controls: AirPlay (left) ·
-    /// "Comments" (center) · track options "…" (right).
+    /// Bottom row pinned under the transport controls: Queue (left) ·
+    /// "Comments" (center) · track options "…" (right). Both sides take equal
+    /// widths so the Comments pill stays centered.
     var bottomActionsRow: some View {
         HStack(spacing: 0) {
-            AirPlayButton(size: 24)
-                .foregroundStyle(Color(palette.translucent))
-
-            Spacer(minLength: 0)
+            queueButton
+                .frame(maxWidth: .infinity, alignment: .leading)
 
             commentsButton
-
-            Spacer(minLength: 0)
 
             Button {
                 showTrackOptions = true
@@ -191,8 +192,22 @@ private extension PlayerControls {
             // Kept in layout (invisible) so the Comments pill stays centered.
             .opacity(model.currentFileId == nil ? 1 : 0)
             .allowsHitTesting(model.currentFileId == nil)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, ViewConst.playerCardPaddings)
+    }
+
+    /// Opens the play queue (played · now playing · up next).
+    var queueButton: some View {
+        Button {
+            model.showingQueue = true
+        } label: {
+            LucideIcon(.listMusic, size: 24)
+                .foregroundStyle(Color(palette.translucent))
+                .minimumHitArea(for: 24)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Queue")
     }
 
     /// A text "Comments" pill button that opens the comments panel.
@@ -254,20 +269,21 @@ private extension PlayerControls {
             .animation(.smooth(duration: 0.3), value: model.display)
             .padding(.leading, ViewConst.playerCardPaddings)
 
-            // Workspace files aren't real, shareable tracks — no save / playback-fx
-            // actions. Kept in layout (invisible), like the "…" above: removing
-            // them re-flowed the title as a folder queue stepped from a track to a
-            // file, which is exactly the movement this player is trying not to make.
+            // Workspace files aren't real tracks — no credits. Kept in layout
+            // (invisible), like the "…" above: removing it re-flowed the title as a
+            // folder queue stepped from a track to a file. Playback speed stays
+            // available for files (it used to be hidden with the credits, so a
+            // speed carried over from a track couldn't be changed back).
             HStack(spacing: 18) {
                 PlayerCreditsFacepile()
+                    .opacity(model.currentFileId == nil ? 1 : 0)
+                    .allowsHitTesting(model.currentFileId == nil)
                 fxButton
             }
             // The fx glyph is centred in a 32pt circle; pull the pair in so its
             // centre lands on the same column as the strip's Playlist /
             // Workspace icons and the repeat button (26pt glyphs on the inset).
             .padding(.trailing, ViewConst.playerCardPaddings - 3)
-            .opacity(model.currentFileId == nil ? 1 : 0)
-            .allowsHitTesting(model.currentFileId == nil)
         }
         .playerTrackOptions(isPresented: $showTrackOptions)
     }
@@ -282,13 +298,15 @@ private extension PlayerControls {
 
     /// Audio-effects button — same `SlidersHorizontal` icon the web app uses.
     var fxButton: some View {
-        let isActive = model.audioEffects != .default
+        let isActive = model.audioEffects != .default || !model.equalizer.isFlat
         return Button {
             model.showingEffectsSheet = true
         } label: {
             // Engaged (any non-default edit) = the web hero pills' selected
             // state: white with a black glyph, not an accent tint.
-            LucideIcon(.slidersHorizontal, isActive ? .lg : .xl)
+            // 26pt like the Add-to-playlist / Save icons stacked above it
+            // (NowPlayingInfoStrip), so the right-hand column lines up.
+            LucideIcon(.slidersHorizontal, size: isActive ? IconSize.lg.rawValue : 26)
                 .foregroundStyle(isActive ? Color.black : Color.white)
                 .frame(width: 32, height: 32)
                 .background(Circle().fill(.white).opacity(isActive ? 1 : 0))

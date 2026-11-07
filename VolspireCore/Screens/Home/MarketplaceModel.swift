@@ -6,6 +6,9 @@
 //  license, cheapest price), sample packs and services (`get_explore_data`).
 //  Display-ready values only, so the tab's cards don't touch API types.
 //
+//  With only the free-packs slice live (`FeatureFlags.freePacksOnly`) it
+//  loads free packs and nothing else.
+//
 //  While monetization is off the live tables are nearly empty, so the DEBUG
 //  design preview (`FeatureFlags.marketplacePreview`) falls back to sample
 //  listings — clearly flagged (`isSample`), never navigable, never shipped.
@@ -30,10 +33,22 @@ struct MarketPack: Identifiable, Hashable {
     let fileCount: Int?
     let rating: Double?
     let coverURL: URL?
-    let gradient: String?
     let creator: String
     /// The live row (nil for preview samples), for the detail screen.
     let api: ApiMarketplacePack?
+}
+
+extension MarketPack {
+    /// A live pack row as a card (Marketplace grid, Saved packs).
+    init(api p: ApiMarketplacePack, storage: StorageService) {
+        self.init(
+            id: p.packId, name: p.name, type: p.packType ?? "Pack", price: p.price ?? 0,
+            fileCount: p.fileCount, rating: p.avgRating,
+            coverURL: storage.resolveTrackUrl(p.coverUrl).flatMap { URL(string: $0) },
+            creator: p.creator?.username ?? "unknown",
+            api: p
+        )
+    }
 }
 
 struct MarketService: Identifiable, Hashable {
@@ -57,6 +72,9 @@ final class MarketplaceModel {
     private(set) var services: [MarketService] = []
     /// Flips on the first response (success or failure) — skeletons until then.
     private(set) var loaded = false
+    /// The last free-packs load failed with nothing on screen — the tab shows
+    /// "Couldn't load" + Try again, never a false "No free packs yet".
+    private(set) var failed = false
     /// Showing preview samples instead of live listings.
     private(set) var isSample = false
 
@@ -67,7 +85,26 @@ final class MarketplaceModel {
         await load(service)
     }
 
-    func load(_ service: SupabaseService) async {
+    /// `fresh` drops the cached marketplace response first (pull-to-refresh,
+    /// auto-refresh) — otherwise a load inside the cache TTL is a no-op.
+    func load(_ service: SupabaseService, fresh: Bool = false) async {
+        if fresh { await service.invalidatePackCaches() }
+        if FeatureFlags.freePacksOnly {
+            // Free-packs slice: free packs only — no beats, services or prices.
+            do {
+                let data = try await service.getExploreData()
+                packs = data.packs?.filter { ($0.price ?? 0) <= 0 }.map(pack) ?? []
+                failed = false
+            } catch {
+                debugLog("[Marketplace] load failed: \(error)")
+                failed = packs.isEmpty
+            }
+            beats = []
+            services = []
+            isSample = false
+            loaded = true
+            return
+        }
         async let explore = try? service.getExploreData()
         async let prices = try? service.getForSaleTrackPrices()
         let (data, priceRows) = await (explore, prices)
@@ -83,7 +120,7 @@ final class MarketplaceModel {
                     title: t.title ?? "Untitled",
                     artist: t.artistUsername ?? "unknown",
                     coverURL: storage.resolveTrackUrl(t.coverUrl).flatMap { URL(string: $0) },
-                    audioURL: storage.resolveTrackUrl(t.audioUrl).flatMap { URL(string: $0) },
+                    audioURL: storage.trackMediaURL(t.audioUrl),
                     streams: nil,
                     durationMs: nil,
                     artistId: t.artistUserId,
@@ -113,12 +150,7 @@ final class MarketplaceModel {
     }
 
     private func pack(_ p: ApiMarketplacePack) -> MarketPack {
-        MarketPack(
-            id: p.packId, name: p.name, type: p.packType ?? "Pack", price: p.price ?? 0,
-            fileCount: p.fileCount, rating: p.avgRating,
-            coverURL: storage.resolveTrackUrl(p.coverUrl).flatMap { URL(string: $0) },
-            gradient: p.gradient, creator: p.creator?.username ?? "unknown", api: p
-        )
+        MarketPack(api: p, storage: storage)
     }
 
     private func serviceItem(_ s: ApiMarketplaceService) -> MarketService {
@@ -176,7 +208,7 @@ enum MarketplaceSamples {
     static let packs: [MarketPack] = packRows.enumerated().map { i, p in
         let id = "sample-pack-\(i)"
         return MarketPack(id: id, name: p.0, type: p.1, price: p.2, fileCount: p.3, rating: p.4,
-                          coverURL: nil, gradient: nil, creator: p.5,
+                          coverURL: nil, creator: p.5,
                           api: decode(["pack_id": id, "name": p.0, "pack_type": p.1, "price": p.2, "file_count": p.3,
                                        "avg_rating": orNull(p.4), "creator": ["username": p.5]]))
     }

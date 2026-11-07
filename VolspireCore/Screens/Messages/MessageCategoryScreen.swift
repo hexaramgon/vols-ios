@@ -39,11 +39,26 @@ struct MessageCategoryScreen: View {
                             .staggeredAppear(index, in: entranceKey)
                     }
                 }
+                InboxPageFooter()
             }
             .padding(.bottom, bottomInset)
             .animation(.easeInOut(duration: 0.25), value: items)
         }
         .scrollIndicators(.hidden)
+        .refreshable { await inboxStore.refreshConversations() }
         .appNavBar(title: title) { dismiss() }
+    }
+}
+
+/// The inbox's pager (see `PageFooter`).
+struct InboxPageFooter: View {
+    @Environment(InboxStore.self) private var inboxStore
+
+    var body: some View {
+        PageFooter(
+            hasMore: inboxStore.hasMoreConversations,
+            failed: inboxStore.pageLoadFailed,
+            rowCount: inboxStore.conversations.count
+        ) { await inboxStore.loadMoreConversations() }
     }
 }

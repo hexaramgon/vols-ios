@@ -34,12 +34,8 @@ struct EditTrackScreen: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 28) {
-                    coverAndTitleRow
-                    UploadDescriptionField(
-                        text: $viewModel.description,
-                        prompt: "What's the story behind this track?",
-                        limit: 500
-                    )
+                    coverSection
+                    detailsSection
                     tagsSection
                     privacySection
                 }
@@ -53,7 +49,8 @@ struct EditTrackScreen: View {
                 bottomBar
             }
         }
-        .gradientBackground()
+        // Flat app-base canvas — same as the upload flow.
+        .background(Color.vBase.ignoresSafeArea())
         .photosPicker(isPresented: $showCoverPicker, selection: $selectedPhoto, matching: .images)
         .sheet(isPresented: $showGenrePicker) {
             GenrePickerSheet(genre: $viewModel.genre)
@@ -96,19 +93,28 @@ struct EditTrackScreen: View {
         }
     }
 
-    // MARK: - Cover + title + genre
+    // MARK: - Cover art · Details
 
-    private var coverAndTitleRow: some View {
-        HStack(alignment: .top, spacing: 16) {
-            Button {
-                showCoverPicker = true
-            } label: {
-                UploadCoverBox(image: viewModel.coverImage, existingURL: viewModel.existingCoverURL)
-            }
-            .buttonStyle(.plain)
+    private var coverSection: some View {
+        UploadCoverSection(
+            image: viewModel.coverImage,
+            existingURL: viewModel.existingCoverURL,
+            caption: "A square image, shown everywhere your track appears."
+        ) { showCoverPicker = true }
+    }
 
-            UploadTitleGenreColumn(title: $viewModel.title, genre: $viewModel.genre) {
-                showGenrePicker = true
+    private var detailsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            UploadSectionDivider("Details")
+            UploadTextField(label: "Title", text: $viewModel.title, prompt: "Track title", limit: 100)
+            UploadGenreField(genre: viewModel.genre) { showGenrePicker = true }
+            VStack(alignment: .leading, spacing: 8) {
+                UploadFieldLabel("Description (optional)")
+                UploadDescriptionField(
+                    text: $viewModel.description,
+                    prompt: "What's the story behind this track?",
+                    limit: 500
+                )
             }
         }
     }
@@ -128,7 +134,7 @@ struct EditTrackScreen: View {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Privacy & Release")
 
-            UploadVisibilityPicker(visibility: $viewModel.visibility)
+            UploadVisibilityPicker(visibility: $viewModel.visibility, allowsUnlisted: true)
         }
     }
 }

@@ -43,7 +43,7 @@ struct SettingsScreen: View {
                         NotificationSettingsScreen()
                     }
                     SettingsDivider()
-                    link(.userX, "Privacy", "Manage who you've blocked") {
+                    link(.userX, "Privacy", "Collab map and blocked accounts") {
                         BlockedAccountsScreen()
                     }
                     SettingsDivider()
@@ -177,7 +177,6 @@ struct SettingsProfileScreen: View {
 struct SecuritySettingsScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @State private var methods: SignInMethods?
-    @State private var showDeleteConfirm = false
     @State private var showDeleteSheet = false
 
     var body: some View {
@@ -217,7 +216,14 @@ struct SecuritySettingsScreen: View {
                     title: "Delete account",
                     caption: "Permanently remove your account and all data."
                 ) {
-                    Button { showDeleteConfirm = true } label: {
+                    Button {
+                        ConfirmCenter.shared.present(DestructiveConfirm(
+                            icon: .trash2,
+                            title: "Delete your account?",
+                            message: "This is permanent and can't be undone.",
+                            actionLabel: "Continue"
+                        ) { showDeleteSheet = true })
+                    } label: {
                         Text("Delete")
                             .font(.appCaptionMedium)
                             .foregroundStyle(Color.vError)
@@ -230,18 +236,11 @@ struct SecuritySettingsScreen: View {
             }
         }
         .task { await loadMethods() }
-        .destructiveConfirm(
-            "Delete your account? This is permanent and can't be undone.",
-            isPresented: $showDeleteConfirm,
-            actionLabel: "Continue"
-        ) {
-            showDeleteSheet = true
-        }
         .sheet(isPresented: $showDeleteSheet) {
             DeleteAccountSheet(requiresPassword: methods?.hasPassword ?? dependencies.authManager.hasPasswordIdentity)
                 // FIXED detent — keyboarded sheets must not self-size
                 // (AttributeGraph hang, see RespondSheet).
-                .presentationDetents([.height(460)])
+                .presentationDetents([.height(480)])
                 .presentationDragIndicator(.visible)
         }
     }
@@ -569,76 +568,55 @@ private struct DeleteAccountSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Delete account?")
-                .font(.appTitle3)
-                .foregroundStyle(Color.vText)
-                .padding(.bottom, 8)
+            // The app's sheet anatomy (Collab Request / Respond): shared header,
+            // labeled field, Cancel / red action footer.
+            SheetHeader(icon: .trash2, title: "Delete account", subtitle: "This can't be undone") { dismiss() }
 
-            Text("This permanently deletes your login and erases your profile. This cannot be undone. Tracks and messages you've posted may remain under an anonymized handle; email privacy@volspire.com to have them removed too.")
-                .font(.appSubheadline)
-                .foregroundStyle(Color.vText2)
-                .lineSpacing(3)
-                .padding(.bottom, 20)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("This permanently deletes your login and erases your profile. Tracks and messages you've posted may remain under an anonymized handle; email privacy@volspire.com to have them removed too.")
+                    .font(.appSubheadline)
+                    .foregroundStyle(Color.vText2)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 20)
 
-            Text(requiresPassword ? "Enter your password" : "Type DELETE to confirm")
-                .font(.appFootnote)
-                .foregroundStyle(Color.vText3)
-                .padding(.bottom, 8)
+                SheetFieldLabel(requiresPassword ? "Enter your password" : "Type DELETE to confirm")
+                    .padding(.bottom, 8)
 
-            Group {
-                if requiresPassword {
-                    SecureField("Password", text: $password)
-                        .textContentType(.password)
-                } else {
-                    TextField("DELETE", text: $confirmText)
-                        .textInputAutocapitalization(.characters)
-                        .autocorrectionDisabled()
-                }
-            }
-            .focused($fieldFocused)
-            .settingsFieldStyle(focused: fieldFocused)
-
-            if let errorMessage {
-                ErrorBanner(errorMessage)
-                    .padding(.top, 12)
-            }
-
-            Spacer(minLength: 16)
-
-            Button {
-                Task { await performDelete() }
-            } label: {
                 Group {
-                    if deleting {
-                        ProgressView().tint(Color.vOnColor)
+                    if requiresPassword {
+                        SecureField("Password", text: $password)
+                            .textContentType(.password)
                     } else {
-                        Text("Permanently delete account").font(.appSubheadlineSemibold)
+                        TextField("DELETE", text: $confirmText)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
                     }
                 }
-                .foregroundStyle(Color.vOnColor)
-                .frame(maxWidth: .infinity)
-                .frame(height: 48)
-                .background(Color.vDestructive.opacity(canDelete ? 1 : 0.4), in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(!canDelete)
+                .focused($fieldFocused)
+                .settingsFieldStyle(focused: fieldFocused)
 
-            Button {
-                dismiss()
-            } label: {
-                Text("Cancel")
-                    .font(.appSubheadlineSemibold)
-                    .foregroundStyle(Color.vText2)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-                    .contentShape(.rect)
+                if let errorMessage {
+                    ErrorBanner(errorMessage)
+                        .padding(.top, 12)
+                }
+
+                Spacer(minLength: 16)
+
+                CancelSendButtons(
+                    sendTitle: "Delete account",
+                    destructive: true,
+                    canSend: canDelete,
+                    isSending: deleting,
+                    onCancel: { dismiss() },
+                    onSend: { Task { await performDelete() } }
+                )
             }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+            .padding(.bottom, 16)
+            .keyboardSafeForm()
         }
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.top, 24)
-        .padding(.bottom, 12)
         .sheetBackground()
         .onAppear { fieldFocused = true }
     }

@@ -169,6 +169,14 @@ struct AudioAttachmentPlayer: View {
             }
         }
         .onDisappear(perform: teardown)
+        // The thread re-signs links before they expire. A paused/idle player
+        // still holds the old one, so drop it — the next play builds a fresh
+        // player on the new link. A clip mid-play keeps going (already loaded).
+        .onChange(of: url) { _, _ in
+            guard !isPlaying, player != nil else { return }
+            teardown()
+            current = 0
+        }
     }
 
     private var metaText: String {

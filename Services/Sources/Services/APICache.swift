@@ -18,7 +18,14 @@ public enum CacheTTL {
     public static let long: TimeInterval = 300
 }
 
-/// A thread-safe in-memory cache for API responses with configurable TTL.
+/// A thread-safe cache for API responses with configurable TTL.
+///
+/// Fresh entries (inside their TTL) answer reads as before. Expired entries are
+/// KEPT (LRU-bounded) as an offline fallback: `stale(_:)` returns them when a
+/// refetch fails for lack of network, so e.g. your profile — and with it your
+/// avatar's image link — still shows in airplane mode. The entries are also
+/// mirrored to a file in Caches so that works on a cold launch offline too.
+/// `clear()` (sign-out) deletes the file.
 public actor APICache {
     public static let shared = APICache()
 
@@ -46,8 +53,25 @@ public actor APICache {
     /// payload. Keyed identically; invalidated whenever the entry is (re)written.
     private var decodedValues: [String: any Sendable] = [:]
     /// In-flight network fetches per key, so concurrent misses for the same key share
-    /// ONE round-trip instead of each hitting the network.
-    private var inFlight: [String: Task<Data, Error>] = [:]
+    /// ONE round-trip instead of each hitting the network. The token identifies
+    /// the fetch: invalidation drops the entry, and a fetch whose token is gone
+    /// when it lands doesn't write to the cache.
+    private var inFlight: [String: (token: UUID, task: Task<Data, Error>)] = [:]
+
+    // MARK: Disk mirror
+
+    private struct StoredEntry: Codable {
+        let key: String
+        let data: Data
+        let timestamp: Date
+        let ttl: TimeInterval
+    }
+
+    private static let fileURL: URL? = FileManager.default
+        .urls(for: .cachesDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("api-cache.json")
+    private var loadedFromDisk = false
+    private var saveTask: Task<Void, Never>?
 
     /// Default TTL: 5 minutes.
     public static let defaultTTL: TimeInterval = CacheTTL.long
@@ -56,15 +80,11 @@ public actor APICache {
 
     // MARK: - Public API
 
-    /// Get a cached value if it exists and hasn't expired.
+    /// Get a cached value if it exists and hasn't expired. (Expired entries
+    /// stay for `stale(_:)`.)
     public func get<T: Decodable & Sendable>(_ key: String) -> T? {
-        guard let entry = cache[key], !entry.isExpired else {
-            if cache[key] != nil {
-                cache.removeValue(forKey: key)
-                decodedValues.removeValue(forKey: key)
-            }
-            return nil
-        }
+        loadFromDiskIfNeeded()
+        guard let entry = cache[key], !entry.isExpired else { return nil }
         touch(key)
         // Skip the JSON decode when we've already decoded this exact payload.
         if let cached = decodedValues[key] as? T { return cached }
@@ -73,9 +93,22 @@ public actor APICache {
         return value
     }
 
+    /// The last cached value for `key`, expired or not — the fallback when a
+    /// refetch fails because there's no network.
+    public func stale<T: Decodable & Sendable>(_ key: String) -> T? {
+        loadFromDiskIfNeeded()
+        guard let entry = cache[key] else { return nil }
+        touch(key)
+        if let cached = decodedValues[key] as? T { return cached }
+        return try? JSONDecoder.api.decode(T.self, from: entry.data)
+    }
+
     /// Caches an already-decoded value (from a fresh fetch) so the next `get` returns
-    /// it without decoding the bytes again.
-    public func storeDecoded<T: Sendable>(_ key: String, _ value: T) {
+    /// it without decoding the bytes again. Only if `data` is still what's cached —
+    /// a fetch that was invalidated (or overtaken by a newer one) must not pin
+    /// its stale decode over the current bytes.
+    public func storeDecoded<T: Sendable>(_ key: String, _ value: T, decodedFrom data: Data) {
+        guard cache[key]?.data == data else { return }
         decodedValues[key] = value
     }
 
@@ -87,20 +120,33 @@ public actor APICache {
         ttl: TimeInterval,
         fetch: @Sendable @escaping () async throws -> Data
     ) async throws -> Data {
+        loadFromDiskIfNeeded()
         if let entry = cache[key], !entry.isExpired {
             touch(key)
             return entry.data
         }
-        if let existing = inFlight[key] { return try await existing.value }
+        if let existing = inFlight[key] { return try await existing.task.value }
 
+        let token = UUID()
         let task = Task { try await fetch() }
-        inFlight[key] = task
-        defer { inFlight[key] = nil }
-        let data = try await task.value
+        inFlight[key] = (token, task)
+        let data: Data
+        do {
+            data = try await task.value
+        } catch {
+            if inFlight[key]?.token == token { inFlight[key] = nil }
+            throw error
+        }
+        // Invalidated while in flight (a mutation's `remove`, or sign-out's
+        // `clear`): hand the bytes to this caller, but don't cache them — they
+        // predate the change, or belong to the previous account.
+        guard inFlight[key]?.token == token else { return data }
+        inFlight[key] = nil
         accessClock += 1
         cache[key] = CacheEntry(data: data, timestamp: Date(), ttl: ttl, lastAccess: accessClock)
         decodedValues.removeValue(forKey: key)
         evictIfNeeded()
+        scheduleSave()
         return data
     }
 
@@ -131,20 +177,63 @@ public actor APICache {
     public func remove(_ key: String) {
         cache.removeValue(forKey: key)
         decodedValues.removeValue(forKey: key)
+        inFlight.removeValue(forKey: key)
+        scheduleSave()
     }
 
     /// Remove all entries matching a prefix.
     public func removeAll(matching prefix: String) {
         cache = cache.filter { !$0.key.hasPrefix(prefix) }
         decodedValues = decodedValues.filter { !$0.key.hasPrefix(prefix) }
+        inFlight = inFlight.filter { !$0.key.hasPrefix(prefix) }
+        scheduleSave()
     }
 
     /// Clear all cached data.
     public func clear() {
         cache.removeAll()
         decodedValues.removeAll()
-        inFlight.values.forEach { $0.cancel() }
+        inFlight.values.forEach { $0.task.cancel() }
         inFlight.removeAll()
+        // Nothing of the previous account may survive on disk.
+        saveTask?.cancel()
+        saveTask = nil
+        loadedFromDisk = true
+        if let url = Self.fileURL { try? FileManager.default.removeItem(at: url) }
+    }
+
+    // MARK: - Disk mirror
+
+    /// Once per launch, before the first read: restore the last session's
+    /// entries (only ever served fresh-within-TTL or as the offline fallback).
+    private func loadFromDiskIfNeeded() {
+        guard !loadedFromDisk else { return }
+        loadedFromDisk = true
+        guard let url = Self.fileURL,
+              let data = try? Data(contentsOf: url),
+              let stored = try? JSONDecoder().decode([StoredEntry].self, from: data) else { return }
+        for entry in stored where cache[entry.key] == nil {
+            accessClock += 1
+            cache[entry.key] = CacheEntry(data: entry.data, timestamp: entry.timestamp, ttl: entry.ttl, lastAccess: accessClock)
+        }
+        evictIfNeeded()
+    }
+
+    /// Writes the entries a moment after the last change (coalesces bursts).
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            await self?.writeToDisk()
+        }
+    }
+
+    private func writeToDisk() {
+        guard let url = Self.fileURL else { return }
+        let stored = cache.map { StoredEntry(key: $0.key, data: $0.value.data, timestamp: $0.value.timestamp, ttl: $0.value.ttl) }
+        guard let data = try? JSONEncoder().encode(stored) else { return }
+        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
     // MARK: - Convenience

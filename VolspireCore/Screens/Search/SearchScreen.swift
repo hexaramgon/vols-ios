@@ -34,7 +34,7 @@ struct SearchScreen: View {
     static var searchPrompt: String {
         FeatureFlags.marketplace
             ? "Search tracks, artists, services, packs…"
-            : "Search tracks, artists…"
+            : FeatureFlags.freePacks ? "Search tracks, artists, packs…" : "Search tracks, artists…"
     }
 
     private var pad: CGFloat { ViewConst.screenPaddings }
@@ -74,7 +74,7 @@ private extension SearchScreen {
             HStack(spacing: 8) {
                 LucideIcon(.search, .md).foregroundStyle(Color.vText3)
                 TextField("", text: $viewModel.searchText, prompt: Text(Self.searchPrompt).foregroundColor(Color.vText3))
-                    .font(.appSubheadline)
+                    .font(.appBody)
                     .foregroundStyle(Color.vText)
                     .tint(Color.vText)
                     .focused($fieldFocused)
@@ -171,6 +171,8 @@ private extension SearchScreen {
                 chip("Artists", .artists, viewModel.artists.count)
                 if FeatureFlags.marketplace {
                     chip("Services", .services, viewModel.services.count)
+                }
+                if FeatureFlags.marketplace || FeatureFlags.freePacks {
                     chip("Packs", .packs, viewModel.packs.count)
                 }
             }
@@ -212,7 +214,7 @@ private extension SearchScreen {
                     ForEach(all ? Array(viewModel.services.prefix(3)) : viewModel.services) { serviceRow($0) }
                 }
             }
-            if FeatureFlags.marketplace, (all || tab == .packs), !viewModel.packs.isEmpty {
+            if FeatureFlags.marketplace || FeatureFlags.freePacks, (all || tab == .packs), !viewModel.packs.isEmpty {
                 resultSection("Packs", icon: .package, count: viewModel.packs.count, cap: all ? 4 : nil, seeAll: .packs) {
                     ForEach(all ? Array(viewModel.packs.prefix(4)) : viewModel.packs) { packRow($0) }
                 }
@@ -313,11 +315,11 @@ private extension SearchScreen {
                     }
                 VStack(alignment: .leading, spacing: 2) {
                     SearchHighlight.text(track.title, query: query, base: activity != nil ? .vText : .vTextRow)
-                        .font(.appSubheadlineMedium)
+                        .font(.appFont.trackTitle)
                         .lineLimit(1)
                     if let artist = track.artist {
                         SearchHighlight.text("@\(artist)", query: query, base: .vText3)
-                            .font(.appCaption)
+                            .font(.appFont.trackSubtitle)
                             .lineLimit(1)
                     }
                 }
@@ -348,11 +350,11 @@ private extension SearchScreen {
                 AvatarView(urlString: artist.profileImageUrl, name: artist.username, size: 40)
                 VStack(alignment: .leading, spacing: 2) {
                     SearchHighlight.text("@\(artist.username ?? "unknown")", query: query)
-                        .font(.appSubheadlineMedium)
+                        .font(.appFont.trackTitle)
                         .lineLimit(1)
                     if let tags = artist.tags, !tags.isEmpty {
                         Text(tags.joined(separator: ", "))
-                            .font(.appCaption)
+                            .font(.appFont.trackSubtitle)
                             .foregroundStyle(Color.vText3)
                             .lineLimit(1)
                     }

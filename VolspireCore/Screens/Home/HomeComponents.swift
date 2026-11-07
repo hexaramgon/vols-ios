@@ -18,6 +18,9 @@ import SwiftUI
 struct HomeSectionHeader: View {
     let title: String
     var trailingTitle: String? = nil
+    /// A trailing glyph on the link — `.arrowRight` when it leaves for
+    /// another tab / page rather than expanding in place.
+    var trailingIcon: LucideIcon.Name? = nil
     var trailing: (() -> Void)? = nil
 
     var body: some View {
@@ -28,21 +31,9 @@ struct HomeSectionHeader: View {
                 .lineLimit(1)
             Spacer(minLength: 0)
             if let trailingTitle, let trailing {
-                PillLinkButton(title: trailingTitle, action: trailing)
+                PillLinkButton(title: trailingTitle, trailingIcon: trailingIcon, action: trailing)
             }
         }
-    }
-}
-
-/// "Show all ⌄" / "Show less ⌃" as a pill button (chevron rotated 90°).
-struct ShowAllToggle: View {
-    let expanded: Bool
-    var allLabel = "Show all"
-    let toggle: () -> Void
-
-    var body: some View {
-        PillLinkButton(title: expanded ? "Show less" : allLabel,
-                       chevronRotation: expanded ? -90 : 90, action: toggle)
     }
 }
 
@@ -54,6 +45,8 @@ struct PillLinkButton: View {
     let title: String
     /// 0 = no chevron (a plain "See all"); ±90 for expand / collapse.
     var chevronRotation: Double = 0
+    /// After the title — `.arrowRight` for a link that goes somewhere else.
+    var trailingIcon: LucideIcon.Name? = nil
     let action: () -> Void
 
     var body: some View {
@@ -64,6 +57,7 @@ struct PillLinkButton: View {
                     LucideIcon(.chevronDown, .sm).rotationEffect(.degrees(chevronRotation > 0 ? 0 : 180))
                 }
                 Text(title).lineLimit(1)
+                if let trailingIcon { LucideIcon(trailingIcon, .sm) }
             }
             // `CapsuleButtonLabel`'s secondary anatomy, so it matches exactly.
             .font(.appFootnoteSemibold)
@@ -81,8 +75,7 @@ struct PillLinkButton: View {
 
 /// A ranked track row (Popular Today, Library's "Suggested for you") in the
 /// profile Tracks-tab sizing: rank number (equaliser bars while playing),
-/// 44pt cover with the cover shadow, title over @artist, the length on the
-/// right — the playing row gets the rounded highlight. Inset 10pt from the full-bleed list (so the
+/// 44pt cover with the cover shadow, title over @artist — the playing row gets the rounded highlight. Inset 10pt from the full-bleed list (so the
 /// content lands on the 16pt page column) and 4pt apart.
 struct ChartRow: View {
     let track: HomeTrack
@@ -98,49 +91,38 @@ struct ChartRow: View {
     var body: some View {
         Button(action: onPlay) {
             HStack(spacing: classic ? 12 : 14) {
-                // The rank; equaliser bars take its place on the playing row.
-                Group {
-                    if isActive {
-                        // Loops only while playing; `.id` tears the
-                        // repeatForever down on pause (repeatForever identity rule).
-                        EqualizerBars(heights: [7, 10, 13], barWidth: 2, spacing: 2, isAnimating: isPlaying)
-                            .id(isPlaying)
-                    } else {
-                        Text("\(index + 1)")
-                            .font(.appCaption)
-                            .monospacedDigit()
-                            .foregroundStyle(Color.vText3)
-                    }
-                }
-                .frame(width: classic ? 20 : 16)
+                // The rank (the playing marker sits on the cover).
+                Text("\(index + 1)")
+                    .font(.appCaption)
+                    .monospacedDigit()
+                    .foregroundStyle(Color.vText3)
+                    .frame(width: classic ? 20 : 16)
                 .padding(.trailing, classic ? 0 : -4)
 
                 if classic {
                     ArtworkView(track.coverURL.map { .webImage($0) } ?? .album, cornerRadius: Radius.tile)
                         .frame(width: 40, height: 40)
+                        .playingCoverOverlay(active: isActive, playing: isPlaying, cornerRadius: Radius.tile)
                 } else {
                     ArtworkView(track.coverURL.map { .webImage($0) } ?? .album, cornerRadius: 8)
                         .frame(width: 44, height: 44)
+                        .playingCoverOverlay(active: isActive, playing: isPlaying, cornerRadius: 8)
                         .coverShadow()
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
+                    // Popular Today (classic) runs a size under the shared row
+                    // pair (14 / 13) — a deliberate exception, per Hector.
                     Text(track.title)
-                        .font(.appSubheadlineMedium)
+                        .font(classic ? .appSubheadlineMedium : .appFont.trackTitle)
                         .foregroundStyle(Color.vText)
                         .lineLimit(1)
                     Text("@\(track.artist)")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vText2)
+                        .font(classic ? .appFootnote : .appFont.trackSubtitle)
+                        .foregroundStyle(Color.vText3)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                if let len = track.durationLabel {
-                    Text(len)
-                        .font(.appCaption)
-                        .monospacedDigit()
-                        .foregroundStyle(Color.vText3)
-                }
             }
             .padding(.horizontal, classic ? 16 : 6)
             .padding(.vertical, 10)
@@ -263,6 +245,8 @@ struct ChartRowsSkeleton: View {
 struct HomeEmpty<Art: View, Action: View>: View {
     let title: String
     var message: String? = nil
+    /// Space above and below; profile tabs pass less.
+    var verticalPadding: CGFloat = 48
     @ViewBuilder let art: () -> Art
     @ViewBuilder let action: () -> Action
 
@@ -283,13 +267,13 @@ struct HomeEmpty<Art: View, Action: View>: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 20)
-        .padding(.vertical, 48)
+        .padding(.vertical, verticalPadding)
     }
 }
 
 extension HomeEmpty where Action == EmptyView {
-    init(title: String, message: String? = nil, @ViewBuilder art: @escaping () -> Art) {
-        self.init(title: title, message: message, art: art, action: { EmptyView() })
+    init(title: String, message: String? = nil, verticalPadding: CGFloat = 48, @ViewBuilder art: @escaping () -> Art) {
+        self.init(title: title, message: message, verticalPadding: verticalPadding, art: art, action: { EmptyView() })
     }
 }
 
@@ -326,9 +310,11 @@ private func bar(_ width: CGFloat?, _ height: CGFloat) -> some View {
 
 /// Listings: post-card ghosts (byline, the ask, two lines, the footer).
 struct GhostListingCards: View {
+    var count = 2
+
     var body: some View {
         VStack(spacing: 12) {
-            ForEach(0 ..< 2, id: \.self) { i in
+            ForEach(0 ..< count, id: \.self) { i in
                 GhostBlock(index: i) {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 8) {
@@ -385,6 +371,102 @@ struct GhostReleaseCards: View {
     }
 }
 
+/// Notifications: activity-row ghosts (avatar, who-did-what, when, the
+/// track it was on) in one card.
+struct GhostNotificationRows: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(0 ..< 3, id: \.self) { i in
+                GhostBlock(index: i) {
+                    HStack(spacing: 12) {
+                        Circle().fill(Color.vSurface).frame(width: 36, height: 36)
+                        VStack(alignment: .leading, spacing: 8) {
+                            bar([170, 130, 150][i], 11)
+                            bar(56, 9)
+                        }
+                        Spacer(minLength: 0)
+                        RoundedRectangle(cornerRadius: Radius.tile).fill(Color.vSurface).frame(width: 36, height: 36)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .frame(maxWidth: 420)
+    }
+}
+
+/// Analytics: two stat tiles, then a week of play bars.
+struct GhostAnalytics: View {
+    private let heights: [CGFloat] = [22, 34, 28, 46, 38, 58, 50]
+
+    var body: some View {
+        VStack(spacing: 12) {
+            GhostBlock(index: 0) {
+                HStack(spacing: 12) {
+                    ForEach(0 ..< 2, id: \.self) { i in
+                        VStack(alignment: .leading, spacing: 10) {
+                            bar(i == 0 ? 52 : 64, 9)
+                            bar(i == 0 ? 72 : 56, 18)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                        .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                    }
+                }
+            }
+            GhostBlock(index: 1) {
+                VStack(alignment: .leading, spacing: 16) {
+                    bar(96, 10)
+                    HStack(alignment: .bottom, spacing: 10) {
+                        ForEach(Array(heights.enumerated()), id: \.offset) { _, h in
+                            RoundedRectangle(cornerRadius: Radius.tile).fill(Color.vSurface)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: h)
+                        }
+                    }
+                    .frame(height: 58, alignment: .bottom)
+                }
+                .padding(16)
+                .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            }
+        }
+        .frame(maxWidth: 420)
+    }
+}
+
+/// Library / Workspace: list-row ghosts in one card — a square cover (round
+/// tile for playlists, folder art for folders), a name and a meta line.
+struct GhostListRows: View {
+    var coverRadius: CGFloat = 8
+    var count = 3
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(0 ..< count, id: \.self) { i in
+                GhostBlock(index: i) {
+                    HStack(spacing: 12) {
+                        RoundedRectangle(cornerRadius: coverRadius, style: .continuous)
+                            .fill(Color.vSurface).frame(width: 40, height: 40)
+                        VStack(alignment: .leading, spacing: 8) {
+                            bar([140, 110, 160][i], 11)
+                            bar([80, 96, 64][i], 9)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .frame(maxWidth: 420)
+    }
+}
+
 /// Collab: artist-card ghosts (square photo, name, roles · city), 2-up.
 struct GhostArtistCards: View {
     var body: some View {
@@ -402,5 +484,79 @@ struct GhostArtistCards: View {
             }
         }
         .frame(maxWidth: 420)
+    }
+}
+
+
+// MARK: - Tab swipe
+
+/// The coordinate space a `.tabSwipe` measures in — sideways scrollers inside
+/// report their frames in it.
+let tabSwipeSpace = "tabSwipe"
+
+/// Frames (in `tabSwipeSpace`) of the sideways scrollers on screen — a swipe
+/// that starts inside one belongs to the scroller, not the tabs.
+struct TabSwipeExclusionKey: PreferenceKey {
+    static let defaultValue: [CGRect] = []
+    static func reduce(value: inout [CGRect], nextValue: () -> [CGRect]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+/// Non-observable holder for those frames: they change on every scroll
+/// frame, and nothing needs to re-render for them — the swipe reads them
+/// when it ends.
+private final class TabSwipeZones {
+    var frames: [CGRect] = []
+}
+
+/// Swipe left / right across tab content to move one tab (Explore, profile).
+/// A clearly sideways flick (mostly horizontal, ~60pt+) fires `onSwipe`
+/// (`forward` = swiped left = next tab); one starting on a marked sideways
+/// scroller is left to it. The caller switches with its usual crossfade —
+/// no slide (see the hit-testing rules).
+private struct TabSwipe: ViewModifier {
+    let onSwipe: (_ forward: Bool) -> Void
+    @State private var zones = TabSwipeZones()
+
+    func body(content: Content) -> some View {
+        content
+            .coordinateSpace(.named(tabSwipeSpace))
+            .onPreferenceChange(TabSwipeExclusionKey.self) { [zones] frames in
+                zones.frames = frames
+            }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 20, coordinateSpace: .named(tabSwipeSpace))
+                    .onEnded { value in
+                        let dx = value.predictedEndTranslation.width
+                        let moved = value.translation
+                        guard abs(moved.width) > 40, abs(dx) > 60,
+                              abs(moved.width) > abs(moved.height) * 2,
+                              !zones.frames.contains(where: { $0.contains(value.startLocation) })
+                        else { return }
+                        onSwipe(dx < 0)
+                    }
+            )
+    }
+}
+
+extension View {
+    /// See `TabSwipe`.
+    func tabSwipe(_ onSwipe: @escaping (_ forward: Bool) -> Void) -> some View {
+        modifier(TabSwipe(onSwipe: onSwipe))
+    }
+
+    /// Marks a sideways scroller (carousel, chip row, rail) so a horizontal
+    /// swipe starting on it scrolls it instead of switching tabs. Harmless
+    /// outside a `.tabSwipe` (nobody reads the preference).
+    func excludesTabSwipe() -> some View {
+        background {
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: TabSwipeExclusionKey.self,
+                    value: [geo.frame(in: .named(tabSwipeSpace))]
+                )
+            }
+        }
     }
 }

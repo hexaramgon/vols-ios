@@ -3,9 +3,9 @@
 //  Volspire
 //
 //  Dual-mode player:
-//  • Audio files: AudioKit (AudioEngine → VariSpeed → TimePitch → Mixer).
+//  • Audio files: AudioKit (AudioEngine → VariSpeed → TimePitch → EQ → Limiter → Mixer).
 //  • Video files: Muted AVPlayer for video display + AudioKit for audio output.
-//    This lets AudioKit effects (speed, pitch) apply to video audio too.
+//    This lets AudioKit effects (speed, pitch, EQ) apply to video audio too.
 //    AVPlayer and AudioKit are kept in sync on play/pause/seek.
 //
 
@@ -13,6 +13,7 @@ import AudioKit
 import AVFoundation
 import Combine
 import MediaLibrary
+import SharedUtilities
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -27,6 +28,8 @@ final class URLAudioPlayer {
     nonisolated(unsafe) private let akPlayer = AudioPlayer()
     nonisolated(unsafe) private let variSpeed: VariSpeed
     nonisolated(unsafe) private let timePitch: TimePitch
+    nonisolated(unsafe) private let equalizer: EqualizerNode
+    nonisolated(unsafe) private let limiter: PeakLimiter
     nonisolated(unsafe) private let mixer: Mixer
 
     /// Post-effects output node for audio-reactive visuals (the visualizer's
@@ -49,6 +52,13 @@ final class URLAudioPlayer {
     // shows "paused" mid-buffer). Spotify-style read-ahead.
     private var prefetchedFiles: [URL: URL] = [:]
     private var prefetchTasks: [URL: URLSessionDownloadTask] = [:]
+    /// Read-ahead whose link is still being resolved (keeps it from starting twice).
+    private var prefetchResolving: Set<URL> = []
+
+    /// Exchanges a queued URL for a fetchable one just before downloading
+    /// (set via `MediaPlayer.resolveMediaURL`). Downloads, the prefetch cache
+    /// and `currentURL` all stay keyed by the original URL.
+    var resolveRemoteURL: (@MainActor (URL) async -> URL?)?
 
     // MARK: - State
 
@@ -86,14 +96,22 @@ final class URLAudioPlayer {
     // MARK: - Init
 
     init() {
-        // Graph: AudioPlayer → VariSpeed (resampling) → TimePitch (phase vocoder) → Mixer.
+        // Graph: AudioPlayer → VariSpeed (resampling) → TimePitch (phase vocoder) → EQ
+        // → Limiter → Mixer.
         // VariSpeed handles varispeed (pitch follows speed) cleanly; TimePitch handles
         // tempo-only changes when "preserve pitch" is on. Only one is active at a time.
+        // EQ sits after both so its bands stay at fixed frequencies when varispeed
+        // shifts the pitch. The limiter catches overlapping boosts. Both stay in the
+        // path even when the EQ is flat — toggling their bypass mid-playback clicks.
         let vs = VariSpeed(akPlayer)
         let tp = TimePitch(vs)
-        let mx = Mixer(tp)
+        let eq = EqualizerNode(tp)
+        let lim = PeakLimiter(eq)
+        let mx = Mixer(lim)
         variSpeed = vs
         timePitch = tp
+        equalizer = eq
+        limiter = lim
         mixer = mx
         engine.output = mx
 
@@ -143,6 +161,10 @@ final class URLAudioPlayer {
         }
     }
 
+    func applyEqualizer(_ settings: AudioEqualizer) {
+        equalizer.apply(settings)
+    }
+
     func play(url: URL) {
         if currentURL == url, akPlayer.isPlaying { return }
         // Keep the engine running across the switch so the audio session never goes
@@ -164,7 +186,8 @@ final class URLAudioPlayer {
                         self.extractedAudioURL = audioURL
                         self.loadAndPlayAudio(fileURL: audioURL)
                     } catch {
-                        print("URLAudioPlayer: Audio extraction failed – \(error)")
+                        guard self.currentURL == url else { return }
+                        self.fail("Audio extraction failed – \(error)")
                     }
                 }
             } else {
@@ -182,34 +205,27 @@ final class URLAudioPlayer {
         guard !url.isFileURL,
               !Self.videoExtensions.contains(url.pathExtension.lowercased()),
               prefetchedFiles[url] == nil,
-              prefetchTasks[url] == nil
+              prefetchTasks[url] == nil,
+              !prefetchResolving.contains(url)
         else { return }
 
-        let task = URLSession.shared.downloadTask(with: url) { [weak self] tmpURL, _, error in
-            // Move the temp file SYNCHRONOUSLY here — URLSession deletes it the moment
-            // this delegate closure returns, so the previous `Task { @MainActor }` hop
-            // moved it too late and always failed ("No such file or directory"), which
-            // silently disabled prefetch/gapless. Only the state update hops to main.
-            guard error == nil, let tmpURL else {
-                Task { @MainActor [weak self] in self?.prefetchTasks[url] = nil }
-                return
-            }
-            let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension
-            let dest = FileManager.default.temporaryDirectory
-                .appendingPathComponent("prefetch-\(UUID().uuidString)")
-                .appendingPathExtension(ext)
-            let moved: URL?
-            do {
-                try FileManager.default.moveItem(at: tmpURL, to: dest)
-                moved = dest
-            } catch {
-                print("URLAudioPlayer: Prefetch move failed – \(error)")
-                moved = nil
-            }
+        prefetchResolving.insert(url)
+        Task {
+            let fetchURL = await self.fetchableURL(url)
+            // Dropped from the read-ahead window while resolving.
+            guard self.prefetchResolving.remove(url) != nil, let fetchURL else { return }
+            self.startPrefetch(url, from: fetchURL)
+        }
+    }
+
+    private func startPrefetch(_ url: URL, from fetchURL: URL) {
+        let task = URLSession.shared.downloadTask(with: fetchURL) { [weak self] tmpURL, response, error in
+            // Claimed synchronously here — see `claimDownload`.
+            let outcome = Self.claimDownload(tmpURL, response: response, error: error, from: url, prefix: "prefetch-")
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.prefetchTasks[url] = nil
-                if let moved { self.prefetchedFiles[url] = moved }
+                if case let .file(local) = outcome { self.prefetchedFiles[url] = local }
             }
         }
         prefetchTasks[url] = task
@@ -218,6 +234,7 @@ final class URLAudioPlayer {
 
     /// Drops read-ahead (in-flight or finished) for every URL not in `keep`.
     func retainPrefetch(_ keep: Set<URL>) {
+        prefetchResolving.formIntersection(keep)
         for (url, task) in prefetchTasks where !keep.contains(url) {
             task.cancel()
             prefetchTasks[url] = nil
@@ -375,23 +392,42 @@ private extension URLAudioPlayer {
             return
         }
         downloadTask?.cancel()
-        let task = URLSession.shared.downloadTask(with: remoteURL) { [weak self] tmpURL, _, error in
+        downloadTask = nil
+        Task {
+            guard let fetchURL = await self.fetchableURL(remoteURL) else {
+                guard self.currentURL == remoteURL else { return }
+                self.fail("No playable link for \(remoteURL.lastPathComponent)")
+                return
+            }
+            // Skipped past while the link was resolving.
+            guard self.currentURL == remoteURL else { return }
+            self.startDownload(remoteURL, from: fetchURL)
+        }
+    }
+
+    /// The URL to actually fetch for `url` (see `resolveRemoteURL`).
+    func fetchableURL(_ url: URL) async -> URL? {
+        guard let resolveRemoteURL else { return url }
+        return await resolveRemoteURL(url)
+    }
+
+    func startDownload(_ remoteURL: URL, from fetchURL: URL) {
+        let task = URLSession.shared.downloadTask(with: fetchURL) { [weak self] tmpURL, response, error in
+            // Claimed synchronously here — see `claimDownload`.
+            let outcome = Self.claimDownload(tmpURL, response: response, error: error, from: remoteURL)
             Task { @MainActor [weak self] in
-                guard let self, self.currentURL == remoteURL else { return }
-                if let error {
-                    print("URLAudioPlayer: Download failed – \(error.localizedDescription)")
+                guard let self, self.currentURL == remoteURL else {
+                    // Skipped past while downloading — nobody owns the file.
+                    if case let .file(local) = outcome { try? FileManager.default.removeItem(at: local) }
                     return
                 }
-                guard let tmpURL else { return }
-
-                let ext = remoteURL.pathExtension.isEmpty ? "mp3" : remoteURL.pathExtension
-                let dest = FileManager.default.temporaryDirectory
-                    .appendingPathComponent(UUID().uuidString)
-                    .appendingPathExtension(ext)
-                do {
-                    try FileManager.default.moveItem(at: tmpURL, to: dest)
+                switch outcome {
+                case .cancelled:
+                    return
+                case let .failed(reason):
+                    self.fail(reason)
+                case let .file(dest):
                     self.tempFileURL = dest
-
                     if self.isVideoMode {
                         self.setupVideoDisplay(fileURL: dest)
                         do {
@@ -400,13 +436,12 @@ private extension URLAudioPlayer {
                             self.extractedAudioURL = audioURL
                             self.loadAndPlayAudio(fileURL: audioURL)
                         } catch {
-                            print("URLAudioPlayer: Audio extraction failed – \(error)")
+                            guard self.currentURL == remoteURL else { return }
+                            self.fail("Audio extraction failed – \(error)")
                         }
                     } else {
                         self.loadAndPlayAudio(fileURL: dest)
                     }
-                } catch {
-                    print("URLAudioPlayer: Failed to move temp file – \(error)")
                 }
             }
         }
@@ -418,7 +453,7 @@ private extension URLAudioPlayer {
         do {
             try akPlayer.load(url: fileURL)
         } catch {
-            print("URLAudioPlayer: Failed to load – \(error.localizedDescription)")
+            fail("Failed to load – \(error)")
             return
         }
 
@@ -431,7 +466,7 @@ private extension URLAudioPlayer {
                 try engine.start()
             }
         } catch {
-            print("URLAudioPlayer: Engine start failed – \(error)")
+            fail("Engine start failed – \(error)")
             return
         }
 
@@ -462,7 +497,7 @@ private extension URLAudioPlayer {
                 try engine.start()
             }
         } catch {
-            print("URLAudioPlayer: Engine start failed – \(error)")
+            debugLog("URLAudioPlayer: Engine start failed – \(error)")
         }
 
         // Standard resume first: a paused player continues from its paused
@@ -483,7 +518,7 @@ private extension URLAudioPlayer {
                 akPlayer.seek(time: savedTime)
                 installCompletionHandler()
             } catch {
-                print("URLAudioPlayer: Failed to reload on resume – \(error)")
+                debugLog("URLAudioPlayer: Failed to reload on resume – \(error)")
                 akPlayer.play()
                 installCompletionHandler()
             }
@@ -542,7 +577,7 @@ private extension URLAudioPlayer {
             installCompletionHandler()
             elapsedTime = time
         } catch {
-            print("URLAudioPlayer: Seek failed – \(error)")
+            debugLog("URLAudioPlayer: Seek failed – \(error)")
         }
         effectsProcessor.reapply(variSpeed: variSpeed, timePitch: timePitch)
     }
@@ -609,7 +644,55 @@ private extension URLAudioPlayer {
 
 // MARK: - Private – Helpers
 
+/// What became of a finished download task, decided inside URLSession's
+/// completion closure (where the temp file still exists).
+private enum DownloadOutcome: Sendable {
+    case file(URL)
+    case cancelled
+    case failed(String)
+}
+
 private extension URLAudioPlayer {
+    /// Validates a finished download and moves it somewhere we own. MUST run
+    /// synchronously inside the completion closure: URLSession deletes `tmpURL`
+    /// the moment that closure returns, so a move after a `Task` hop races the
+    /// deletion. A non-2xx reply (expired signed URL, 404) is a failure, not a
+    /// file — otherwise the server's error page gets saved as audio.
+    nonisolated static func claimDownload(
+        _ tmpURL: URL?,
+        response: URLResponse?,
+        error: Error?,
+        from remoteURL: URL,
+        prefix: String = ""
+    ) -> DownloadOutcome {
+        if let error {
+            if (error as? URLError)?.code == .cancelled { return .cancelled }
+            return .failed("Download failed – \(error)")
+        }
+        if let status = (response as? HTTPURLResponse)?.statusCode, !(200 ..< 300).contains(status) {
+            return .failed("Download failed – HTTP \(status)")
+        }
+        guard let tmpURL else { return .failed("Download failed – no file") }
+        let ext = remoteURL.pathExtension.isEmpty ? "mp3" : remoteURL.pathExtension
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent(prefix + UUID().uuidString)
+            .appendingPathExtension(ext)
+        do {
+            try FileManager.default.moveItem(at: tmpURL, to: dest)
+            return .file(dest)
+        } catch {
+            return .failed("Failed to move temp file – \(error)")
+        }
+    }
+
+    /// The current URL can't play. Clears buffering (so the UI stops spinning)
+    /// and reports up; `MediaPlayer` tears down and pauses.
+    func fail(_ reason: String) {
+        debugLog("URLAudioPlayer: \(reason)")
+        setBuffering(false)
+        delegate?.urlAudioPlayerDidFail(self)
+    }
+
     func cleanup(stopEngine: Bool = true) {
         downloadTask?.cancel()
         downloadTask = nil
@@ -655,6 +738,8 @@ protocol URLAudioPlayerDelegate: AnyObject {
     func urlAudioPlayer(_ player: URLAudioPlayer, didSetupVideoPlayer avPlayer: AVPlayer?)
     func urlAudioPlayer(_ player: URLAudioPlayer, didChangeBuffering isBuffering: Bool)
     func urlAudioPlayerDidFinishPlaying(_ player: URLAudioPlayer)
+    /// The current URL couldn't be downloaded, decoded or started.
+    func urlAudioPlayerDidFail(_ player: URLAudioPlayer)
 }
 
 public struct PlaybackProgress: Equatable, Sendable {

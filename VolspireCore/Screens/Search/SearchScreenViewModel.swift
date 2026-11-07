@@ -68,7 +68,7 @@ final class SearchScreenViewModel {
     /// dedupes by id, and drops rows with no audio.
     func play(_ track: ApiSearchTrack) async {
         guard let player,
-              storageService.resolveTrackUrl(track.audioUrl) != nil else { return }
+              storageService.trackMediaURL(track.audioUrl) != nil else { return }
 
         let queue = tracks.map { t in
             Media(
@@ -77,7 +77,7 @@ final class SearchScreenViewModel {
                     artwork: cover(t.coverUrl),
                     title: t.title,
                     artist: t.artist ?? "unknown",
-                    audioURL: storageService.resolveTrackUrl(t.audioUrl).flatMap { URL(string: $0) }
+                    audioURL: storageService.trackMediaURL(t.audioUrl)
                 )
             )
         }
@@ -118,7 +118,10 @@ private extension SearchScreenViewModel {
                 // keeps `hasResults` and the analytics count honest — hiding
                 // only the sections would leave a pack-only query claiming
                 // results while rendering an empty list.
-                packs = FeatureFlags.marketplace ? results.packs : []
+                // The free-packs slice returns free packs (with report /
+                // block on their pages) and still no services.
+                packs = FeatureFlags.marketplace ? results.packs
+                    : FeatureFlags.freePacks ? results.packs.filter { ($0.price ?? 0) <= 0 } : []
                 services = FeatureFlags.marketplace ? results.services : []
                 isLoading = false
                 AnalyticsService.shared?.log(.searchPerformed, metadata: [

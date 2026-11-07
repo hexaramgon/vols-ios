@@ -8,6 +8,7 @@
 //  resolves the storage paths it plays.
 //
 
+import DesignSystem
 import Foundation
 import Observation
 import Services
@@ -71,6 +72,12 @@ final class ListingDetailViewModel {
         // together rather than popping in one after another.
         async let fresh = service.getListing(listingId: listing.listingId)
         async let commentsDone: Void = loadComments()
+        // Counts toward the board ranking (server dedupes per viewer per day
+        // and ignores the author) — best-effort.
+        if !isAuthor {
+            let id = listing.listingId
+            Task { [service] in try? await service.recordListingView(listingId: id) }
+        }
         async let responsesDone: Void = loadResponsesIfAuthor()
 
         do {
@@ -125,18 +132,6 @@ final class ListingDetailViewModel {
         }
     }
 
-    /// Deletes the listing. Returns true on success (the screen then dismisses).
-    func deleteListing() async -> Bool {
-        do {
-            try await service.deleteListing(listingId: listing.listingId)
-            listings?.listingDeleted(listing.listingId)
-            return true
-        } catch {
-            debugLog("[ListingDetailVM] deleteListing failed: \(error)")
-            return false
-        }
-    }
-
     func loadComments() async {
         comments = (try? await service.getListingComments(listingId: listing.listingId)) ?? []
         commentsLoaded = true
@@ -172,6 +167,7 @@ final class ListingDetailViewModel {
             let convoId = try await service.respondToListing(listingId: listing.listingId, message: trimmed)
             existingConvoId = convoId
             listings?.listingResponded(listing.listingId)
+            Haptics.success()
             return (convoId, nil)
         } catch {
             return (nil, Self.respondError(error))
@@ -277,9 +273,11 @@ final class ListingDetailViewModel {
             try await service.deleteListingComment(commentId: comment.commentId)
             listings?.commentDelta(listing.listingId, -removedCount)
             bumpCommentCount(-removedCount)
+            ToastCenter.shared.show("Comment deleted")
         } catch {
             comments = snapshot
             debugLog("[ListingDetailVM] deleteComment failed: \(error)")
+            ToastCenter.shared.show("Couldn't delete the comment — it's back.", style: .error)
         }
     }
 

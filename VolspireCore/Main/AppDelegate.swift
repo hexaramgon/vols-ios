@@ -46,13 +46,21 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 // (SIGABRT in `_updateStateRestorationArchiveForBackgroundEvent`, ~200ms
 // after launch). Don't convert these back to `async`.
 extension AppDelegate: UNUserNotificationCenterDelegate {
-    /// Show pushes as banners while the app is open too (no sound in-app).
+    /// Show pushes as banners while the app is open too (no sound in-app) —
+    /// except messages for the conversation already on screen.
     nonisolated func userNotificationCenter(
         _: UNUserNotificationCenter,
-        willPresent _: UNNotification,
+        willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
     ) {
-        DispatchQueue.main.async { completionHandler([.banner, .badge]) }
+        let convoId = notification.request.content.userInfo["convo_id"] as? String
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                let visible = PushNotificationManager.shared.visibleConversationId
+                let isOnScreen = convoId != nil && convoId?.caseInsensitiveCompare(visible ?? "") == .orderedSame
+                completionHandler(isOnScreen ? [] : [.banner, .badge])
+            }
+        }
     }
 
     /// A tapped notification (lock screen / banner) — buffer its data and signal

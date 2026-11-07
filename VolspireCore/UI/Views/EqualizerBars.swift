@@ -37,3 +37,26 @@ struct EqualizerBars: View {
         .onAppear { raised = true }
     }
 }
+
+// MARK: - On the cover
+
+extension View {
+    /// The playing row's marker, ON its cover: a dark tint with white bars
+    /// (looping while `playing`, still when paused). Clipped to the cover's
+    /// corners; nothing when the row isn't the loaded track.
+    func playingCoverOverlay(active: Bool, playing: Bool, cornerRadius: CGFloat) -> some View {
+        overlay {
+            if active {
+                ZStack {
+                    Color.vShade.opacity(0.45)
+                    // `.id(playing)` tears the repeatForever down on pause.
+                    EqualizerBars(heights: [7, 13, 9], barWidth: 2.5, spacing: 2, tint: .white, isAnimating: playing)
+                        .id(playing)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .transition(.opacity)
+                .allowsHitTesting(false)
+            }
+        }
+    }
+}

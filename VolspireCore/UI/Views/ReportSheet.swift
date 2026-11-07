@@ -18,6 +18,8 @@ struct ReportSheet: View {
     let targetId: String
     /// What's being reported — shown in the header subtitle (e.g. "@nvs", a title).
     let subject: String
+    /// Dark like the surface it opens from (the always-dark Now Playing).
+    var alwaysDark = false
 
     @Environment(Dependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
@@ -51,14 +53,14 @@ struct ReportSheet: View {
         .scrollBounceBehavior(.basedOnSize)
         .scrollDismissesKeyboard(.interactively)
         .frame(maxWidth: .infinity)
-        .sheetBackground()
+        .sheetBackground(alwaysDark: alwaysDark)
     }
 
     // MARK: Confirmation
 
     private var confirmation: some View {
         VStack(spacing: 14) {
-            LucideIcon(.circleCheck, .hero).foregroundStyle(Color.vSuccess)
+            SuccessMark(size: 60)
             Text("Thanks for letting us know")
                 .font(.appHeadline).foregroundStyle(Color.vText)
             Text("We review every report and act on violations within 24 hours.")
@@ -78,25 +80,24 @@ struct ReportSheet: View {
 
     private var form: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Why are you reporting this?")
-                .font(.appFootnote).foregroundStyle(Color.vText3)
+            SheetFieldLabel("Why are you reporting this?")
                 .padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 4)
 
             ForEach(ReportReason.allCases, id: \.self, content: reasonRow)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Add details (optional)")
-                    .font(.appFootnote).foregroundStyle(Color.vText3)
+                SheetFieldLabel("Details", optional: true)
                 TextField(
                     "",
                     text: $details,
                     prompt: Text("What happened?").foregroundStyle(Color.vText3),
                     axis: .vertical
                 )
-                .font(.appCallout).foregroundStyle(Color.vText).tint(Color.vText)
+                .font(.appBody).foregroundStyle(Color.vText).tint(Color.vText)
                 .lineLimit(2 ... 4)
                 .focused($detailsFocused)
-                .padding(12)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
                 .background(detailsFocused ? Color.vFieldFocus : Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
             }
             .padding(.horizontal, 20).padding(.top, 18)
@@ -132,8 +133,15 @@ struct ReportSheet: View {
         .buttonStyle(.plain)
     }
 
+    /// The app's sheet footer (Collab Request / Respond).
     private var submitButton: some View {
-        PrimaryButton("Submit report", busy: submitting, enabled: selected != nil, action: submit)
+        CancelSendButtons(
+            sendTitle: "Submit report",
+            canSend: selected != nil,
+            isSending: submitting,
+            onCancel: { dismiss() },
+            onSend: submit
+        )
     }
 
     private func submit() {

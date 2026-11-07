@@ -126,6 +126,12 @@ public extension Color {
     /// (#DC2626) in light, where red-400 on white is only ~2.8:1. Pair with
     /// `ErrorBanner` for inline errors.
     static let vError = Color.dynamic(light: UIColor(hex: 0xDC2626), dark: UIColor(hex: 0xF87171))
+    /// A saved item's filled bookmark — the app's primary blue.
+    static let vSaved = vAccent
+    /// A rating's filled star — the app's red ("Top today") in light mode; in
+    /// dark (and the always-dark player) a vivid red rather than vError's
+    /// pale #F87171, which read muted there.
+    static let vRating = Color.dynamic(light: UIColor(hex: 0xDC2626), dark: UIColor(hex: 0xFF453A))
     /// Error-banner fill — #450A0A @ 0.30 in dark; red-600 @ 0.08 in light
     /// (the dark wash turned muddy grey on white).
     static let vErrorFill = Color.dynamic(light: UIColor(hex: 0xDC2626).withAlphaComponent(0.08),

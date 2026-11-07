@@ -58,8 +58,12 @@ struct NotificationsScreen: View {
             LoadErrorView { Task { await viewModel.refresh() } }
                 .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.6)
         case .loaded where viewModel.notifications.isEmpty:
-            EmptyStateView(icon: .bell, title: "Nothing here yet", message: "Likes, follows, and comments will show up here.")
-                .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.6)
+            // My Network / Messages' empty treatment: animated ghost rows.
+            HomeEmpty(title: "Nothing here yet", message: "Likes, follows, and comments will show up here.") {
+                GhostNotificationRows()
+            }
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.6)
         case .loaded:
             LazyVStack(alignment: .leading, spacing: 0) {
                 chipRow
@@ -141,7 +145,10 @@ struct NotificationsScreen: View {
     private func row(_ item: ApiNotification) -> some View {
         let m = meta(for: item.action ?? "")
         let isUnread = viewModel.unreadSnapshot.contains(item.id)
-        let pendingRequest = viewModel.isPendingCollabRequest(item)
+        let sessionAnswer = item.actor?.userId.flatMap {
+            socialStore.collabAnswer(from: $0, after: MessageTime.parse(item.createdAt))
+        }
+        let pendingRequest = viewModel.isPendingCollabRequest(item, sessionAnswer: sessionAnswer)
 
         return HStack(alignment: .top, spacing: 12) {
             avatar(item, meta: m)
@@ -166,16 +173,16 @@ struct NotificationsScreen: View {
 
                 if pendingRequest {
                     HStack(spacing: 8) {
-                        PrimaryButton("Accept", size: .inline, expands: false, busy: viewModel.isResponding(item)) {
-                            respond(item, accept: true)
-                        }
-                        SecondaryButton("Decline", size: .inline, expands: false) {
+                        SecondaryButton("Decline", icon: .x, size: .inline, expands: false) {
                             respond(item, accept: false)
                         }
                         .disabled(viewModel.isResponding(item))
+                        PrimaryButton("Accept", icon: .check, size: .inline, expands: false, busy: viewModel.isResponding(item)) {
+                            respond(item, accept: true)
+                        }
                     }
                     .padding(.top, 10)
-                } else if let result = viewModel.collabResult(item) {
+                } else if let result = viewModel.collabResult(item, sessionAnswer: sessionAnswer) {
                     Text(result == "accepted" ? "Accepted" : result == "declined" ? "Declined" : "Already answered")
                         .font(.appCaption)
                         .foregroundStyle(Color.vText3)
@@ -201,15 +208,21 @@ struct NotificationsScreen: View {
             }
         }
         .contentShape(.rect)
-        .onTapGesture { if !pendingRequest { navigate(item) } }
+        // Accept / Decline are buttons and keep their own taps.
+        .onTapGesture { navigate(item) }
     }
 
     private func respond(_ item: ApiNotification, accept: Bool) {
         Task {
             guard await viewModel.respond(to: item, accept: accept),
                   let actorId = item.actor?.userId else { return }
-            // Keep any mounted profile / thread in step with the answer.
-            socialStore.setCollabStatus(accept ? "accepted" : "none", userId: actorId)
+            // Keep any mounted profile / thread / inbox bucket in step.
+            socialStore.recordCollabAnswer(accepted: accept, from: actorId)
+            let convo = await inboxStore.dmConversation(with: actorId)
+            if let convo {
+                inboxStore.requestStatusChanged(convoId: convo.id, status: accept ? "accepted" : "rejected")
+            }
+            socialStore.setCollabStatus(accept ? "accepted" : "none", userId: actorId, convoId: accept ? convo?.id : nil)
         }
     }
 
@@ -220,7 +233,7 @@ struct NotificationsScreen: View {
         let quoteActions: Set<String> = ["commented", "commented on file", "listing_response", "requested collaboration"]
         if quoteActions.contains(item.action ?? "") {
             Text(text)
-                .font(.appCaption)
+                .font(.appSubheadline)
                 .italic()
                 .foregroundStyle(Color.vText2)
                 .lineLimit(2)
@@ -233,7 +246,7 @@ struct NotificationsScreen: View {
                 LucideIcon(item.action == "uploaded file" ? .fileText : .music2, .sm)
                     .foregroundStyle(Color.vText3)
                 Text(text)
-                    .font(.appCaption)
+                    .font(.appSubheadline)
                     .foregroundStyle(Color.vText2)
                     .lineLimit(1)
             }
@@ -265,16 +278,16 @@ struct NotificationsScreen: View {
         let strong = isUnread ? Color.vText : Color.vTextRow
         var result = AttributedString()
         if let username = item.actor?.username {
-            result += run("@\(username)", .appLabel, strong)
+            result += run("@\(username)", .appSubheadlineSemibold, strong)
             let count = item.actionCount ?? 1
             if count > 1 {
-                result += run(" and \(count - 1) \(count == 2 ? "other" : "others")", .appCaption, Color.vText2)
+                result += run(" and \(count - 1) \(count == 2 ? "other" : "others")", .appSubheadline, Color.vText2)
             }
-            result += run(" ", .appCaption, Color.vText2)
+            result += run(" ", .appSubheadline, Color.vText2)
         }
-        result += run(displayLabel(item, meta: meta), .appCaption, Color.vText2)
+        result += run(displayLabel(item, meta: meta), .appSubheadline, Color.vText2)
         if let title = item.objectTitle, !title.isEmpty {
-            result += run(" \(title)", .appCaptionMedium, strong)
+            result += run(" \(title)", .appSubheadlineMedium, strong)
         }
         return Text(result)
     }
@@ -353,7 +366,9 @@ struct NotificationsScreen: View {
     /// via the avatar). Actor-profile is the fallback for object-less rows
     /// (e.g. "followed you").
     private func navigate(_ item: ApiNotification) {
-        if item.objectType == "folder", let folderId = item.objectId {
+        if Self.collabActions.contains(item.action ?? ""), let actorId = item.actor?.userId {
+            openCollabThread(with: actorId)
+        } else if item.objectType == "folder", let folderId = item.objectId {
             // Point at the item the activity is about, like a tapped comment.
             let highlight: FolderHighlight? = item.contextId.flatMap { id in
                 switch item.contextType {
@@ -372,6 +387,25 @@ struct NotificationsScreen: View {
             NotificationCenter.default.post(name: .openOwnPost, object: nil, userInfo: ["listingId": id])
         } else if let userId = item.actor?.userId {
             router.navigateToProfile(userId: userId)
+        }
+    }
+
+    /// Collab request / acceptance rows open the pair's DM, where the
+    /// request card lives.
+    private static let collabActions: Set<String> = ["requested collaboration", "accepted collaboration"]
+
+    private func openCollabThread(with userId: String) {
+        Task {
+            if let convo = await inboxStore.dmConversation(with: userId) {
+                router.navigateToConversation(ActiveConversation(
+                    convoId: convo.id,
+                    otherUserId: convo.otherUserId,
+                    username: convo.username,
+                    avatarURL: convo.avatarURL?.absoluteString
+                ))
+            } else {
+                router.navigateToProfile(userId: userId)
+            }
         }
     }
 

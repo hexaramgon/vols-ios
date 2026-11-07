@@ -38,7 +38,7 @@ struct HeaderSearchField: View {
         HStack(spacing: 10) {
             LucideIcon(.search, .md).foregroundStyle(Color.vText3)
             TextField("", text: $text, prompt: Text(prompt).foregroundColor(Color.vText3))
-                .font(.appCallout)
+                .font(.appBody)
                 .foregroundStyle(Color.vText)
                 .tint(Color.vText)
                 .focused(focus)
@@ -48,7 +48,7 @@ struct HeaderSearchField: View {
                     LucideIcon(.circleX, .md)
                         .foregroundStyle(Color.vText3)
                         .frame(width: 28, height: 28)
-                        .contentShape(.rect)
+                        .minimumHitArea(for: 28)
                 }
                 .buttonStyle(.plain)
             }

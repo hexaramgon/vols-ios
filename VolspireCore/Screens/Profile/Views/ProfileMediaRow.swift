@@ -17,7 +17,9 @@ struct ProfileMediaRow<Trailing: View>: View {
     let subtitle: String
     let coverURL: URL?
     var dimmed: Bool = false
-    var lock: Bool = false
+    /// Owner's view of a track that isn't public — private gets the lock and
+    /// "only you", unlisted the link glyph and "anyone with the link".
+    var hidden: TrackVisibility? = nil
     let trailing: Trailing
 
     init(
@@ -27,7 +29,7 @@ struct ProfileMediaRow<Trailing: View>: View {
         subtitle: String,
         coverURL: URL?,
         dimmed: Bool = false,
-        lock: Bool = false,
+        hidden: TrackVisibility? = nil,
         @ViewBuilder trailing: () -> Trailing
     ) {
         self.viewModel = viewModel
@@ -36,8 +38,16 @@ struct ProfileMediaRow<Trailing: View>: View {
         self.subtitle = subtitle
         self.coverURL = coverURL
         self.dimmed = dimmed
-        self.lock = lock
+        self.hidden = hidden == .public ? nil : hidden
         self.trailing = trailing()
+    }
+
+    private var hiddenNote: String? {
+        switch hidden {
+        case .private: "Hidden · only you can see it"
+        case .unlisted: "Unlisted · anyone with the link"
+        default: nil
+        }
     }
 
     var body: some View {
@@ -45,37 +55,41 @@ struct ProfileMediaRow<Trailing: View>: View {
         HStack(spacing: 14) {
             ArtworkView(.placeholder(coverURL, name: title), cornerRadius: 8)
                 .frame(width: 44, height: 44)
+                .playingCoverOverlay(active: isActive,
+                                     playing: viewModel.mediaActivity(MediaID(id)) == .playing,
+                                     cornerRadius: 8)
                 .coverShadow()
                 .grayscale(dimmed ? 1 : 0)
+                // Not-public track, owner's view: the cover fades back under
+                // a lock (private) or link (unlisted) badge, so it reads as
+                // "not public" at a glance.
+                .opacity(hidden == nil ? 1 : 0.45)
+                .overlay {
+                    if let hidden {
+                        LucideIcon(hidden.icon, .sm)
+                            .foregroundStyle(Color.white)
+                            .frame(width: 26, height: 26)
+                            .background(Color.black.opacity(0.6), in: Circle())
+                    }
+                }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     // Same type as the Home chart rows (`ChartRow`).
                     Text(title)
-                        .font(.appSubheadlineMedium)
-                        .foregroundStyle(Color.vText)
+                        .font(.appFont.trackTitle)
+                        .foregroundStyle(hidden == nil ? Color.vText : Color.vText2)
                         .lineLimit(1)
-                    if lock {
-                        LucideIcon(.lock, .xs).foregroundStyle(Color.vText3)
-                    }
                 }
-                Text(subtitle)
-                    .font(.appFootnote)
-                    .foregroundStyle(Color.vText2)
+                // Says it outright instead of a tiny badge by the title.
+                Text(hiddenNote ?? subtitle)
+                    .font(.appFont.trackSubtitle)
+                    .foregroundStyle(Color.vText3)
                     .lineLimit(1)
             }
 
             Spacer(minLength: 8)
 
-            if isActive {
-                // Loops only while actually playing; `.id` tears the
-                // repeatForever down on pause (repeatForever identity rule).
-                let playing = viewModel.mediaActivity(MediaID(id)) == .playing
-                EqualizerBars(heights: [7, 13, 9], barWidth: 2.5, spacing: 2, tint: Color.vText, isAnimating: playing)
-                    .id(playing)
-                    .frame(width: 14, height: 13)
-                    .padding(.trailing, 2)
-            }
             trailing
         }
         .padding(.leading, 6)

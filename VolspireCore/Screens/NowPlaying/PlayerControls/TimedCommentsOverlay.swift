@@ -70,11 +70,38 @@ struct TimedCommentsOverlay: View {
         let x0 = x(start, duration: duration, width: width)
         // Just where it begins (ranges too): a small, quiet dot on the track,
         // dark over the played (white) part, light over the unplayed (grey).
-        Circle()
-            .fill(passed ? Color.black.opacity(0.25) : Color.white.opacity(0.5))
-            .frame(width: 3, height: 3)
-            .offset(x: x0 - 1.5, y: (Self.trackHeight - 3) / 2)
-            .allowsHitTesting(false)
+        MarkerDot(
+            passed: passed,
+            // Reveal sweeps left → right along the track as comments load.
+            delay: 0.45 * min(max(start / duration, 0), 1)
+        )
+        // Re-run the entrance per item: the same comment id can't carry an
+        // "already shown" state from the previous track.
+        .id("\(currentKey ?? "")-\(c.id)")
+        .offset(x: x0 - 1.5, y: (Self.trackHeight - 3) / 2)
+        .allowsHitTesting(false)
+    }
+
+    /// One comment dot. Pops in (scale + fade, on a spring) the first time
+    /// it appears; local state, so the per-tick progress re-renders of the
+    /// overlay don't replay it.
+    private struct MarkerDot: View {
+        let passed: Bool
+        let delay: Double
+        @State private var shown = false
+
+        var body: some View {
+            Circle()
+                .fill(passed ? Color.black.opacity(0.25) : Color.white.opacity(0.5))
+                .frame(width: 3, height: 3)
+                .scaleEffect(shown ? 1 : 0.01)
+                .opacity(shown ? 1 : 0)
+                .onAppear {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.55).delay(delay)) {
+                        shown = true
+                    }
+                }
+        }
     }
 
     /// At most this many comments stack over the cover at once.

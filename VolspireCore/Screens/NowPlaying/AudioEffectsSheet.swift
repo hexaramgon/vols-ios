@@ -2,9 +2,10 @@
 //  AudioEffectsSheet.swift
 //  Volspire
 //
-//  Playback-speed control with a preserve-pitch toggle. Same flow as ever
-//  (read-out, slider, toggles, reset), drawn with the app's pieces: ink
-//  tokens, the Settings group card + rows + ink switch, the capsule button.
+//  Speed | EQ tabs under one header. Speed: `EffectSliderRow` (label + value
+//  over the now-playing slider) and the ink-switch rows. EQ: `EqualizerPanel`
+//  (presets + draggable response curve). Each tab has its own Reset. Tabs
+//  crossfade rather than slide.
 //
 
 import DesignSystem
@@ -15,84 +16,112 @@ import SwiftUI
 struct AudioEffectsSheet: View {
     @Environment(PlayerController.self) var controller
 
+    enum Tab: String, CaseIterable, Identifiable {
+        case speed = "Speed"
+        case equalizer = "EQ"
+        var id: Self { self }
+    }
+
     /// Live slider value while dragging; committed to the player on release.
     @State private var localSpeed: Float?
+    @State private var tab: Tab = .speed
+    /// A finger is on the EQ curve.
+    @State private var draggingCurve = false
 
     private var speedValue: Float { localSpeed ?? controller.audioEffects.speed }
-    private var isModified: Bool { controller.audioEffects != .default }
+
+    /// Tabs with a non-default setting get a dot — same rule as their Reset
+    /// buttons and the player's FX button.
+    private var activeTabs: Set<Tab> {
+        var tabs: Set<Tab> = []
+        if controller.audioEffects != .default { tabs.insert(.speed) }
+        if !controller.equalizer.isFlat { tabs.insert(.equalizer) }
+        return tabs
+    }
+
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 22) {
-            hero
-            speedSlider
-            togglesCard
-            if isModified { resetButton }
-            Spacer(minLength: 0)
+        VStack(spacing: 0) {
+            // The app's sheet header (Collab Request / Respond).
+            SheetHeader(icon: .slidersHorizontal, title: "Audio effects", subtitle: "Speed, pitch & EQ") { dismiss() }
+
+            EffectsTabPicker(selection: $tab, dotted: activeTabs)
+                .padding(.horizontal, 24)
+
+            ZStack(alignment: .top) {
+                switch tab {
+                case .speed: speedTab.transition(.opacity)
+                case .equalizer: equalizerTab.transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: tab)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 30)
-        .padding(.bottom, 18)
-        .frame(maxWidth: .infinity)
+        // Swipe-down closes the sheet from either tab — except while a finger
+        // is dragging an EQ point, so a downward drag moves the point, not
+        // the sheet.
+        .interactiveDismissDisabled(draggingCurve)
         // Stays dark like the rest of the player.
         .sheetBackground(dragIndicator: false, alwaysDark: true)
+    }
+}
+
+// MARK: - Tabs
+
+private extension AudioEffectsSheet {
+    var speedTab: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                EffectSliderRow(
+                    label: "Speed",
+                    valueText: String(format: "%.2f×", speedValue),
+                    value: Binding(get: { Double(speedValue) }, set: { localSpeed = Float($0) }),
+                    range: 0.25 ... 2.0,
+                    step: 0.01,
+                    // A gentle ratchet every 0.05×, not a buzz on each 0.01.
+                    hapticStep: 0.05,
+                    onRelease: { if let val = localSpeed { commitSpeed(val) } }
+                )
+                togglesCard
+                if controller.audioEffects != .default {
+                    resetButton("Reset speed") {
+                        localSpeed = nil
+                        controller.applyEffects(.default)
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 22)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    /// No ScrollView: the curve's drag would fight it, and the tab fits.
+    var equalizerTab: some View {
+        VStack(spacing: 16) {
+            EqualizerPanel(
+                equalizer: controller.equalizer,
+                onChange: { controller.applyEqualizer($0) },
+                onCommit: logEqualizerChange,
+                onDraggingChanged: { draggingCurve = $0 }
+            )
+            if !controller.equalizer.isFlat {
+                resetButton("Reset EQ") {
+                    controller.applyEqualizer(.flat)
+                    logEqualizerChange()
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
     }
 }
 
 // MARK: - Pieces
 
 private extension AudioEffectsSheet {
-    /// Big live speed read-out + label.
-    var hero: some View {
-        VStack(spacing: 4) {
-            Text(String(format: "%.2f×", speedValue))
-                .font(.appDisplayLarge)
-                .monospacedDigit()
-                .foregroundStyle(Color.vText)
-            Text("Playback speed")
-                .font(.appCallout)
-                .foregroundStyle(Color.vText3)
-        }
-    }
-
-    var speedSlider: some View {
-        VStack(spacing: 8) {
-            // The player-style bar, not a stock `Slider` (see `.inlineScrub`);
-            // the old `step: 0.01` becomes rounding in the binding's setter.
-            ElasticSlider(
-                value: Binding(
-                    get: { Double(speedValue) },
-                    set: { localSpeed = Float(($0 / 0.01).rounded() * 0.01) }
-                ),
-                in: 0.25 ... 2.0,
-                onActive: { active in
-                    if !active, let val = localSpeed { commitSpeed(val) }
-                }
-            )
-            .sliderStyle(.inlineScrub)
-            .frame(height: 22)
-            // Tick as the speed moves through each 0.05× step (quantised so it's a
-            // gentle ratchet, not a continuous buzz).
-            .sensoryFeedback(.selection, trigger: Int((speedValue / 0.05).rounded()))
-
-            // 0.25× far-left, 2× far-right, 1× at its true spot on the track.
-            GeometryReader { geo in
-                let onePos = CGFloat((1.0 - 0.25) / (2.0 - 0.25))
-                Text("0.25×")
-                    .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
-                Text("2×")
-                    .frame(width: geo.size.width, height: geo.size.height, alignment: .trailing)
-                Text("1×")
-                    .position(x: geo.size.width * onePos, y: geo.size.height / 2)
-            }
-            .frame(height: 18)
-            .font(.appFootnote)
-            .monospacedDigit()
-            .foregroundStyle(Color.vText3)
-        }
-    }
-
-    /// Both toggle rows straight on the sheet — no card, no divider, just
-    /// the ink switch.
+    /// Both toggle rows straight on the sheet — no card, no divider.
     var togglesCard: some View {
         VStack(spacing: 0) {
             SettingsRow(
@@ -100,7 +129,7 @@ private extension AudioEffectsSheet {
                 caption: controller.audioEffects.preservePitch
                     ? "Speed changes tempo only"
                     : "Speed changes pitch too",
-                titleFont: .appBodyMedium,
+                titleFont: .appBody,
                 captionFont: .appFootnote
             ) {
                 inkToggle(Binding(get: { controller.audioEffects.preservePitch }, set: { setPreservePitch($0) }))
@@ -109,9 +138,9 @@ private extension AudioEffectsSheet {
             SettingsRow(
                 title: "Carry to next track",
                 caption: controller.persistAudioEdits
-                    ? "Settings apply to every track"
-                    : "Settings reset on track change",
-                titleFont: .appBodyMedium,
+                    ? "Speed applies to every track"
+                    : "Speed resets on track change",
+                titleFont: .appBody,
                 captionFont: .appFootnote
             ) {
                 inkToggle(Binding(get: { controller.persistAudioEdits }, set: { controller.persistAudioEdits = $0 }))
@@ -132,12 +161,9 @@ private extension AudioEffectsSheet {
             .frame(width: 55, height: 30)
     }
 
-    var resetButton: some View {
-        Button {
-            localSpeed = nil
-            controller.applyEffects(.default)
-        } label: {
-            CapsuleButtonLabel(title: "Reset", style: .secondary, expands: true)
+    func resetButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            CapsuleButtonLabel(title: title, style: .secondary, expands: true)
         }
         .buttonStyle(.plain)
     }
@@ -154,11 +180,111 @@ private extension AudioEffectsSheet {
         localSpeed = nil
     }
 
+    func logEqualizerChange() {
+        let eq = controller.equalizer
+        var metadata: [String: AnalyticsValue] = [
+            "setting": "equalizer",
+            "preset": .string(EqualizerPreset(matching: eq)?.rawValue ?? "custom")
+        ]
+        for (index, band) in AudioEqualizer.bands.enumerated() {
+            let key = band.label.lowercased().replacingOccurrences(of: " ", with: "_")
+            metadata["\(key)_db"] = .double(Double(eq.gains[index]))
+            metadata["\(key)_hz"] = .double(Double(eq.frequencies[index]))
+        }
+        AnalyticsService.shared?.log(.audioSettingsChanged, trackId: controller.state.currentMediaID?.value, metadata: metadata)
+    }
+
     func setPreservePitch(_ on: Bool) {
         var fx = controller.audioEffects
         fx.preservePitch = on
         controller.applyEffects(fx)
         AnalyticsService.shared?.log(.audioSettingsChanged, trackId: controller.state.currentMediaID?.value, metadata: ["setting": "preserve_pitch", "speed": .double(Double(fx.speed)), "preserve_pitch": .bool(fx.preservePitch)])
+    }
+}
+
+/// Two-segment pill: a track with the selected segment filled like an "on"
+/// FilterChip. `dotted` tabs get a small dot when their setting is changed,
+/// so it's visible from the other tab.
+private struct EffectsTabPicker: View {
+    @Binding var selection: AudioEffectsSheet.Tab
+    let dotted: Set<AudioEffectsSheet.Tab>
+    @Namespace private var pill
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(AudioEffectsSheet.Tab.allCases) { tab in
+                let isOn = tab == selection
+                Button {
+                    selection = tab
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(tab.rawValue).font(.appFootnoteMedium)
+                        if dotted.contains(tab) {
+                            Circle().frame(width: 5, height: 5)
+                        }
+                    }
+                    .foregroundStyle(isOn ? Color.vOnInverse : Color.inkText(0.85))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+                    .background {
+                        if isOn {
+                            Capsule()
+                                .fill(Color.vInverse)
+                                .matchedGeometryEffect(id: "pill", in: pill)
+                        }
+                    }
+                    .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(Color.vRowActive, in: Capsule())
+        .animation(.snappy(duration: 0.25), value: selection)
+        .sensoryFeedback(.selection, trigger: selection)
+    }
+}
+
+/// One slider setting: name and value read-out over the same elastic bar
+/// (and `.playbackProgress` style) as the now-playing scrubber, with a
+/// selection tick each `hapticStep` so steps (and EQ's 0 dB) are easy to
+/// find by feel. Used for speed and every EQ band.
+private struct EffectSliderRow: View {
+    let label: String
+    let valueText: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let hapticStep: Double
+    let onRelease: () -> Void
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack {
+                Text(label).foregroundStyle(Color.vText)
+                Spacer(minLength: 0)
+                Text(valueText).foregroundStyle(Color.vText2)
+            }
+            .font(.appBody)
+            .monospacedDigit()
+
+            ElasticSlider(
+                value: Binding(
+                    get: { value },
+                    set: { value = ($0 / step).rounded() * step }
+                ),
+                in: range,
+                onActive: { active in
+                    if !active { onRelease() }
+                }
+            )
+            .sliderStyle(.playbackProgress)
+            .frame(height: 22)
+            // The resting bar is inset by `growth` (it widens while dragged);
+            // pull it out so it lines up with the label row, like the player.
+            .padding(.horizontal, -ElasticSliderConfig.playbackProgress.growth)
+            .sensoryFeedback(.selection, trigger: Int((value / hapticStep).rounded()))
+        }
     }
 }
 
@@ -168,7 +294,7 @@ private extension AudioEffectsSheet {
         .sheet(isPresented: .constant(true)) {
             AudioEffectsSheet()
                 .environment(controller)
-                .presentationDetents([.height(440)])
+                .presentationDetents([.height(560)])
                 .presentationDragIndicator(.visible)
         }
 }

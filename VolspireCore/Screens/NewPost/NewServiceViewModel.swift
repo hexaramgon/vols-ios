@@ -149,7 +149,22 @@ final class NewServiceViewModel {
         return out
     }
 
-    var canPublish: Bool { missing.isEmpty }
+    /// Edit mode: every field as loaded, flattened — Save stays off until
+    /// something differs. nil for a new service.
+    private var original: [String]?
+    private var fingerprint: [String] {
+        let t = { (s: String) in s.trimmingCharacters(in: .whitespacesAndNewlines) }
+        var out = [serviceType, gradient, t(title), t(longDescription), currency, visibility]
+        out += tags + ["|"] + deliverables.map(t) + ["|"]
+        out += packages.flatMap { [t($0.name), t($0.price), t($0.delivery), t($0.revisions)] + $0.features.map(t) + ["/"] }
+        out += ["|"] + processSteps.flatMap { [t($0.step), t($0.description)] }
+        out += ["|"] + faqs.flatMap { [t($0.question), t($0.answer)] }
+        out += ["|"] + portfolio.flatMap { [t($0.title), $0.existingFileUrl ?? "", $0.data == nil ? "" : "new"] }
+        return out
+    }
+    var hasChanges: Bool { original == nil || coverData != nil || fingerprint != original }
+
+    var canPublish: Bool { missing.isEmpty && hasChanges }
 
     var validationHint: String? {
         missing.isEmpty ? nil : "Add \(missing.joined(separator: ", ")) to publish"
@@ -193,6 +208,7 @@ final class NewServiceViewModel {
             faqs = f.map { FaqDraft(question: $0.q, answer: $0.a ?? "") }
         }
         portfolio = (detail.portfolio ?? []).map { AudioClipDraft(title: $0.title ?? "", existingFileUrl: $0.fileUrl) }
+        original = fingerprint
     }
 
     func handleCoverImage(_ image: UIImage) {
@@ -208,9 +224,11 @@ final class NewServiceViewModel {
         switch result {
         case .success(let url):
             do {
-                guard let data = try SecurityScopedFile.read(url) else { return }
+                guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.postUploads.maxUploadBytes) else { return }
                 portfolio[index].data = data
                 portfolio[index].fileName = url.lastPathComponent
+            } catch let error as FileTooLargeError {
+                uploadState = .error(error.localizedDescription)
             } catch {
                 uploadState = .error("Failed to read audio file")
             }

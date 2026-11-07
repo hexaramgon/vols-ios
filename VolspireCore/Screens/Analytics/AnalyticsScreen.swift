@@ -14,6 +14,7 @@ struct AnalyticsScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(PlayerController.self) private var playerController
     @Environment(Dependencies.self) private var dependencies
+    @Environment(Router.self) private var router
     @State private var viewModel = AnalyticsViewModel()
     /// Rows land with a stagger once, on the first load only.
     @State private var rowsLanded = false
@@ -25,10 +26,14 @@ struct AnalyticsScreen: View {
 
     var body: some View {
         ScrollView {
-            content
-                .padding(.bottom, bottomInset)
+            VStack(spacing: 0) {
+                networkRow
+                content
+            }
+            .padding(.bottom, bottomInset)
         }
         .scrollIndicators(.hidden)
+        .refreshable { await viewModel.refresh() }
         .appNavBar(title: "Analytics") { dismiss() }
         .task { await viewModel.load() }
         .navigationDestination(item: $openTrackId) { id in
@@ -61,6 +66,46 @@ struct AnalyticsScreen: View {
     }
 }
 
+// MARK: - Followers & collaborators entry
+
+private extension AnalyticsScreen {
+    /// The dashboard's way in to who follows you and who you collaborate with
+    /// (where a collaborator can be removed) — a full-width strip under the
+    /// bar, the conversation's listing strip anatomy (accent tile, title,
+    /// one line, chevron, hairline below), so it reads like a tab.
+    var networkRow: some View {
+        Button { router.navigateToNetwork() } label: {
+            HStack(spacing: 12) {
+                // The app's accent tile (like the DM listing banner).
+                LucideIcon(.users, .lg)
+                    .foregroundStyle(Color.vOnColor)
+                    .frame(width: 40, height: 40)
+                    .background(Color.vAccent, in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Followers & collaborators")
+                        .font(.appSubheadlineSemibold)
+                        .foregroundStyle(Color.vText)
+                        .lineLimit(1)
+                    Text("See who follows you, manage collaborators")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                LucideIcon(.chevronRight, .md).foregroundStyle(Color.vText3)
+            }
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .padding(.vertical, 12)
+            .contentShape(.rect)
+        }
+        .buttonStyle(ListingStripButtonStyle())
+        .overlay(alignment: .bottom) { Rectangle().fill(Color.vDivider).frame(height: 1) }
+        // Flush under the bar: cancel the nav bar's 8pt content gap.
+        .padding(.top, -8)
+        .padding(.bottom, 8)
+    }
+}
+
 // MARK: - Track list
 
 private extension AnalyticsScreen {
@@ -85,19 +130,20 @@ private extension AnalyticsScreen {
 
     func trackRow(_ track: TrackAnalyticsItem) -> some View {
         let delta = track.weekDelta
-        // Library's row: 44pt cover (radius 8), full-ink title over the
-        // secondary-ink stats line, 14pt gaps.
+        // 44pt cover (radius 8), folder-file-row type (title over the
+        // tertiary stats line), 14pt gaps.
         return HStack(spacing: 14) {
             ArtworkView(.placeholder(track.coverURL, name: track.title), cornerRadius: 8)
                 .frame(width: 44, height: 44)
             VStack(alignment: .leading, spacing: 2) {
+                // Folder file rows' pair (AppFont.fileTitle / fileSubtitle).
                 Text(track.title)
-                    .font(.appSubheadlineMedium)
-                    .foregroundStyle(Color.vText)
+                    .font(.appFont.fileTitle)
+                    .foregroundStyle(Color.vTextRow)
                     .lineLimit(1)
                 Text("\(track.streams.compactCount) streams · \(track.uniqueListeners.compactCount) listeners")
-                    .font(.appCaptionCompact)
-                    .foregroundStyle(Color.vText2)
+                    .font(.appFont.fileSubtitle)
+                    .foregroundStyle(Color.vText3)
                     .monospacedDigit()
                     .lineLimit(1)
             }
@@ -123,15 +169,17 @@ private extension AnalyticsScreen {
 
 private extension AnalyticsScreen {
     var emptyState: some View {
-        VStack(spacing: 24) {
-            EmptyStateView(
-                icon: .chartColumn,
-                title: "No analytics yet",
-                message: "Upload a track and share it. Plays, listeners and where they found it show up here."
-            )
+        // My Network / Messages' empty treatment: animated ghost stats.
+        HomeEmpty(
+            title: "No analytics yet",
+            message: "Upload a track and share it. Plays, listeners and where they found it show up here."
+        ) {
+            GhostAnalytics()
+        } action: {
             PrimaryButton("Upload a track", size: .inline, expands: false) { showUpload = true }
         }
-        .padding(.vertical, 128)
+        .padding(.horizontal, ViewConst.screenPaddings)
+        .padding(.vertical, 40)
     }
 
     /// Mirrors the loaded page (six list rows, then the detail's header and
@@ -175,6 +223,7 @@ private extension AnalyticsScreen {
 #Preview {
     @Previewable @State var playerController = PlayerController.stub
     AnalyticsScreen()
+        .withRouter()
         .environment(playerController)
         .environment(Dependencies.stub)
 }

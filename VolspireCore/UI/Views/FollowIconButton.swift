@@ -16,6 +16,9 @@ struct FollowIconButton: View {
     let userId: String
     var fallback: Bool = false
     var size: CircleIconButton.Size = .sm
+    /// Once followed, settle into an inactive check that can't be tapped
+    /// (no unfollow from here) — for discovery lists.
+    var lockOnceFollowing = false
     @Environment(SocialStore.self) private var social
     @State private var inFlight = false
 
@@ -24,7 +27,7 @@ struct FollowIconButton: View {
         CircleIconButton(
             icon: following ? .userCheck : .userPlus,
             size: size,
-            variant: following ? .send : .primary,
+            variant: following ? (lockOnceFollowing ? .inactive : .send) : .primary,
             popOn: following
         ) {
             guard !inFlight else { return }

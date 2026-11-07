@@ -38,6 +38,8 @@ struct RegularNowPlaying: View {
     @State private var commentsModel = NowPlayingCommentsModel()
     /// Drives the album cover's settle-in entrance on expand (see artworkOrVisualizer).
     @State private var coverEntranceDone = false
+    /// The View pill's Visualizer / Video / Cover sheet.
+    @State var showViewModes = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -286,24 +288,11 @@ private extension RegularNowPlaying {
 
     /// The web hero's View pill: a borderless glass capsule (icon-only on
     /// phones, 20pt glyph @ 0.64) showing the current view, opening a
-    /// Visualizer / Video / Cover menu with a check on the active item. Video
+    /// Visualizer / Video / Cover choice sheet with a check on the active item. Video
     /// is listed but disabled — the menu only shows for audio tracks (the
     /// visualizer is unavailable on video tracks, which always play video).
     var visualizerToggleButton: some View {
-        Menu {
-            Button {
-                withAnimation(.smooth(duration: 0.3)) { model.showVisualizer = true }
-            } label: {
-                viewModeLabel("Visualizer", icon: .sparkles, active: model.showVisualizer)
-            }
-            Button {} label: { viewModeLabel("Video", icon: .video, active: false) }
-                .disabled(true)
-            Button {
-                withAnimation(.smooth(duration: 0.3)) { model.showVisualizer = false }
-            } label: {
-                viewModeLabel("Cover", icon: .image, active: !model.showVisualizer)
-            }
-        } label: {
+        Button { showViewModes = true } label: {
             LucideIcon(model.showVisualizer ? .sparkles : .image, .lg)
                 .foregroundStyle(.white.opacity(0.64))
                 .padding(.horizontal, 12)
@@ -312,15 +301,24 @@ private extension RegularNowPlaying {
                 .background(.ultraThinMaterial, in: Capsule())
                 .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
         .accessibilityLabel("View: \(model.showVisualizer ? "Visualizer" : "Cover")")
-    }
-
-    /// A View-menu item: glyph + label, with a check on the active one.
-    func viewModeLabel(_ title: String, icon: LucideIcon.Name, active: Bool) -> some View {
-        Label {
-            Text(title)
-        } icon: {
-            Image(lucide: active ? .check : icon)
+        .sheet(isPresented: $showViewModes) {
+            ChoiceSheet(
+                title: "View",
+                subtitle: "What plays behind the track",
+                icon: .eye,
+                choices: [
+                    SheetChoice(icon: .sparkles, title: "Visualizer", selected: model.showVisualizer) {
+                        withAnimation(.smooth(duration: 0.3)) { model.showVisualizer = true }
+                    },
+                    SheetChoice(icon: .video, title: "Video", subtitle: "Only for video tracks", disabled: true) {},
+                    SheetChoice(icon: .image, title: "Cover", selected: !model.showVisualizer) {
+                        withAnimation(.smooth(duration: 0.3)) { model.showVisualizer = false }
+                    },
+                ],
+                alwaysDark: true
+            )
         }
     }
 

@@ -232,11 +232,54 @@ public struct ApiUserPack: Codable, Sendable, Identifiable {
     public let fileCount: Int?
     public let formats: [String]?
     public let downloads: Int?
-    public let gradient: String?
     public let coverUrl: String?
     public let isPublished: Bool?
     public let deprecated: Bool?
     public let createdAt: String?
+}
+
+// MARK: - Folder share link DTO
+
+/// A folder's active public share link (`get/create/update_folder_share_link`).
+/// The token is the access — anyone with `shareURL` can view the folder.
+public struct ApiFolderShareLink: Codable, Sendable, Hashable {
+    public let token: String
+    public let allowDownloads: Bool
+    public let expiresAt: String?
+    public let expired: Bool
+    public let createdAt: String?
+
+    /// The page a link visitor opens (no account needed).
+    public var shareURL: URL? { URL(string: "https://volspire.com/f/\(token)") }
+}
+
+// MARK: - Folder pack DTO
+
+/// A pack linked into a workspace folder (`get_folder_packs`) — a reference,
+/// not a copy. `available == false` (pack unpublished, removed, or its creator
+/// blocked) carries only the id.
+public struct ApiFolderPack: Codable, Sendable, Identifiable, Hashable {
+    public var id: String { packId }
+    public let packId: String
+    public let available: Bool
+    public let name: String?
+    public let packType: String?
+    public let price: Double?
+    public let fileCount: Int?
+    public let coverUrl: String?
+    public let creator: ApiUserRef?
+    public let addedByUsername: String?
+    public let addedAt: String?
+
+    /// Marketplace-shaped, so a row can open the pack page.
+    public var asMarketplacePack: ApiMarketplacePack? {
+        guard available, let name else { return nil }
+        return ApiMarketplacePack(
+            packId: packId, name: name, packType: packType, price: price,
+            downloads: nil, fileCount: fileCount, avgRating: nil,
+            coverUrl: coverUrl, creator: creator
+        )
+    }
 }
 
 // MARK: - Folder File DTOs
@@ -245,7 +288,9 @@ public struct ApiFolderFile: Codable, Sendable, Identifiable {
     public var id: String { fileId }
     public let fileId: String
     public let name: String
-    public let fileUrl: String?
+    /// `var` (like the two track URLs below): StorageService swaps the raw
+    /// storage paths for signed/public URLs in place.
+    public var fileUrl: String?
     public let fileType: String?
     public let fileSize: Int?
     public let timespan: Double?
@@ -262,8 +307,8 @@ public struct ApiFolderFile: Codable, Sendable, Identifiable {
     public let trackTitle: String?
     public let trackArtist: String?
     public let trackArtistId: String?
-    public let trackCoverUrl: String?
-    public let trackAudioUrl: String?
+    public var trackCoverUrl: String?
+    public var trackAudioUrl: String?
     public let trackVisibility: String?
 }
 
@@ -277,6 +322,12 @@ public struct ApiUserFolder: Codable, Sendable, Identifiable {
     public let ownerId: String
     public let createdAt: String
     public let role: String
+    /// The owner's handle + avatar (bare storage path or URL) and the item
+    /// count (files + tracks) — `get_user_folders` sends them; optional so
+    /// older payloads still decode.
+    public let ownerUsername: String?
+    public let ownerAvatarUrl: String?
+    public let fileCount: Int?
 }
 
 /// One row from `get_workspace_activity` — a collaborator's recent action
@@ -312,6 +363,17 @@ public struct ApiFolderMember: Codable, Sendable, Identifiable {
 
 /// THE "user row" shape (id + username + avatar) with a guaranteed id — search
 /// results, collaborators, comment authors, like/library artists, blocked accounts.
+/// A follower of the current user (`get_my_followers`).
+public struct ApiFollower: Codable, Sendable, Hashable, Identifiable {
+    public var id: String { userId }
+    public let userId: String
+    public let username: String?
+    public let profileImageUrl: String?
+    public let followedAt: String?
+    /// Whether the current user follows them back.
+    public let isFollowing: Bool?
+}
+
 public struct ApiUserSummary: Codable, Sendable, Hashable, Identifiable {
     public var id: String { userId }
     public let userId: String
@@ -351,6 +413,10 @@ public struct ApiNotification: Codable, Sendable, Identifiable {
     public let contextType: String?
     public let contextId: String?
     public let contextPreview: String?
+    /// Live status of a `collaborator` context ('pending' / 'accepted'; nil
+    /// once declined or for other contexts) — so an answered request never
+    /// shows Accept / Decline again.
+    public let contextStatus: String?
     public let isRead: Bool?            // activity_log.is_read is nullable
     public let actor: ApiUserRef?
     /// How many activity rows collapsed into this notification (> 1 only for
@@ -456,7 +522,6 @@ public struct ApiMarketplacePack: Codable, Sendable, Identifiable, Hashable {
     public let fileCount: Int?
     public let avgRating: Double?
     public let coverUrl: String?
-    public let gradient: String?
     public let creator: ApiUserRef?
 }
 
@@ -478,9 +543,6 @@ public struct ApiTrackPrice: Codable, Sendable {
     public let trackId: String
     public let price: Double
     public let currency: String?
-    enum CodingKeys: String, CodingKey {
-        case trackId = "track_id", price, currency
-    }
 }
 
 public struct ApiExploreData: Codable, Sendable {
@@ -498,7 +560,7 @@ public extension ApiUserPack {
         ApiMarketplacePack(
             packId: packId, name: name, packType: packType, price: price,
             downloads: downloads, fileCount: fileCount, avgRating: nil,
-            coverUrl: coverUrl, gradient: gradient,
+            coverUrl: coverUrl,
             creator: ApiUserRef(userId: creatorUserId, username: creatorUsername, profileImageUrl: creatorImageUrl)
         )
     }
@@ -568,6 +630,11 @@ public struct ApiListing: Codable, Sendable, Identifiable, Hashable {
     public var responseCount: Int?
     public var saveCount: Int?
     public var commentCount: Int?
+    /// Unique daily views (`get_listings_feed` only).
+    public var viewCount: Int?
+    /// The feed's opaque paging token for the row after this one
+    /// (`get_listings_feed` only) — hand it back as-is, never parse it.
+    public var cursor: String?
     // Detail-only viewer flags (nil from the board feed; populated by `get_listing`).
     public let updatedAt: String?
     public let isAuthor: Bool?
@@ -585,7 +652,7 @@ public struct ApiListing: Codable, Sendable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case listingId, category, title, description, tags, status, author
         case attachmentsValue = "attachments"
-        case createdAt, responseCount, saveCount, commentCount, updatedAt
+        case createdAt, responseCount, saveCount, commentCount, viewCount, cursor, updatedAt
         case isAuthor, viewerHasSaved, viewerHasResponded, viewerConvoId
     }
 }
@@ -667,6 +734,117 @@ public struct ApiReview: Codable, Sendable, Hashable, Identifiable {
     public let reviewer: ApiUserRef?
 }
 
+/// `can_review`: whether the signed-in user may review a pack / service and
+/// whether they already have. Packs need a download at least 3 days old.
+/// `reason` says why not (own_item / purchase_required / not_downloaded /
+/// too_soon); `reviewableAt` is when, for too_soon.
+public struct ApiReviewEligibility: Codable, Sendable, Equatable {
+    public let canReview: Bool
+    public let hasReviewed: Bool
+    public let reason: String?
+    public let reviewableAt: String?
+}
+
+/// `get_pack_stats` — the owner's performance numbers for one pack. Views
+/// exclude the owner's own; `downloaders` counts people (recorded since
+/// 2026-11-05), `downloadsTotal` every download.
+public struct ApiPackStats: Codable, Sendable {
+    public struct Day: Codable, Sendable {
+        public let date: String
+        public let views: Int
+        public let downloads: Int
+        public let saves: Int
+
+        public init(date: String, views: Int, downloads: Int, saves: Int) {
+            self.date = date
+            self.views = views
+            self.downloads = downloads
+            self.saves = saves
+        }
+    }
+
+    public let viewsTotal: Int
+    public let viewsLast30Days: Int
+    public let viewersLast30Days: Int
+    public let downloadsTotal: Int
+    public let downloaders: Int
+    public let downloadsLast30Days: Int
+    public let savesTotal: Int
+    public let savesLast30Days: Int
+    public let likesTotal: Int
+    public let avgRating: Double
+    public let reviewCount: Int
+    public let daily: [Day]
+
+    public init(
+        viewsTotal: Int, viewsLast30Days: Int, viewersLast30Days: Int, downloadsTotal: Int, downloaders: Int,
+        downloadsLast30Days: Int, savesTotal: Int, savesLast30Days: Int, likesTotal: Int, avgRating: Double,
+        reviewCount: Int, daily: [Day]
+    ) {
+        self.viewsTotal = viewsTotal
+        self.viewsLast30Days = viewsLast30Days
+        self.viewersLast30Days = viewersLast30Days
+        self.downloadsTotal = downloadsTotal
+        self.downloaders = downloaders
+        self.downloadsLast30Days = downloadsLast30Days
+        self.savesTotal = savesTotal
+        self.savesLast30Days = savesLast30Days
+        self.likesTotal = likesTotal
+        self.avgRating = avgRating
+        self.reviewCount = reviewCount
+        self.daily = daily
+    }
+}
+
+/// `get_listing_stats` — the author's performance numbers for one collab
+/// listing. `viewsTotal` is the listing's own view count (matches its footer);
+/// the 30-day numbers and `daily` come from per-day view records.
+public struct ApiListingStats: Codable, Sendable {
+    public struct Day: Codable, Sendable {
+        public let date: String
+        public let views: Int
+        public let responses: Int
+        public let saves: Int
+
+        public init(date: String, views: Int, responses: Int, saves: Int) {
+            self.date = date
+            self.views = views
+            self.responses = responses
+            self.saves = saves
+        }
+    }
+
+    public let viewsTotal: Int
+    public let viewersTotal: Int
+    public let viewsLast30Days: Int
+    public let viewersLast30Days: Int
+    public let responsesTotal: Int
+    public let responsesLast30Days: Int
+    public let savesTotal: Int
+    public let savesLast30Days: Int
+    public let commentsTotal: Int
+    public let commentsLast30Days: Int
+    public let daily: [Day]
+
+    public init(
+        viewsTotal: Int, viewersTotal: Int, viewsLast30Days: Int, viewersLast30Days: Int,
+        responsesTotal: Int, responsesLast30Days: Int, savesTotal: Int, savesLast30Days: Int,
+        commentsTotal: Int, commentsLast30Days: Int, daily: [Day]
+    ) {
+        self.viewsTotal = viewsTotal
+        self.viewersTotal = viewersTotal
+        self.viewsLast30Days = viewsLast30Days
+        self.viewersLast30Days = viewersLast30Days
+        self.responsesTotal = responsesTotal
+        self.responsesLast30Days = responsesLast30Days
+        self.savesTotal = savesTotal
+        self.savesLast30Days = savesLast30Days
+        self.commentsTotal = commentsTotal
+        self.commentsLast30Days = commentsLast30Days
+        self.daily = daily
+    }
+}
+
 /// One sample/file inside a pack.
 public struct ApiPackFile: Codable, Sendable, Hashable, Identifiable {
     public var id: String { fileId }
@@ -689,7 +867,6 @@ public struct ApiPackDetail: Codable, Sendable {
     public let currency: String?
     public let formats: [String]?
     public let coverUrl: String?
-    public let gradient: String?
     public let tags: [String]?
     public let fileCount: Int?
     public let downloads: Int?
@@ -807,6 +984,78 @@ public struct ApiPlaylistDetail: Codable, Sendable, Identifiable {
     public let createdAt: String?
     public let updatedAt: String?
     public let tracks: [ApiPlaylistTrack]?
+}
+
+// MARK: - Release DTOs
+
+/// A release on a profile's rail (`get_user_releases`). `trackCount` counts
+/// only the tracks the viewer can see.
+public struct ApiRelease: Codable, Sendable, Identifiable, Hashable {
+    public var id: String { releaseId }
+    public let releaseId: String
+    public var title: String
+    public var coverUrl: String?
+    public var visibility: String?
+    public var releaseDate: String?
+    public let createdAt: String?
+    /// `var`: the store patches it as tracks are added / removed.
+    public var trackCount: Int?
+
+    public init(releaseId: String, title: String, coverUrl: String?, visibility: String?,
+                releaseDate: String?, createdAt: String?, trackCount: Int?) {
+        self.releaseId = releaseId
+        self.title = title
+        self.coverUrl = coverUrl
+        self.visibility = visibility
+        self.releaseDate = releaseDate
+        self.createdAt = createdAt
+        self.trackCount = trackCount
+    }
+}
+
+public struct ApiReleaseTrack: Codable, Sendable, Identifiable {
+    public var id: String { trackId }
+    public let trackId: String
+    public let title: String
+    public let coverUrl: String?
+    public let audioUrl: String?
+    public let hasVisual: Bool?
+    public let durationMs: Int?
+    public let genre: String?
+    public let visibility: String?
+    public let createdBy: String?
+    public let artistUsername: String?
+    public let artistAvatarUrl: String?
+    public let position: Int?
+    public let addedAt: String?
+}
+
+/// A release page (`get_release`) — same shape as `get_playlist`.
+public struct ApiReleaseDetail: Codable, Sendable, Identifiable {
+    public var id: String { releaseId }
+    public let releaseId: String
+    public let title: String
+    public let description: String?
+    public let coverUrl: String?
+    public let visibility: String?
+    public let releaseDate: String?
+    public let ownerId: String?
+    public let ownerUsername: String?
+    public let ownerAvatarUrl: String?
+    public let createdAt: String?
+    public let updatedAt: String?
+    public let tracks: [ApiReleaseTrack]?
+}
+
+/// One of the caller's releases + whether it holds a given track
+/// (`get_releases_for_track`, the "Add to release" picker).
+public struct ApiReleaseMembership: Codable, Sendable, Identifiable {
+    public var id: String { releaseId }
+    public let releaseId: String
+    public let title: String
+    public let coverUrl: String?
+    public let visibility: String?
+    public let contains: Bool
 }
 
 // MARK: - User Likes DTOs

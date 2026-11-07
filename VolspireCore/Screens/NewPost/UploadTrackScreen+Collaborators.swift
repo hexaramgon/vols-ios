@@ -104,13 +104,7 @@ extension UploadTrackScreen {
 
                     Spacer()
 
-                    Menu {
-                        ForEach(collaboratorRoles, id: \.self) { role in
-                            Button(role) {
-                                viewModel.updateCreditRole(credit.userId, role: role)
-                            }
-                        }
-                    } label: {
+                    Button { creditRoleTarget = credit } label: {
                         HStack(spacing: 4) {
                             Text(credit.role)
                                 .font(.appFootnote)
@@ -122,14 +116,15 @@ extension UploadTrackScreen {
                         .background(Color.vControl, in: Capsule())
                         .contentShape(.rect)
                     }
+                    .buttonStyle(.plain)
 
                     Button {
                         viewModel.removeCredit(credit.userId)
                     } label: {
-                        LucideIcon(.x, .sm)
+                        LucideIcon(.x, .md)
                             .foregroundStyle(Color.vText3)
                             .frame(width: 36, height: 36)
-                            .contentShape(.rect)
+                            .minimumHitArea(for: 36)
                     }
                     .buttonStyle(.plain)
                 }
@@ -163,8 +158,8 @@ extension UploadTrackScreen {
     // MARK: - Tags
 
     var tagsSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            UploadSectionDivider("Tags")
+        VStack(alignment: .leading, spacing: 12) {
+            ComposerHeading(title: "Tags")
             UploadTagInput(tags: $viewModel.tags, suggestions: tagSuggestions)
         }
     }

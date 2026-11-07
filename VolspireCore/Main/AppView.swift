@@ -39,6 +39,7 @@ struct AppView: View {
                         .environment(dependencies.inboxStore)
                         .environment(dependencies.listingsStore)
                         .environment(dependencies.feedStore)
+                        .environment(dependencies.packsStore)
                 case .needsProfile:
                     // Signed in with no profile row — finish the account before
                     // the app opens (see AuthManager.AuthState.needsProfile).
@@ -48,6 +49,8 @@ struct AppView: View {
                 }
             }
             .appAppearance()
+            // Feeds ViewConst.safeAreaInsets (never read from UIKit in a body).
+            .measuresSafeArea()
             .environment(\.font, .geist(17, relativeTo: .body))
             // App-wide: tapping inert space drops the keyboard (fields/buttons
             // still win their taps). Sheets get it via sheetBackground();
@@ -70,8 +73,9 @@ struct AppView: View {
                 dependencies.resetForSignOut()
             }
             // Session became active (launch restore or fresh sign-in):
-            // register this device for pushes. First run shows the system
-            // permission prompt; afterwards this silently refreshes the token.
+            // refresh this device's push token if permission is granted. The
+            // permission prompt itself comes from the push primer (RootTabView)
+            // or Settings → Notifications, never straight from sign-in.
             if case .authenticated = new {
                 Task { await PushNotificationManager.shared.enable() }
             }

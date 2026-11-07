@@ -25,11 +25,11 @@ struct ConversationRow: View {
             ))
         } label: {
             HStack(spacing: 12) {
-                AvatarView(url: item.avatarURL, name: item.username, size: 40)
+                AvatarView(url: item.avatarURL, name: item.username, size: 48)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
                         Text(item.username)
-                            .font(item.hasUnread ? .appSubheadlineSemibold : .appSubheadlineMedium)
+                            .font(item.hasUnread ? .appCalloutSemibold : .appCallout)
                             .foregroundStyle(item.hasUnread ? Color.vText : Color.vTextRow)
                             .lineLimit(1)
                         Spacer(minLength: 4)
@@ -40,7 +40,7 @@ struct ConversationRow: View {
                     }
                     HStack(spacing: 6) {
                         Text(item.preview)
-                            .font(.appCaption)
+                            .font(.appSubheadline)
                             .foregroundStyle(item.hasUnread ? Color.vText : Color.vText3)
                             .lineLimit(1)
                         Spacer(minLength: 0)

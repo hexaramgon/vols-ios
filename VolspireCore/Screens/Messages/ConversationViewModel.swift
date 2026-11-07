@@ -8,6 +8,7 @@
 //  isn't wired on iOS yet, so new messages are picked up by a light poll.
 //
 
+import DesignSystem
 import Foundation
 import Services
 import UIKit
@@ -43,7 +44,9 @@ struct ChatMessage: Identifiable, Equatable {
     let createdAt: Date
     let type: String        // "message" | "system" | "collab_request" | …
     let isAttachment: Bool
-    let attachmentURL: URL?
+    /// Signed (expiring) link — re-resolved from `attachmentPath` while the
+    /// thread is open (see `refreshAttachmentLinks`).
+    var attachmentURL: URL?
     let attachmentType: String?
     let attachmentName: String?
     var pending: Bool = false
@@ -53,6 +56,8 @@ struct ChatMessage: Identifiable, Equatable {
     var requestId: String? = nil
     var requestStatus: String? = nil        // mutated optimistically on respond
     var requestFromUserId: String? = nil
+    /// The attachment's storage path — the stable key its link is signed from.
+    var attachmentPath: String? = nil
 
     var isSystem: Bool { type == "system" }
     var isImageAttachment: Bool { isAttachment && (attachmentType?.hasPrefix("image") ?? false) }
@@ -64,19 +69,26 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
-/// Why the composer is closed for the person who sent a collab request.
-/// A request is an ask, not an open channel: until it's accepted they get the
-/// one message the request carried, and nothing more.
+/// Why the composer is closed while a collab request is open or declined.
+/// A request is an ask, not an open channel — for either side: the requester
+/// gets the one message the request carried, and the recipient answers it
+/// (Accept / Decline) before the thread opens. Accepting is the only way in.
 enum CollabRequestGate: Equatable {
-    /// Waiting on the recipient.
+    /// My request, waiting on the recipient.
     case awaitingReply
-    /// They said no.
+    /// My request, and they said no.
     case declined
+    /// Their request, waiting on me.
+    case needsResponse
+    /// Their request, and I said no.
+    case youDeclined
 
     var message: String {
         switch self {
         case .awaitingReply: "Waiting for a reply to your collab request. You can message once they accept."
         case .declined: "Your collab request was declined, so you can't send messages here."
+        case .needsResponse: "Accept the collab request to start messaging, or decline it."
+        case .youDeclined: "You declined this collab request, so messaging is closed."
         }
     }
 }
@@ -97,11 +109,13 @@ extension ConversationViewModel {
     var collabRequestGate: CollabRequestGate? {
         // Accepted anywhere in the thread = collaborators, gate lifted.
         guard !hasAcceptedCollabRequest else { return nil }
-        guard let mine = messages.last(where: { $0.isCollabRequest && $0.isFromMe })
-        else { return nil }
-        switch mine.requestStatus {
-        case "pending": return .awaitingReply
-        case "rejected": return .declined
+        // The latest request decides, whichever side sent it.
+        guard let latest = messages.last(where: \.isCollabRequest) else { return nil }
+        switch (latest.requestStatus, latest.isFromMe) {
+        case ("pending", true): return .awaitingReply
+        case ("rejected", true): return .declined
+        case ("pending", false): return .needsResponse
+        case ("rejected", false): return .youDeclined
         default: return nil
         }
     }
@@ -116,6 +130,10 @@ final class ConversationViewModel {
     var draft = ""
     var isSending = false
     var attachmentError: String?
+    /// The server has messages older than the oldest one loaded (the last page
+    /// came back full) — the thread offers "Load earlier messages".
+    private(set) var hasOlder = false
+    private(set) var isLoadingOlder = false
     /// The collab listing this conversation was opened from (Collab Board
     /// respond flow) — drives the "about this listing" banner. Nil for DMs.
     var linkedListing: ApiListing?
@@ -157,10 +175,18 @@ final class ConversationViewModel {
         if messages.isEmpty { loadingState = .loading }
         async let settled: Void = Self.sleep(settleDelay)
         do {
-            let rows = try await service.getConvoMessages(convoId: convoId, limit: 50, offset: 0)
+            let rows = try await service.getConvoMessages(convoId: convoId, limit: Self.pageSize, offset: 0)
             let mapped = (await mapAll(rows)).sorted { $0.createdAt < $1.createdAt }
             await settled
-            messages = mapped
+            // A reload (e.g. after a collab-gate rejection) replaces the latest
+            // page but keeps any earlier pages the user already loaded.
+            let fresh = Set(mapped.map(\.id))
+            let oldest = mapped.first?.createdAt ?? .distantFuture
+            let olderKept = messages.filter {
+                !fresh.contains($0.id) && !$0.id.hasPrefix("local-") && $0.createdAt < oldest
+            }
+            if olderKept.isEmpty { hasOlder = rows.count == Self.pageSize }
+            messages = olderKept + mapped
             loadingState = .loaded
             // The two follow-up chains are independent of each other — running
             // them concurrently collapses the old 4-deep serial tail
@@ -173,7 +199,7 @@ final class ConversationViewModel {
         } catch {
             debugLog("[ConversationVM] load: \(error)")
             await settled
-            if messages.isEmpty { loadingState = .error(error.localizedDescription) }
+            loadingState.fail(error, ifEmpty: messages.isEmpty)
         }
     }
 
@@ -193,6 +219,28 @@ final class ConversationViewModel {
            let listingId = try? await service.getConvoListingId(convoId: convoId),
            let listing = try? await service.getListing(listingId: listingId) {
             linkedListing = listing
+        }
+    }
+
+    /// Messages per page — the first load, each "load earlier" step, and the poll.
+    static let pageSize = 50
+
+    /// Prepends the next page of older messages. The RPC pages newest-first by
+    /// offset, so messages that arrived since the first load shift the window
+    /// and can re-deliver a few already shown — deduped by id (never a gap).
+    func loadOlder() async {
+        guard hasOlder, !isLoadingOlder else { return }
+        isLoadingOlder = true
+        defer { isLoadingOlder = false }
+        let loaded = messages.filter { !$0.id.hasPrefix("local-") }.count
+        do {
+            let rows = try await service.getConvoMessages(convoId: convoId, limit: Self.pageSize, offset: loaded)
+            hasOlder = rows.count == Self.pageSize
+            let existing = Set(messages.map(\.id))
+            let older = await mapAll(rows).filter { !existing.contains($0.id) }
+            messages = (older + messages).sorted { $0.createdAt < $1.createdAt }
+        } catch {
+            debugLog("[ConversationVM] loadOlder: \(error)")
         }
     }
 
@@ -247,7 +295,7 @@ final class ConversationViewModel {
     /// explanation instead of leaving a silent failure.
     private func handleCollabGateRejection(_ error: Error) async {
         let detail = error.serverRawDetail
-        guard detail.contains("collab_request_pending") || detail.contains("collab_request_declined")
+        guard detail.contains("collab_request_")
         else { return }
         await load()
     }
@@ -286,8 +334,9 @@ final class ConversationViewModel {
             uploadType = "image/jpeg"
         }
 
-        guard uploadData.count <= 25 * 1024 * 1024 else {
-            attachmentError = "File is too large (max 25 MB)."
+        let maxBytes = StorageBucket.messageAttachments.maxUploadBytes
+        guard uploadData.count <= maxBytes else {
+            attachmentError = FileTooLargeError(maxBytes: maxBytes).localizedDescription
             return
         }
         guard Self.allowedAttachmentTypes.contains(uploadType) else {
@@ -319,7 +368,8 @@ final class ConversationViewModel {
                 messages[i] = ChatMessage(id: newId, text: text, isFromMe: true, createdAt: sentAt,
                                           type: "message", isAttachment: true,
                                           attachmentURL: signed.flatMap { URL(string: $0) },
-                                          attachmentType: uploadType, attachmentName: uploadName, pending: false)
+                                          attachmentType: uploadType, attachmentName: uploadName, pending: false,
+                                          attachmentPath: path)
             }
             let label = text.isEmpty ? Self.attachmentLabel(uploadType) : text
             inbox?.threadLatestChanged(convoId: convoId, preview: label, at: sentAt, fromMe: true)
@@ -342,7 +392,7 @@ final class ConversationViewModel {
     }
 
     private func mergeLatest() async {
-        guard let rows = try? await service.getConvoMessages(convoId: convoId, limit: 50, offset: 0) else { return }
+        guard let rows = try? await service.getConvoMessages(convoId: convoId, limit: Self.pageSize, offset: 0) else { return }
         let mapped = await mapAll(rows)
         let existing = Set(messages.map(\.id))
         let fresh = mapped.filter { !existing.contains($0.id) }
@@ -356,6 +406,8 @@ final class ConversationViewModel {
                 messages[i].requestStatus = updated.requestStatus
             }
         }
+
+        await refreshAttachmentLinks()
 
         guard !fresh.isEmpty else { return }
         messages.append(contentsOf: fresh)
@@ -385,34 +437,33 @@ final class ConversationViewModel {
         }
     }
 
-    /// Signed attachment URLs cached per storage path, so the 4s poll doesn't re-sign
-    /// every message's attachment on each tick (a full storage round-trip). The signed
-    /// URL is valid ~1h; we cache well under that and re-sign lazily past the TTL.
-    private var signedURLCache: [String: (url: String, at: Date)] = [:]
-    private static let signedURLTTL: TimeInterval = 45 * 60  // < the 1h signed-URL expiry
-
-    /// Maps rows to chat messages: signs any *new* attachment paths (cached per path)
+    /// Maps rows to chat messages: signs attachment paths (through the shared
+    /// signed-URL memo — a local lookup unless a link is new or nearing expiry)
     /// and batch-resolves any collab-request track references into cards.
     private func mapAll(_ rows: [ApiConvoMessage]) async -> [ChatMessage] {
         let paths: [String?] = rows.map { ($0.attachment ?? false) ? $0.attachmentUrl : nil }
-
-        // Only sign paths without a fresh cached URL — the poll otherwise re-signs all
-        // 50 rows' attachments every 4s even when nothing changed.
-        let now = Date()
-        let stale = Array(Set(paths.compactMap { $0 }).filter { path in
-            guard let cached = signedURLCache[path] else { return true }
-            return now.timeIntervalSince(cached.at) >= Self.signedURLTTL
-        })
-        if !stale.isEmpty {
-            let fresh = await storage.signAttachmentUrls(paths: stale.map { Optional($0) })
-            for (i, path) in stale.enumerated() where fresh[i] != nil {
-                signedURLCache[path] = (fresh[i]!, now)
-            }
-        }
-
-        let signed: [String?] = paths.map { path in path.flatMap { signedURLCache[$0]?.url } }
+        let signed = await storage.signAttachmentUrls(paths: paths)
         let tracks = await resolveSharedTracks(rows)
         return rows.enumerated().map { idx, m in map(m, signedURL: signed[idx], tracks: tracks) }
+    }
+
+    /// Signed attachment links expire after an hour, so an open thread re-resolves
+    /// EVERY loaded attachment each poll (earlier pages too, not just the latest
+    /// page the poll fetched). Through the shared memo that's a local lookup until
+    /// a link nears expiry, then one batched re-sign — no dead links on screen.
+    private func refreshAttachmentLinks() async {
+        let paths = Array(Set(messages.compactMap(\.attachmentPath)))
+        guard !paths.isEmpty else { return }
+        let signed = await storage.signAttachmentUrls(paths: paths.map { Optional($0) })
+        var byPath: [String: URL] = [:]
+        for (path, link) in zip(paths, signed) {
+            if let link, let url = URL(string: link) { byPath[path] = url }
+        }
+        for i in messages.indices {
+            guard let path = messages[i].attachmentPath, let url = byPath[path],
+                  messages[i].attachmentURL != url else { continue }
+            messages[i].attachmentURL = url
+        }
     }
 
     /// Resolves every distinct referenced track id, fetching only the ones not
@@ -427,7 +478,7 @@ final class ConversationViewModel {
                     title: t.title ?? "Track",
                     artist: t.artistUsername,
                     coverURL: storage.resolveTrackUrl(t.coverUrl).flatMap { URL(string: $0) },
-                    audioURL: storage.resolveTrackUrl(t.audioUrl).flatMap { URL(string: $0) },
+                    audioURL: storage.trackMediaURL(t.audioUrl),
                     artistUserId: t.artistUserId
                 )
             }
@@ -455,7 +506,8 @@ final class ConversationViewModel {
             sharedTracks: shared,
             requestId: m.requestId,
             requestStatus: m.requestStatus,
-            requestFromUserId: m.requestFromUserId
+            requestFromUserId: m.requestFromUserId,
+            attachmentPath: isAttachment ? m.attachmentUrl : nil
         )
     }
 
@@ -474,8 +526,10 @@ final class ConversationViewModel {
             // The Requests bucket and any mounted profile's collab badge
             // re-derive from the shared stores. This thread IS the pair's DM,
             // so an accept also hands the profile its "Message" deep-link.
+            if accept { Haptics.success() }
             inbox?.requestStatusChanged(convoId: convoId, status: accept ? "accepted" : "rejected")
             if let otherUserId {
+                social?.recordCollabAnswer(accepted: accept, from: otherUserId)
                 social?.setCollabStatus(
                     accept ? "accepted" : "none",
                     userId: otherUserId,

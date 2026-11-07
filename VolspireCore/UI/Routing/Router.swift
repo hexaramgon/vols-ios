@@ -26,9 +26,18 @@ enum Route: Hashable, Equatable {
     case folderContents(folderId: String, folderName: String, highlight: FolderHighlight? = nil)
     case marketplacePack(ApiMarketplacePack)
     case marketplaceService(ApiMarketplaceService)
+    /// The owner's Pack Analytics page (from the card on their pack).
+    case packAnalytics(packId: String, packName: String)
+    /// The author's Listing Analytics page (from the card on their listing).
+    case listingAnalytics(listingId: String, title: String)
     case collabListing(ApiListing)
     case conversation(ActiveConversation)
     case messageCategory(title: String, bucket: MessageBucket)
+    case release(releaseId: String, title: String)
+    /// The Artist Dashboard, and its Followers & collaborators page — routes
+    /// (not NavigationLinks) so a Profile tab re-tap pops them like any page.
+    case analytics
+    case network
 }
 
 @Observable
@@ -95,6 +104,26 @@ class Router {
         push(Route.marketplaceService(service))
     }
 
+    func navigateToRelease(releaseId: String, title: String) {
+        push(Route.release(releaseId: releaseId, title: title))
+    }
+
+    func navigateToAnalytics() {
+        push(Route.analytics)
+    }
+
+    func navigateToPackAnalytics(packId: String, packName: String) {
+        push(Route.packAnalytics(packId: packId, packName: packName))
+    }
+
+    func navigateToListingAnalytics(listingId: String, title: String) {
+        push(Route.listingAnalytics(listingId: listingId, title: title))
+    }
+
+    func navigateToNetwork() {
+        push(Route.network)
+    }
+
     func navigateToCollabListing(_ listing: ApiListing) {
         push(Route.collabListing(listing))
     }
@@ -107,13 +136,22 @@ class Router {
         push(Route.messageCategory(title: title, bucket: bucket))
     }
 
+    /// Tab-bar re-tap, iOS-style in two steps: with a screen pushed, it just
+    /// pops back to the tab's root — exactly where you left it; already at
+    /// the root, it asks the root to scroll to the top (`rootResetTick`).
+    /// One tap used to do both, so leaving a pushed profile threw away your
+    /// place in the feed.
     func popToRoot() {
-        path.removeAll()
-        rootResetTick += 1
+        if path.isEmpty {
+            rootResetTick += 1
+        } else {
+            path.removeAll()
+        }
     }
 
-    /// Bumped on every `popToRoot` (tab-bar re-tap / Home tap). A tab's root
-    /// screen can observe it to also reset itself to the top (Home does).
+    /// Bumped by a `popToRoot` while already at the root (tab-bar re-tap). A
+    /// tab's root screen observes it to scroll back to the top (Explore,
+    /// Library, Workspace).
     private(set) var rootResetTick = 0
 }
 
@@ -129,13 +167,28 @@ private struct RouterViewModifier: ViewModifier {
             content
                 .environment(router)
                 .environment(floatingAction)
+                .modifier(HiddenWhenTabInactive())
                 .navigationDestination(for: Route.self) { route in
                     RoutedView(route: route)
                         .environment(router)
                         .environment(floatingAction)
+                        .modifier(HiddenWhenTabInactive())
                 }
         }
         .floatingActionOverlay(floatingAction)
+    }
+}
+
+/// RootTabView keeps visited tabs mounted at opacity 0, which still leaves
+/// them in the accessibility tree — VoiceOver would walk the hidden tabs.
+/// Applied INSIDE the NavigationStack (root + every pushed screen):
+/// `.accessibilityHidden` on the stack itself doesn't reach its UIKit-hosted
+/// pages.
+private struct HiddenWhenTabInactive: ViewModifier {
+    @Environment(\.isActiveRootTab) private var isActiveRootTab
+
+    func body(content: Content) -> some View {
+        content.accessibilityHidden(!isActiveRootTab)
     }
 }
 
@@ -164,11 +217,16 @@ extension Route {
         case let .conversation(convo): "conversation:\(convo.convoId.lowercased())"
         case let .marketplacePack(pack): "pack:\(pack.packId.lowercased())"
         case let .marketplaceService(service): "service:\(service.serviceId.lowercased())"
+        case let .packAnalytics(packId, _): "pack-analytics:\(packId.lowercased())"
+        case let .listingAnalytics(listingId, _): "listing-analytics:\(listingId.lowercased())"
         case let .messageCategory(_, bucket): "messages:\(bucket)"
         case .notifications: "notifications"
         case .messages: "messages"
         case .settings: "settings"
         case .playlists: "playlists"
+        case let .release(releaseId, _): "release:\(releaseId.lowercased())"
+        case .analytics: "analytics"
+        case .network: "network"
         case .mediaList, .search: nil
         }
     }
@@ -188,9 +246,14 @@ extension Route {
         case .folderContents: "folder"
         case .marketplacePack: "marketplace_pack"
         case .marketplaceService: "marketplace_service"
+        case .packAnalytics: "pack_analytics"
+        case .listingAnalytics: "listing_analytics"
         case .collabListing: "collab_listing"
         case .conversation: "conversation"
         case .messageCategory: "message_category"
+        case .release: "release"
+        case .analytics: "analytics"
+        case .network: "network"
         }
     }
 
@@ -202,6 +265,12 @@ extension Route {
         case let .playlist(playlistId, _): playlistId
         case let .folderContents(folderId, _, _): folderId
         case let .conversation(convo): convo.convoId
+        case let .release(releaseId, _): releaseId
+        case let .collabListing(listing): listing.listingId
+        // The pack owner's Performance views count these (get_pack_stats).
+        case let .marketplacePack(pack): pack.packId
+        case let .packAnalytics(packId, _): packId
+        case let .listingAnalytics(listingId, _): listingId
         default: nil
         }
     }

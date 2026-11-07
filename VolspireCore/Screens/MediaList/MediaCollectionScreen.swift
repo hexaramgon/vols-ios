@@ -30,6 +30,9 @@ struct PlaylistHeaderInfo {
     var onEditCover: (() -> Void)?
     var onAddTracks: (() -> Void)?
     var onMore: (() -> Void)?
+    /// The empty list's title (default "No tracks yet") — a release's
+    /// visitors read "Tracks coming soon".
+    var emptyTitle: String?
 }
 
 struct MediaCollectionScreen: View {
@@ -56,8 +59,13 @@ struct MediaCollectionScreen: View {
     private let currentPlaylistId: String?
     /// When set (a playlist you own), the track menu gains "Remove from playlist".
     private let onRemoveFromPlaylist: ((Media) async -> Void)?
+    /// That row's label — "Remove from Release" on a release page.
+    private let removeLabel: String
     /// Set for a playlist: swaps the cover-tinted hero for the compact header.
     private let playlistHeader: PlaylistHeaderInfo?
+    /// Pull-to-refresh (playlist / release pages reload their data); nil = none.
+    private let onRefresh: (() async -> Void)?
+    @State private var isRefreshing = false
     /// The latest inputs — pushed into the view model when they change, so the
     /// page updates in place instead of being rebuilt.
     private let inputItems: [Media]
@@ -70,13 +78,15 @@ struct MediaCollectionScreen: View {
     /// mini-player docked above it.
     private var bottomInset: CGFloat { playerController.contentBottomInset }
 
-    init(items: [Media], listMeta: MediaList.Meta? = nil, trailingToolbar: AnyView? = nil, showSave: Bool = true, currentPlaylistId: String? = nil, onRemoveFromPlaylist: ((Media) async -> Void)? = nil, playlistHeader: PlaylistHeaderInfo? = nil) {
+    init(items: [Media], listMeta: MediaList.Meta? = nil, trailingToolbar: AnyView? = nil, showSave: Bool = true, currentPlaylistId: String? = nil, onRemoveFromPlaylist: ((Media) async -> Void)? = nil, removeLabel: String = "Remove from Playlist", playlistHeader: PlaylistHeaderInfo? = nil, onRefresh: (() async -> Void)? = nil) {
         _viewModel = State(wrappedValue: MediaListScreenViewModel(items: items, listMeta: listMeta))
         self.trailingToolbar = trailingToolbar
         self.showSave = showSave
         self.currentPlaylistId = currentPlaylistId
         self.onRemoveFromPlaylist = onRemoveFromPlaylist
+        self.removeLabel = removeLabel
         self.playlistHeader = playlistHeader
+        self.onRefresh = onRefresh
         self.inputItems = items
         self.inputMeta = listMeta
     }
@@ -90,6 +100,7 @@ struct MediaCollectionScreen: View {
             }
         }
         .scrollIndicators(.hidden)
+        .refreshable(if: onRefresh.map { action in { await runRefresh($isRefreshing) { await action() } } })
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in scrollY = y }
         .background(Color.vBase.ignoresSafeArea())
         .ignoresSafeArea(edges: .top)
@@ -97,6 +108,8 @@ struct MediaCollectionScreen: View {
         // behind the buttons and no scroll-edge blur band over the hero.
         .toolbar(.hidden, for: .navigationBar)
         .overlay(alignment: .top) { topBar }
+        // The header runs under the top bar, hiding the system spinner.
+        .refreshChip(isRefreshing, topInset: ViewConst.safeAreaInsets.top + 52)
         .enableSwipeBack()
         .task {
             viewModel.player = dependencies.mediaPlayer
@@ -302,28 +315,20 @@ private extension MediaCollectionScreen {
                     .lineLimit(3)
             }
 
+            // The folder page's hero buttons (HeroCapsuleButton: 40pt, md
+            // glyph, semibold) so playlists and folders match.
             HStack(spacing: 8) {
-                Button { viewModel.onPlay() } label: {
-                    CapsuleButtonLabel(icon: .playFill, title: "Play", expands: true)
-                }
-                .buttonStyle(.plain)
-                .disabled(viewModel.items.isEmpty)
-                .opacity(viewModel.items.isEmpty && !info.isLoading ? 0.4 : 1)
-
-                if let onAddTracks = info.onAddTracks {
-                    Button(action: onAddTracks) {
-                        CapsuleButtonLabel(icon: .plus, title: "Add tracks", style: .secondary, expands: true)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Button { viewModel.onShuffle() } label: {
-                        CapsuleButtonLabel(icon: .shuffle, title: "Shuffle", style: .secondary, expands: true)
-                    }
-                    .buttonStyle(.plain)
+                HeroCapsuleButton("Play", icon: .playFill, primary: true, expands: true) { viewModel.onPlay() }
                     .disabled(viewModel.items.isEmpty)
                     .opacity(viewModel.items.isEmpty && !info.isLoading ? 0.4 : 1)
-                }
 
+                if let onAddTracks = info.onAddTracks {
+                    HeroCapsuleButton("Add tracks", icon: .plus, expands: true, action: onAddTracks)
+                } else {
+                    HeroCapsuleButton("Shuffle", icon: .shuffle, expands: true) { viewModel.onShuffle() }
+                        .disabled(viewModel.items.isEmpty)
+                        .opacity(viewModel.items.isEmpty && !info.isLoading ? 0.4 : 1)
+                }
             }
         }
         .padding(.horizontal, ViewConst.screenPaddings)
@@ -343,8 +348,10 @@ private extension MediaCollectionScreen {
             } else if playlistHeader?.volspireMark == true {
                 PlaylistCoverFallback(name: title, volspireMark: true)
                     .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
-            } else if let artwork {
-                ArtworkView(.webImage(artwork), cornerRadius: Radius.panel)
+            } else if let cover = viewModel.listMeta?.artwork {
+                // Only the collection's own cover — no first-track fallback:
+                // a cover-less playlist / release shows its name mesh.
+                ArtworkView(.webImage(cover), cornerRadius: Radius.panel)
             } else {
                 PlaylistCoverFallback(name: title, iconSize: .hero)
                     .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
@@ -370,7 +377,7 @@ private extension MediaCollectionScreen {
                 .padding(.bottom, bottomInset)
         } else if viewModel.items.isEmpty {
             VStack(spacing: 16) {
-                EmptyStateView(icon: .listMusic, title: "No tracks yet")
+                EmptyStateView(icon: .listMusic, title: playlistHeader?.emptyTitle ?? "No tracks yet")
                 if let onAddTracks = playlistHeader?.onAddTracks {
                     PrimaryButton("Add tracks", size: .inline, expands: false, action: onAddTracks)
                 }
@@ -408,45 +415,36 @@ private extension MediaCollectionScreen {
 
     /// The profile Tracks-tab row (`ProfileMediaRow`'s sizing and spacing):
     /// 44pt cover with the cover shadow, title over @artist, the playing row
-    /// highlighted with equaliser bars, then the track's "…".
+    /// highlighted with equaliser bars on its cover, then the track's "…".
     func profileStyleRow(_ item: Media) -> some View {
         let activity = viewModel.mediaActivity(item.id)
         let isActive = activity != nil
         return HStack(spacing: 14) {
             ArtworkView(.placeholder(item.meta.artwork, name: item.meta.title), cornerRadius: 8)
                 .frame(width: 44, height: 44)
+                .playingCoverOverlay(active: isActive, playing: activity == .playing, cornerRadius: 8)
                 .coverShadow()
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.meta.title)
-                    .font(.appSubheadlineMedium)
+                    .font(.appFont.trackTitle)
                     .foregroundStyle(Color.vText)
                     .lineLimit(1)
                 if let artist = item.meta.artist, !artist.isEmpty {
                     Text("@\(artist)")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vText2)
+                        .font(.appFont.trackSubtitle)
+                        .foregroundStyle(Color.vText3)
                         .lineLimit(1)
                 }
             }
 
             Spacer(minLength: 8)
 
-            if isActive {
-                // Loops only while playing; `.id` tears the repeatForever
-                // down on pause (repeatForever identity rule).
-                let playing = activity == .playing
-                EqualizerBars(heights: [7, 13, 9], barWidth: 2.5, spacing: 2, tint: Color.vText, isAnimating: playing)
-                    .id(playing)
-                    .frame(width: 14, height: 13)
-                    .padding(.trailing, 2)
-            }
-
             Button { optionsMedia = item } label: {
                 LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                     .foregroundStyle(Color.vText3)
                     .frame(width: 32, height: 32)
-                    .contentShape(.rect)
+                    .minimumHitArea(for: 32)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("More options")
@@ -472,12 +470,10 @@ private extension MediaCollectionScreen {
                 Button {
                     // Haptic per direction (matches the old row behavior);
                     // the shared store flips the glyph optimistically.
-                    if libraryStore.isSaved(item.id.value) { Haptics.impact(.light) } else { Haptics.success() }
                     Task { await libraryStore.toggleSave(trackId: item.id.value) }
                 } label: {
                     let saved = libraryStore.isSaved(item.id.value)
-                    LucideIcon(saved ? .bookmarkFill : .bookmark, .lg)
-                        .foregroundStyle(saved ? Color.vText : Color.vText3)
+                    SaveBookmarkIcon(saved: saved, size: IconSize.lg.rawValue, idleColor: .vText3)
                         .frame(width: 38, height: 44)
                         .contentShape(.rect)
                 }
@@ -508,8 +504,10 @@ private extension MediaCollectionScreen {
     /// Crossfade progress for the nav bar as the hero scrolls away.
     var titleBarOpacity: Double {
         if playlistHeader != nil {
-            let start = Self.compactCoverSize + 20
-            return Double(min(1, max(0, (scrollY - start) / 40)))
+            // Fades in as the page's own title (under the 220pt cover, ~30pt
+            // tall) slides up under the bar — the bar takes over the name.
+            let start = Self.compactCoverSize + 30
+            return Double(min(1, max(0, (scrollY - start) / 30)))
         }
         let start = heroHeight - 150
         let end = heroHeight - 80
@@ -566,7 +564,8 @@ private extension MediaCollectionScreen {
             title: media.meta.title,
             artist: media.meta.artist,
             actions: mediaActions(media),
-            reportTargetId: media.id.value
+            reportTargetId: media.id.value,
+            queueMedia: media
         )
         // Detents come from TrackOptionsSheet itself (sized to its rows).
         .sheetBackground()
@@ -578,10 +577,10 @@ private extension MediaCollectionScreen {
             .init(icon: .share2, title: "Share Track", dismissesSheet: false) {
                 ShareActions.shareTrack(title: media.meta.title, trackId: media.id.value)
             },
-            .init(icon: .circlePlus, title: "Add to Playlist") { addToPlaylistMedia = media },
+            .init(icon: .listPlus, title: "Add to Playlist") { addToPlaylistMedia = media },
         ]
         if let onRemoveFromPlaylist {
-            list.append(.init(icon: .circleMinus, title: "Remove from Playlist", isDestructive: true, awaitsCompletion: true) {
+            list.append(.init(icon: .circleMinus, title: removeLabel, isDestructive: true, awaitsCompletion: true) {
                 await onRemoveFromPlaylist(media)
             })
         }
@@ -620,4 +619,13 @@ struct MenuRowStyle: ButtonStyle {
     .withRouter()
     .environment(dependencies)
     .environment(dependencies.libraryStore)
+}
+
+private extension View {
+    /// Pull-to-refresh only when there's something to refresh — the saved
+    /// tracks list (a store snapshot) has no reload.
+    @ViewBuilder
+    func refreshable(if action: (() async -> Void)?) -> some View {
+        if let action { refreshable { await action() } } else { self }
+    }
 }

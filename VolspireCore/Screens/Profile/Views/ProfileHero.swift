@@ -18,6 +18,8 @@ struct ProfileHeroView: View {
     let userId: String
     let onEditProfile: () -> Void
     let onShareProfile: () -> Void
+    /// Report / block / remove collaborator (other people's profiles only).
+    var onMoreOptions: () -> Void = {}
 
     /// Avatar zoom is driven by `ProfileScreen`: the hero hides the avatar
     /// while the zoom is up, and hands its on-screen frame over at TAP time so
@@ -73,10 +75,10 @@ struct ProfileHeroView: View {
         }
         // Pin to the screen width (the hero is always full-bleed) so the width
         // can't resolve/animate while clipped — that reveals the banner sideways.
+        // Height is just the content's (bars + avatar … buttons) — it no
+        // longer scales with the screen, so a tall phone doesn't get a taller,
+        // emptier header than a small one.
         .frame(width: UIScreen.size.width)
-        // At least the immersive height; taller when the content needs it
-        // (own profile on an SE: Dashboard card + buttons live in here).
-        .frame(minHeight: ProfileLayout.heroHeight)
     }
 }
 
@@ -241,23 +243,23 @@ private extension ProfileHeroView {
                     Text(viewModel.username.isEmpty ? "—" : viewModel.username)
                         .font(.appTitleHero)
                         .foregroundStyle(Color.vText)
+                        // One line, never "…", as big as it can be: full size
+                        // when it fits the whole width to the right edge;
+                        // otherwise tighten the letters first, then shrink
+                        // only as much as that name needs.
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .allowsTightening(true)
+                        .minimumScaleFactor(0.3)
+                        // Its full height, always: without this the row
+                        // offered less height and the scale factor shrank the
+                        // name to fit THAT (blaccmass drew 54pt wide).
+                        .fixedSize(horizontal: false, vertical: true)
                         .heroTextShadow(isLight ? 0 : 1)
-                    if !viewModel.location.isEmpty {
-                        HStack(spacing: 5) {
-                            LucideIcon(.mapPin, .xs).foregroundStyle(Color.vText)
-                            Text(viewModel.location).font(.appFootnote).foregroundStyle(Color.vText)
-                        }
-                        .heroTextShadow(isLight ? 0 : 1)
-                    }
-                    // Accepted collaborators get an explicit marker — the same
-                    // pill language as the workspace role pills.
-                    if !isOwnProfile, viewModel.collaboratorStatus == "accepted" {
-                        collaboratorBadge
-                    }
+                    metaLine
                 }
-                Spacer(minLength: 0)
+                // The name column takes ALL the width right of the avatar
+                // (a trailing Spacer used to split it, cutting names short).
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if !viewModel.bio.isEmpty {
@@ -335,7 +337,7 @@ private extension ProfileHeroView {
     }
 
     var stats: some View {
-        HStack(spacing: 24) {
+        HStack(spacing: 20) {
             stat(icon: .music, value: viewModel.trackCount, label: "Tracks")
             statDivider
             stat(icon: .users, value: viewModel.followersCount, label: "Followers")
@@ -346,8 +348,8 @@ private extension ProfileHeroView {
     }
 
     func stat(icon: LucideIcon.Name, value: Int, label: String) -> some View {
-        HStack(spacing: 7) {
-            LucideIcon(icon, .sm).foregroundStyle(Color.vText3)
+        HStack(spacing: 8) {
+            LucideIcon(icon, .md).foregroundStyle(Color.vText3)
             VStack(alignment: .leading, spacing: 1) {
                 Text(value.compactCount)
                     .font(.appHeadlineBold)
@@ -355,7 +357,7 @@ private extension ProfileHeroView {
                     .contentTransition(.numericText())
                     .animation(.snappy, value: value)
                 Text(label)
-                    .font(.appCaption2Medium)
+                    .font(.appCaptionCompactMedium)
                     .foregroundStyle(Color.vText3)
             }
         }
@@ -364,23 +366,20 @@ private extension ProfileHeroView {
     /// A light hairline — it sits on the always-dark wash, where the
     /// theme divider all but disappeared.
     var statDivider: some View {
-        Rectangle().fill(Color.white.opacity(0.18)).frame(width: 1, height: 24)
+        Rectangle().fill(Color.white.opacity(0.18)).frame(width: 1, height: 28)
     }
 
-    /// "Collaborator" chip — shown once a collab request has been accepted
-    /// between you and this artist. The send-accent gradient (the app's accent
-    /// for connected/active states, e.g. the Following button beside it) with
-    /// white content, softly lifted off the banner.
-    var collaboratorBadge: some View {
-        HStack(spacing: 5) {
-            LucideIcon(.gitMerge, .xs)
-            Text("Collaborator").font(.appCaption2Semibold)
+    /// The line under the name: the artist's location.
+    @ViewBuilder
+    var metaLine: some View {
+        if !viewModel.location.isEmpty {
+            HStack(spacing: 5) {
+                LucideIcon(.mapPin, .xs)
+                Text(viewModel.location).font(.appFootnote).lineLimit(1)
+            }
+            .foregroundStyle(Color.vText)
+            .heroTextShadow(isLight ? 0 : 1)
         }
-        .foregroundStyle(Color.vOnColor)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(Color.vAccent, in: Capsule())
-        .shadow(color: .black.opacity(isLight ? 0 : 0.35), radius: 6, y: 2)
     }
 }
 
@@ -396,46 +395,72 @@ private struct StaticButtonStyle: ButtonStyle {
 
 // MARK: - Actions
 
+/// Folder-sized (40pt) buttons. Own profile: one lead Edit profile, then round Share /
+/// Settings. Someone else's: Follow + Collab sharing the width evenly, then a
+/// round "…" (Share / Remove collaborator / Report / Block).
 private extension ProfileHeroView {
     var actions: some View {
         HStack(spacing: 8) {
             if isOwnProfile {
-                primaryButton(.squarePen, "Edit Profile", action: onEditProfile)
-                secondaryButton(.share2, "Share Profile", action: onShareProfile)
-                iconButton(.settings) { router.navigateToSettings() }
+                leadButton(.squarePen, "Edit profile", action: onEditProfile)
+                iconButton(.share2, "Share profile", action: onShareProfile)
+                iconButton(.settings, "Settings") { router.navigateToSettings() }
             } else {
+                // Follow + Collab split the width evenly; Share lives in "…".
                 followButton
                 collabButton
-                iconButton(.share2, action: onShareProfile)
+                iconButton(.ellipsis, "More options", action: onMoreOptions)
             }
         }
         .padding(.top, 2)
     }
 
-    // All drawn with the shared `CapsuleButtonLabel` (Workspace's "+ New",
-    // the playlist page) so every capsule button in the app matches.
+    /// Folder's hero buttons (`HeroCapsuleButton`): 40pt, 16pt glyph, 14pt
+    /// semibold, 8pt icon gap.
+    static var buttonHeight: CGFloat { CapsuleButtonLabel.heroHeight }
+    static var leadIconSize: IconSize { .md }
+    static var iconButtonIconSize: IconSize { .lg }
 
-    /// A flexible ink primary button (the main call-to-action).
-    func primaryButton(_ icon: LucideIcon.Name, _ title: String, action: @escaping () -> Void) -> some View {
+    /// The flexible ink lead button (own profile's Edit).
+    func leadButton(_ icon: LucideIcon.Name, _ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            CapsuleButtonLabel(icon: icon, title: title, expands: true)
+            CapsuleButtonLabel(icon: icon, title: title, expands: true, iconSize: Self.leadIconSize,
+                               height: Self.buttonHeight, font: .appSubheadlineSemibold, spacing: 8)
         }
         .buttonStyle(StaticButtonStyle())
     }
 
-    /// A flexible, evenly-sized control-fill button (Share / Collab style).
-    func secondaryButton(_ icon: LucideIcon.Name, _ title: String, action: @escaping () -> Void) -> some View {
+    func iconButton(_ icon: LucideIcon.Name, _ label: String, style: CapsuleButtonLabel.Style = .secondary,
+                    action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            CapsuleButtonLabel(icon: icon, title: title, style: .secondary, expands: true)
+            CapsuleIconButtonLabel(icon: icon, iconSize: Self.iconButtonIconSize, style: style, size: Self.buttonHeight)
+        }
+        .buttonStyle(StaticButtonStyle())
+        .minimumHitArea(for: Self.buttonHeight)
+        .accessibilityLabel(label)
+    }
+
+    func collabPill(_ icon: LucideIcon.Name, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            CapsuleButtonLabel(icon: icon, title: title, style: .secondary, expands: true, iconSize: Self.leadIconSize,
+                               height: Self.buttonHeight, font: .appSubheadlineSemibold, spacing: 8)
         }
         .buttonStyle(StaticButtonStyle())
     }
 
-    func iconButton(_ icon: LucideIcon.Name, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            CapsuleIconButtonLabel(icon: icon)
+    /// The pair's DM (the profile RPC hands us its id for any collab state);
+    /// the inbox is only a fallback for missing data.
+    func openCollabThread() {
+        if let convoId = viewModel.collabConvoId {
+            router.navigateToConversation(ActiveConversation(
+                convoId: convoId,
+                otherUserId: viewModel.profileUserId,
+                username: viewModel.username,
+                avatarURL: viewModel.profileImageURL?.absoluteString
+            ))
+        } else {
+            router.navigateToMessages()
         }
-        .buttonStyle(StaticButtonStyle())
     }
 
     var followButton: some View {
@@ -443,26 +468,30 @@ private extension ProfileHeroView {
             Haptics.impact(.soft) // very subtle tap on follow/unfollow
             Task { await viewModel.toggleFollow(userId: userId) }
         } label: {
-            HStack(spacing: 6) {
-                LucideIcon(viewModel.isFollowing ? .userCheck : .userPlus, .sm)
-                Text(viewModel.isFollowing ? "Following" : "Follow").font(.appFootnoteSemibold)
+            HStack(spacing: 8) {
+                LucideIcon(viewModel.isFollowing ? .userCheck : .userPlus, Self.leadIconSize)
+                Text(viewModel.isFollowing ? "Following" : "Follow").font(.appSubheadlineSemibold)
             }
-            .foregroundStyle(viewModel.isFollowing ? Color.vOnColor : Color.vOnInverse)
+            // Following = the quiet grey, still tappable here —
+            // the profile is where you unfollow.
+            .foregroundStyle(viewModel.isFollowing ? Color.vControlLabel : Color.vOnInverse)
             .frame(maxWidth: .infinity)
-            .frame(height: CapsuleButtonLabel.height)
-            // Cross-fade the accent over the ink base so following ↔ not
+            .frame(height: Self.buttonHeight)
+            // Cross-fade between ink and grey so following ↔ not
             // following fades instead of hard-cutting the fill. The toggle is
             // optimistic (VM flips instantly, rolls back on failure) so no spinner.
             .background {
-                Color.vInverse
-                    .overlay(Color.vAccent.opacity(viewModel.isFollowing ? 1 : 0))
+                // vControl is translucent, so fade the ink OUT over it rather
+                // than a grey over the ink.
+                Color.vControl
+                    .overlay(Color.vInverse.opacity(viewModel.isFollowing ? 0 : 1))
                     .clipShape(Capsule())
             }
             // The web's pop on toggle (1 → 1.12 → 1); the width never changes.
             .keyframeAnimator(initialValue: 1.0, trigger: viewModel.isFollowing) { content, scale in
                 content.scaleEffect(scale)
             } keyframes: { _ in
-                SpringKeyframe(1.12, duration: 0.14)
+                SpringKeyframe(1.06, duration: 0.14)
                 SpringKeyframe(1.0, duration: 0.18)
             }
         }
@@ -470,41 +499,23 @@ private extension ProfileHeroView {
         .animation(.easeInOut(duration: 0.22), value: viewModel.isFollowing)
     }
 
+    /// Collab, on the "…" button's control fill: "Collab" (opens the request
+    /// composer), or — once there's a request out either way ("Pending") or
+    /// you're collaborators ("Message") — straight into the pair's thread.
     @ViewBuilder
     var collabButton: some View {
         switch viewModel.collaboratorStatus {
         case "accepted":
-            // Straight into the collab thread (the profile RPC hands us its
-            // convo id); the inbox is only a fallback for missing data.
-            pillButton(.messageCircle, "Message") {
-                if let convoId = viewModel.collabConvoId {
-                    router.navigateToConversation(ActiveConversation(
-                        convoId: convoId,
-                        otherUserId: viewModel.profileUserId,
-                        username: viewModel.username,
-                        avatarURL: viewModel.profileImageURL?.absoluteString
-                    ))
-                } else {
-                    router.navigateToMessages()
-                }
-            }
+            collabPill(.messageCircle, "Message", action: openCollabThread)
         case "pending":
-            pillButton(.clock, "Pending", muted: true) {}
+            collabPill(.clock, "Pending", action: openCollabThread)
         default:
             // Opens the collab-request composer → `send_collab_request` (web parity).
-            pillButton(.send, "Collab") {
+            collabPill(.send, "Collab") {
                 viewModel.resetCollabComposer()
                 viewModel.showCollabSheet = true
             }
         }
-    }
-
-    func pillButton(_ icon: LucideIcon.Name, _ title: String, muted: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            CapsuleButtonLabel(icon: icon, title: title, style: muted ? .muted : .secondary, expands: true)
-        }
-        .buttonStyle(StaticButtonStyle())
-        .disabled(muted)
     }
 }
 

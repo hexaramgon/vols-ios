@@ -17,7 +17,9 @@ public enum MediaPlayerState: Equatable, Hashable {
 @MainActor
 public final class MediaPlayer {
     public weak var mediaState: MediaState?
-    private(set) var items: [MediaID] = []
+    /// The live play queue, in play order (shuffled when shuffle is on).
+    /// Published so the app's queue sheet follows reorders and new queues.
+    @Published public private(set) var items: [MediaID] = []
 
     @Published public private(set) var progress: PlaybackProgress?
     @Published public private(set) var state: MediaPlayerState
@@ -28,9 +30,15 @@ public final class MediaPlayer {
     @Published public private(set) var nowPlayingMeta: MediaMeta?
     @Published public private(set) var avPlayer: AVPlayer?
     @Published public var audioEffects: AudioEffects = .default
-    /// When true, the current track replays itself indefinitely when it ends
-    /// (repeat-one); when false the queue advances normally. Driven by the repeat button.
-    public var repeatEnabled = false
+    /// Set when a track couldn't be played (download / decode / engine
+    /// failure) — the player is paused on it by then. Emits on every failure,
+    /// so the app can surface each one.
+    @Published public private(set) var failedMediaID: MediaID?
+    /// The repeat button's mode (the Spotify / Apple Music cycle): `.off` plays
+    /// the queue through and stops after the last track, `.all` wraps back to
+    /// the first, `.one` loops the current track when it ends. Next / Previous
+    /// still move between tracks in every mode.
+    public var repeatMode: RepeatMode = .off
     /// Shuffle mode. On: `items` becomes a shuffled reordering of the queue with
     /// the current track pinned first; off restores the order the queue was
     /// started with. Persists across queue swaps — a queue started while shuffle
@@ -43,6 +51,14 @@ public final class MediaPlayer {
     private var audioSession: AudioSession
     private var systemMediaInterface: SystemMediaInterface
     private var urlPlayer: URLAudioPlayer
+
+    /// Turns a queued media URL into a fetchable one right before it's
+    /// downloaded (play + read-ahead) — the app signs private track media
+    /// here. Queue identity (MediaMeta.audioURL) stays the unsigned URL.
+    public var resolveMediaURL: (@MainActor (URL) async -> URL?)? {
+        get { urlPlayer.resolveRemoteURL }
+        set { urlPlayer.resolveRemoteURL = newValue }
+    }
 
     /// Post-effects audio node the visualizer taps — see `URLAudioPlayer`.
     public var visualizerAudioNode: AVAudioNode { urlPlayer.visualizerAudioNode }
@@ -104,7 +120,7 @@ public final class MediaPlayer {
 
     public func play(_ mediaID: MediaID, of items: [MediaID]) {
         guard items.contains(mediaID) else {
-            print("MediaPlayer Error: there is no mediaID \(mediaID) in items.")
+            debugLog("MediaPlayer Error: there is no mediaID \(mediaID) in items.")
             return
         }
         originalItems = items
@@ -139,11 +155,6 @@ public final class MediaPlayer {
     }
 
     public func forward() {
-        // Repeat-one locks playback to the current track — skipping just restarts it.
-        if repeatEnabled {
-            loopToStart()
-            return
-        }
         // A single-track queue wraps to itself: restart instead of a dead button
         // (e.g. playing the only track on someone's profile).
         if items.count == 1 {
@@ -183,6 +194,10 @@ public final class MediaPlayer {
         updateSystemNowPlaying()
     }
 
+    public func applyEqualizer(_ equalizer: AudioEqualizer) {
+        urlPlayer.applyEqualizer(equalizer)
+    }
+
     /// Full teardown for sign-out: stops the audio engine (dropping the
     /// prefetched next track), clears the queue and every piece of published
     /// state, wipes the lock-screen entry, and deactivates the audio session.
@@ -191,7 +206,7 @@ public final class MediaPlayer {
         items = []
         originalItems = []
         shuffleEnabled = false
-        repeatEnabled = false
+        repeatMode = .off
         state = .paused(media: .none)
         progress = nil
         isBuffering = false
@@ -213,11 +228,6 @@ public final class MediaPlayer {
     /// steps back. `alwaysPrevious` skips the restart rule (the full-screen
     /// video's swipe-down, which always means "the track before this one").
     public func backward(alwaysPrevious: Bool = false) {
-        // Repeat-one locks playback to the current track — skipping just restarts it.
-        if repeatEnabled {
-            loopToStart()
-            return
-        }
         // Single-track queue: previous always means "start over".
         if items.count == 1 {
             loopToStart()
@@ -277,7 +287,7 @@ private extension MediaPlayer {
 
     func playItem(at index: Int) {
         guard let mediaID = items[safe: index] else {
-            print("MediaPlayer Error: Invalid index \(index)")
+            debugLog("MediaPlayer Error: Invalid index \(index)")
             return
         }
 
@@ -301,7 +311,7 @@ private extension MediaPlayer {
         {
             urlPlayer.play(url: audioURL)
         } else {
-            print("MediaPlayer: No audio URL found for \(mediaID)")
+            debugLog("MediaPlayer: No audio URL found for \(mediaID)")
             avPlayer = nil
         }
 
@@ -524,29 +534,45 @@ extension MediaPlayer: URLAudioPlayerDelegate {
         }
     }
 
+    func urlAudioPlayerDidFail(_: URLAudioPlayer) {
+        guard let mediaID = state.currentMediaID else { return }
+        // Full teardown so the next Play reloads from scratch (resume() takes
+        // its reload path once the URL player has no current URL).
+        urlPlayer.stop()
+        progress = nil
+        isBuffering = false
+        state = .paused(media: mediaID)
+        updateSystemNowPlaying()
+        failedMediaID = mediaID
+    }
+
     func urlAudioPlayerDidFinishPlaying(_: URLAudioPlayer) {
-        // Repeat-one — or a single-track queue (e.g. a profile whose only post
-        // is one video) — restarts from the top and keeps looping, matching how
-        // longer queues wrap around at the end instead of stopping. `seek(to: 0)`
-        // reloads the file, replays it and re-arms the finish handler. (playItem
-        // no-ops when the target is already the current track, so it can't be
-        // used to replay the same one.)
-        if repeatEnabled || items.count == 1, state.currentMediaID != nil {
+        guard let mediaID = state.currentMediaID else { return }
+        // Repeat-one loops the track; repeat-all on a one-track queue is the
+        // same thing. `loopToStart` reloads, replays and re-arms the finish
+        // handler (playItem no-ops on the current track, so it can't replay).
+        if repeatMode == .one || (repeatMode == .all && items.count == 1) {
             loopToStart()
             return
         }
-        if items.count > 1,
-           let mediaID = state.currentMediaID,
-           let index = items.firstIndex(of: mediaID)
-        {
-            let nextIndex = items.indices.contains(index + 1) ? index + 1 : 0
-            playItem(at: nextIndex)
-        } else {
-            if let mediaID = state.currentMediaID {
-                state = .paused(media: mediaID)
-                urlPlayer.stop()
+        if let index = items.firstIndex(of: mediaID) {
+            if items.indices.contains(index + 1) {
+                playItem(at: index + 1)
+                return
+            }
+            if repeatMode == .all {
+                playItem(at: 0)
+                return
             }
         }
+        // Repeat off and the queue is done (a single track included): stop on
+        // this track. Progress is cleared so Play starts it over (not a resume
+        // at the very end, which would finish again at once).
+        urlPlayer.stop()
+        progress = nil
+        state = .paused(media: mediaID)
+        updateCommandProfile()
+        updateSystemNowPlaying()
     }
 }
 
@@ -554,8 +580,8 @@ extension MediaPlayer: URLAudioPlayerDelegate {
 
 public extension MediaPlayer {
     /// The queue item `offset` steps from the current one (+1 next, -1
-    /// previous), wrapping like forward()/backward(). Repeat-one and a
-    /// single-track queue replay the current item, so that's the neighbour.
+    /// previous), wrapping like forward()/backward(). A single-track queue
+    /// replays the current item, so that's the neighbour.
     func neighborID(_ offset: Int) -> MediaID? {
         state.currentMediaID.flatMap { neighborID(of: $0, offset) }
     }
@@ -564,7 +590,7 @@ public extension MediaPlayer {
     /// current one — the feed can be a swipe ahead of playback).
     func neighborID(of id: MediaID, _ offset: Int) -> MediaID? {
         guard let index = items.firstIndex(of: id) else { return nil }
-        if repeatEnabled || items.count == 1 { return id }
+        if items.count == 1 { return id }
         let n = items.count
         return items[safe: ((index + offset) % n + n) % n]
     }
@@ -579,5 +605,110 @@ public extension MediaPlayer {
     /// Metadata for `neighborID(offset)` — what the feed shows before a swipe lands.
     func neighborMeta(_ offset: Int) -> MediaMeta? {
         neighborID(offset).flatMap { mediaState?.metaOfMedia(withID: $0) }
+    }
+}
+
+// MARK: - Queue editing
+
+public extension MediaPlayer {
+    enum QueuePlacement: Sendable {
+        /// Right after the current track.
+        case next
+        /// At the end of the queue.
+        case last
+    }
+
+    /// Adds `media` to the live queue ("Play next" / "Add to queue"). With
+    /// nothing loaded it just starts playing. An item already in the queue
+    /// MOVES (queue ids are unique — every lookup is by id); the playing
+    /// track itself is left alone.
+    func enqueue(_ media: Media, _ placement: QueuePlacement) async {
+        guard media.meta.audioURL != nil else { return }
+        await mediaState?.addTrack(media)
+        let id = media.id
+        guard let current = state.currentMediaID, items.contains(current) else {
+            play(id, of: [id])
+            return
+        }
+        guard id != current else { return }
+        var next = items.filter { $0 != id }
+        originalItems.removeAll { $0 == id }
+        switch placement {
+        case .next:
+            let at = (next.firstIndex(of: current) ?? next.count - 1) + 1
+            next.insert(id, at: at)
+            // Shuffle off restores `originalItems`: keep the track right
+            // after the current one there too.
+            let originalAt = originalItems.firstIndex(of: current).map { $0 + 1 } ?? originalItems.count
+            originalItems.insert(id, at: originalAt)
+        case .last:
+            next.append(id)
+            originalItems.append(id)
+        }
+        items = next
+        queueDidChange()
+    }
+
+    /// Reorders the queue (drag in the queue sheet). Offsets are positions in
+    /// `items`, with `Array.move(fromOffsets:toOffset:)` semantics.
+    func moveQueueItems(fromOffsets source: IndexSet, toOffset destination: Int) {
+        let moving = source.compactMap { items[safe: $0] }
+        guard !moving.isEmpty else { return }
+        var next = items
+        for index in source.sorted(by: >) where next.indices.contains(index) {
+            next.remove(at: index)
+        }
+        let insertAt = min(destination - source.filter { $0 < destination }.count, next.count)
+        next.insert(contentsOf: moving, at: max(0, insertAt))
+        items = next
+        // Unshuffled, the user's order IS the queue order. Shuffled, the
+        // pre-shuffle order stays what turning shuffle off goes back to.
+        if !shuffleEnabled { originalItems = next }
+        queueDidChange()
+    }
+
+    /// Removes a track from the queue. The playing track can't be removed.
+    func removeFromQueue(_ id: MediaID) {
+        guard id != state.currentMediaID else { return }
+        items.removeAll { $0 == id }
+        originalItems.removeAll { $0 == id }
+        queueDidChange()
+    }
+
+    /// Drops everything after the current track.
+    func clearUpNext() {
+        guard let current = state.currentMediaID,
+              let index = items.firstIndex(of: current) else { return }
+        let dropped = Set(items[(index + 1)...])
+        guard !dropped.isEmpty else { return }
+        items.removeSubrange((index + 1)...)
+        originalItems.removeAll { dropped.contains($0) }
+        queueDidChange()
+    }
+}
+
+private extension MediaPlayer {
+    /// The queue changed under the current track: re-point the read-ahead,
+    /// the next/previous availability and the lock-screen queue position.
+    func queueDidChange() {
+        guard let current = state.currentMediaID,
+              let index = items.firstIndex(of: current) else { return }
+        prefetchNextTrack(after: index)
+        updateCommandProfile()
+        updateSystemNowPlaying()
+    }
+}
+
+/// The repeat button's three states, in tap order.
+public enum RepeatMode: Sendable {
+    case off, all, one
+
+    /// The next state in the button's cycle: off → all → one → off.
+    public var next: RepeatMode {
+        switch self {
+        case .off: .all
+        case .all: .one
+        case .one: .off
+        }
     }
 }

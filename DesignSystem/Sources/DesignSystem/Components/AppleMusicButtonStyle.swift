@@ -21,9 +21,7 @@ public struct AppleMusicButtonStyle: ButtonStyle {
 }
 
 #Preview {
-    Button {
-        print("Play")
-    }
+    Button {}
     label: {
         Label("Play", systemImage: "play.fill")
     }

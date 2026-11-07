@@ -2,49 +2,63 @@
 //  ScreenHeader.swift
 //  Volspire
 //
-//  The shared tab-root header: a large title on the left, optional action
-//  icons on the right, over a flat bar that's a hair lighter than the page so
-//  it reads as distinct chrome. Used by Library, Inbox (Messages) and
-//  Marketplace so they stay identical.
+//  The tab-root header bar (Library, Workspace): Settings' bar look — the
+//  title centred in headline weight in a 44pt row under the status bar, on
+//  the page colour, pinned while the page scrolls under it, with the
+//  hairline appearing once it has scrolled — plus an optional trailing
+//  icon action (the "+" for New).
 //
 
 import DesignSystem
 import SwiftUI
 
-struct ScreenHeader<Trailing: View, Expansion: View>: View {
+struct ScreenHeader<Trailing: View>: View {
     let title: String
-    let trailing: Trailing
-    /// Optional row(s) rendered below the title INSIDE the header chrome — the
-    /// bar background extends behind them. Used for the revealed search field
-    /// so it reads as part of the header instead of floating over the page
-    /// content.
-    let expansion: Expansion
+    /// Show the hairline (the page has scrolled under the bar).
+    var scrolled = false
+    @ViewBuilder let trailing: () -> Trailing
 
-    init(
-        _ title: String,
-        @ViewBuilder trailing: () -> Trailing = { EmptyView() },
-        @ViewBuilder expansion: () -> Expansion = { EmptyView() }
-    ) {
+    init(_ title: String, scrolled: Bool = false, @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
         self.title = title
-        self.trailing = trailing()
-        self.expansion = expansion()
+        self.scrolled = scrolled
+        self.trailing = trailing
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center) {
-                Text(title)
-                    .font(.appLargeTitle)
-                    .tracking(-0.4)
-                    .foregroundStyle(Color.vText)
+        ZStack {
+            Text(title)
+                .font(.appHeadline)
+                .foregroundStyle(Color.vText)
+                .lineLimit(1)
+                .padding(.horizontal, 64)
+                .accessibilityAddTraits(.isHeader)
+            // Icons sit close (their 42pt tap targets already space them).
+            HStack(spacing: 2) {
                 Spacer(minLength: 0)
-                HStack(spacing: 10) { trailing }
+                trailing()
             }
-            .padding(.horizontal, ViewConst.screenPaddings)
-            .padding(.top, 0)
-            .padding(.bottom, 7)
-            expansion
+            .padding(.horizontal, ViewConst.screenPaddings - 9)
         }
-        .background(Color.vBar.ignoresSafeArea(edges: .top))
+        .frame(height: 44)
+        .frame(maxWidth: .infinity)
+        .background(alignment: .bottom) {
+            Color.vBase
+                .ignoresSafeArea(edges: .top)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Color.vDivider).frame(height: 0.5)
+                        .opacity(scrolled ? 1 : 0)
+                        .animation(.easeOut(duration: 0.15), value: scrolled)
+                }
+        }
+    }
+}
+
+extension View {
+    /// Reports whether the scroll has left the top (for the header hairline);
+    /// writes only on change.
+    func trackScrolledPastTop(_ scrolled: Binding<Bool>) -> some View {
+        onScrollGeometryChange(for: Bool.self) { $0.contentOffset.y + $0.contentInsets.top > 1 } action: { _, value in
+            if scrolled.wrappedValue != value { scrolled.wrappedValue = value }
+        }
     }
 }

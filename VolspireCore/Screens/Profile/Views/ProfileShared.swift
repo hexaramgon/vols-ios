@@ -12,11 +12,6 @@ import SwiftUI
 // MARK: - Layout
 
 enum ProfileLayout {
-    /// Immersive hero height (~half the screen, with a floor for small devices).
-    /// Main-actor because it reads `UIScreen`; only view code calls it.
-    @MainActor
-    static var heroHeight: CGFloat { max(UIScreen.size.height * 0.54, 380) }
-
     /// Canonical banner crop aspect (width ÷ height), SHARED WITH THE WEB:
     /// 16:9 — the middle ground between the iPhone hero's tall band and the
     /// desktop web hero's wide strip. Each display aspect-fills its own shape
@@ -73,16 +68,57 @@ extension Double {
 
 // MARK: - Empty state
 
-/// A profile tab's empty state — the shared `EmptyStateView` puck, padded
-/// for the tab area. Every tab uses the same shape: icon + a short "No … yet"
-/// title, no subtitle.
+/// A profile tab's empty state — between the old breathing ghost rows and a
+/// bare glyph: a small fanned stack of cards (the tab's glyph on the front
+/// one) over a short title. Still once landed — it lands with a
+/// single soft fade + rise, never loops (under the hero, motion read as
+/// loading).
 struct ProfileEmptyState: View {
     let icon: LucideIcon.Name
     let title: String
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var landed = false
+
     var body: some View {
-        EmptyStateView(icon: icon, title: title)
-            .padding(.vertical, 56)
+        VStack(spacing: 18) {
+            stack
+            Text(title)
+                .font(.appSubheadlineSemibold)
+                .foregroundStyle(Color.vText)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 36)
+        .opacity(landed || reduceMotion ? 1 : 0)
+        .offset(y: landed || reduceMotion ? 0 : 6)
+        .onAppear {
+            withAnimation(.timingCurve(0.25, 0, 0, 1, duration: 0.35)) { landed = true }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// Two faint cards fanned behind a front card holding the glyph.
+    private var stack: some View {
+        ZStack {
+            card.opacity(0.45).rotationEffect(.degrees(-10)).offset(x: -16, y: 4)
+            card.opacity(0.7).rotationEffect(.degrees(8)).offset(x: 16, y: 2)
+            card
+                .overlay {
+                    LucideIcon(icon, .xl).foregroundStyle(Color.vText2)
+                }
+                .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        }
+        .frame(width: 104, height: 72)
+    }
+
+    private var card: some View {
+        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+            .fill(Color.vCardSolid)
+            .overlay {
+                RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                    .strokeBorder(Color.vDivider, lineWidth: 1)
+            }
+            .frame(width: 60, height: 60)
     }
 }
 

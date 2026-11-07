@@ -60,6 +60,13 @@ struct ErrorBanner: View {
         .foregroundStyle(Color.vError)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(Color.vErrorFill, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        // The red tint over an OPAQUE page-colour base: the tint alone is
+        // translucent, so content behind a floating banner (a composer dock,
+        // an overlay) showed through and overlapped its text.
+        .background {
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                .fill(Color.vBase)
+                .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).fill(Color.vErrorFill))
+        }
     }
 }

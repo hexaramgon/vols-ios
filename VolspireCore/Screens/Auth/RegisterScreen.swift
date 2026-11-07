@@ -203,8 +203,8 @@ struct RegisterScreen: View {
             // profile step after a social sign-in. Both land before the account
             // is created (App Store 1.2), which is what the requirement is about.
             VStack(spacing: 10) {
-                AppleAuthButton(label: "Continue with Apple") { credential in
-                    Task { await dependencies.authManager.signInWithApple(credential: credential) }
+                AppleAuthButton(label: "Continue with Apple") { credential, nonce in
+                    Task { await dependencies.authManager.signInWithApple(credential: credential, nonce: nonce) }
                 } onError: { error in
                     dependencies.authManager.setError(from: error)
                 }

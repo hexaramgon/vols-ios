@@ -8,6 +8,8 @@
 //
 
 import DesignSystem
+import MediaLibrary
+import Player
 import Services
 import SwiftUI
 
@@ -24,7 +26,11 @@ struct TrackOptionsSheet: View {
         /// navigation / presenting another sheet). `false`: run `perform` now
         /// without dismissing — for share, which presents over this sheet.
         var dismissesSheet: Bool = true
-        var perform: () async -> Void
+        /// Destructive rows: the sheet closes and the centered confirm modal
+        /// opens (`.confirmModal`); the confirm's own `perform` runs if the
+        /// user confirms, so such rows leave `perform` at its default.
+        var confirm: DestructiveConfirm? = nil
+        var perform: () async -> Void = {}
     }
 
     let artwork: Artwork
@@ -35,10 +41,17 @@ struct TrackOptionsSheet: View {
     /// When set, a "Report" row is appended (App Store 1.2 UGC safety). Omit for
     /// the viewer's own tracks, which get edit / hide / delete instead.
     var reportTargetId: String? = nil
+    /// When set (a single playable track), "Play next" and "Add to queue"
+    /// rows lead the list.
+    var queueMedia: Media? = nil
 
     @Environment(\.dismiss) private var dismiss
+    /// Optional: the sheet is used app-wide, and a missing environment object
+    /// must not crash it — the queue rows just don't appear.
+    @Environment(PlayerController.self) private var player: PlayerController?
     @State private var showReport = false
     @State private var loadingID: UUID?
+    @State private var pendingConfirm: DestructiveConfirm?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -48,15 +61,25 @@ struct TrackOptionsSheet: View {
             }
 
             VStack(spacing: 0) {
-                ForEach(actions) { row($0) }
+                ForEach(queueActions + actions) { row($0) }
                 if reportTargetId != nil { reportRow }
             }
             .padding(.top, 8)
+            .confirmModal($pendingConfirm)
         }
         .selfSizedDetent()
         .sheet(isPresented: $showReport) {
             ReportSheet(targetType: .track, targetId: reportTargetId ?? "", subject: title)
         }
+    }
+
+    /// "Play next" / "Add to queue" for `queueMedia` (none without audio).
+    private var queueActions: [Action] {
+        guard let player, let media = queueMedia, media.meta.audioURL != nil else { return [] }
+        return [
+            Action(icon: .listStart, title: "Play next") { player.enqueue(media, .next) },
+            Action(icon: .listEnd, title: "Add to queue") { player.enqueue(media, .last) },
+        ]
     }
 
     /// Appended "Report" row — presents the report sheet over this one.
@@ -78,7 +101,9 @@ struct TrackOptionsSheet: View {
             subtitle: action.subtitle,
             tint: action.isDestructive ? Color.vError : Color.vText
         ) {
-            if action.awaitsCompletion {
+            if let confirm = action.confirm {
+                pendingConfirm = confirm
+            } else if action.awaitsCompletion {
                 Task {
                     loadingID = action.id
                     await action.perform()
@@ -117,6 +142,11 @@ struct InlineCreateRow: View {
     let label: String
     /// Text-field prompt while expanded, e.g. "Playlist name".
     let placeholder: String
+    /// The label's font — the host sheet's row-title font, so the row reads
+    /// as one of the list.
+    var titleFont: Font = AppFont.trackTitle
+    /// Name cap — 50, the server's cap for playlists and folders alike.
+    var maxLength = 50
     let onCreate: (String) async -> Bool
 
     @State private var expanded = false
@@ -125,57 +155,84 @@ struct InlineCreateRow: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        Group {
-            if expanded {
-                HStack(spacing: 12) {
-                    tile
-                    TextField(
-                        "",
-                        text: $name,
-                        prompt: Text(placeholder).foregroundStyle(Color.vText3)
-                    )
-                    .font(.appCalloutSemibold)
-                    .foregroundStyle(Color.vText)
-                    .focused($focused)
-                    .submitLabel(.done)
-                    .onSubmit { submit() }
-                    .disabled(busy)
-
-                    Spacer(minLength: 8)
-
-                    if busy {
-                        ProgressView().tint(Color.vText).controlSize(.small)
-                    } else {
-                        Button { submit() } label: {
-                            LucideIcon(.circleCheck, .lg)
-                                .foregroundStyle(canSubmit ? Color.vSuccess : Color.vText3)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canSubmit)
-                    }
+        HStack(spacing: 12) {
+            // The + tile doubles as the cancel (×) while the field is open.
+            Button {
+                withAnimation(.smooth(duration: 0.2)) {
+                    expanded.toggle()
+                    if !expanded { name = "" }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+                // Focus once the field is mounted (same-tick focus doesn't land).
+                if expanded { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { focused = true } }
+            } label: {
+                tile
+            }
+            .buttonStyle(.plain)
+            .disabled(busy)
+            .accessibilityLabel(expanded ? "Cancel" : label)
+
+            if expanded {
+                field
+                    .transition(.opacity)
             } else {
                 Button {
                     withAnimation(.smooth(duration: 0.2)) { expanded = true }
-                    // Focus once the field is mounted (same-tick focus doesn't land).
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { focused = true }
                 } label: {
-                    HStack(spacing: 12) {
-                        tile
+                    HStack {
                         Text(label)
-                            .font(.appCalloutSemibold)
+                            .font(titleFont)
                             .foregroundStyle(Color.vText)
                         Spacer(minLength: 8)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 8)
+                    .frame(height: 48)
                     .contentShape(.rect)
                 }
-                .buttonStyle(MenuRowStyle())
+                .buttonStyle(.plain)
+                .transition(.opacity)
             }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+    }
+
+    /// The app's standard field (vField card, body text) with the create
+    /// action as an ink pill inside it.
+    private var field: some View {
+        HStack(spacing: 8) {
+            TextField(
+                "",
+                text: $name,
+                prompt: Text(placeholder).foregroundStyle(Color.vText3)
+            )
+            .font(.appBody)
+            .foregroundStyle(Color.vText)
+            .tint(Color.vText)
+            .focused($focused)
+            .submitLabel(.done)
+            .onSubmit { submit() }
+            .disabled(busy)
+            .charLimited($name, maxLength)
+
+            Button { submit() } label: {
+                ZStack {
+                    Text("Create").font(.appFootnoteMedium).opacity(busy ? 0 : 1)
+                    if busy { ProgressView().controlSize(.small).tint(Color.vOnInverse) }
+                }
+                .foregroundStyle(Color.vOnInverse)
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .background(Color.vInverse, in: Capsule())
+                .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSubmit || busy)
+            .opacity(canSubmit ? 1 : 0.4)
+            .animation(.smooth(duration: 0.15), value: canSubmit)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .frame(height: 48)
+        .background(Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 
     private var canSubmit: Bool {
@@ -186,10 +243,12 @@ struct InlineCreateRow: View {
         ZStack {
             RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
                 .fill(Color.vControl)
-            LucideIcon(.plus, .lg)
+            LucideIcon(expanded ? .x : .plus, .lg)
                 .foregroundStyle(Color.vText2)
+                .contentTransition(.opacity)
         }
         .frame(width: 48, height: 48)
+        .contentShape(.rect)
     }
 
     private func submit() {

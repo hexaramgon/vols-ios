@@ -50,7 +50,7 @@ struct ListingPostCard: View {
             byline
 
             Text(listing.title)
-                .font(.appSubheadlineSemibold)
+                .font(.appCalloutSemibold)
                 .foregroundStyle(Color.vText)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
@@ -94,6 +94,7 @@ struct ListingPostCard: View {
         do {
             let convoId = try await dependencies.supabaseService.respondToListing(listingId: listing.listingId, message: trimmed)
             listingsStore.listingResponded(listing.listingId)
+            Haptics.success()
             showRespond = false
             router.navigateToConversation(ActiveConversation(
                 convoId: convoId,
@@ -123,12 +124,12 @@ struct ListingPostCard: View {
             }
             .buttonStyle(.plain)
             .layoutPriority(-1)
-
             Text("· \(listing.categoryLabel)")
                 .font(.appCaption)
                 .foregroundStyle(Color.vText3)
                 .lineLimit(1)
                 .fixedSize()
+
             Text("· \(MessageTime.ago(MessageTime.parse(listing.createdAt)))")
                 .font(.appCaption)
                 .foregroundStyle(Color.vText3)
@@ -142,15 +143,17 @@ struct ListingPostCard: View {
 
     private var footer: some View {
         HStack(spacing: 20) {
-            StatCount(icon: .users, value: listing.responseCount ?? 0)
-            StatCount(icon: .messageCircle, value: listing.commentCount ?? 0)
+            // Views are private to the author (the server only sends them
+            // for your own listings).
+            if isOwn, let views = listing.viewCount { ListingViewCount(count: views) }
             Spacer(minLength: 8)
             HStack(spacing: 4) {
+                commentsAction
                 // Bare icons (no fill). Saved = the filled bookmark in full ink.
                 CardActionIcon(
                     icon: saved ? .bookmarkFill : .bookmark,
                     active: saved,
-                    popOn: saved
+                    activeColor: .vSaved
                 ) {
                     let next = !saved
                     Task { await listingsStore.setSaved(next, listing: listing) }
@@ -173,6 +176,28 @@ struct ListingPostCard: View {
         .frame(height: 32)
     }
 
+    /// The comments action: the same bare glyph as save / respond / share,
+    /// with the count tucked beside it (none at zero). Opens the listing.
+    private var commentsAction: some View {
+        let count = listing.commentCount ?? 0
+        return Button { router.navigateToCollabListing(listing) } label: {
+            HStack(spacing: 3) {
+                LucideIcon(.messageCircle, size: 22)
+                if count > 0 {
+                    Text(count.compactCount)
+                        .font(.appSubheadlineMedium)
+                        .monospacedDigit()
+                }
+            }
+            .foregroundStyle(Color.inkText(0.78))
+            .padding(.horizontal, 8)
+            .frame(height: 38)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(count == 0 ? "Comments" : "\(count) comments")
+    }
+
     private func share() {
         AnalyticsService.shared?.log(.shareClicked, metadata: ["kind": "listing", "method": "share_sheet"])
         UIApplication.presentActivitySheet(["\(listing.title) on Volspire https://volspire.com/listing/\(listing.listingId)"])
@@ -186,7 +211,12 @@ struct ListingPostCard: View {
 struct CardActionIcon: View {
     let icon: LucideIcon.Name
     var active: Bool = false
+    /// The glyph's colour while `active` (full ink; the saved bookmark's red).
+    var activeColor: Color = .vText
     var popOn: Bool = false
+    /// Glyph size; the 38pt target grows with it (the detail page's footer
+    /// uses a larger glyph than the cards).
+    var size: CGFloat = 22
     let action: () -> Void
 
     @State private var popScale: CGFloat = 1
@@ -194,9 +224,16 @@ struct CardActionIcon: View {
     var body: some View {
         Button(action: action) {
             // Between the old 20pt grey and the 24pt near-white try.
-            LucideIcon(icon, size: 22)
-                .foregroundStyle(active ? Color.vText : Color.inkText(0.78))
-                .frame(width: 38, height: 38)
+            Group {
+                if icon == .bookmark || icon == .bookmarkFill {
+                    // The shared save glyph (fill + pop + ripple on save).
+                    SaveBookmarkIcon(saved: active, size: size)
+                } else {
+                    LucideIcon(icon, size: size)
+                        .foregroundStyle(active ? activeColor : Color.inkText(0.78))
+                }
+            }
+                .frame(width: size + 16, height: size + 16)
                 .contentShape(.rect)
                 .scaleEffect(popScale)
         }
@@ -223,5 +260,23 @@ struct ListingPostCardSkeleton: View {
             }
         }
         .shimmering()
+    }
+}
+
+/// "👁 12 views" for the author of a listing — the board's view count is
+/// private to them (`get_listings_feed` / `get_listing` send it only to the
+/// author). One view per person per day.
+struct ListingViewCount: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 4) {
+            LucideIcon(.eye, .sm)
+            Text(count == 1 ? "1 view" : "\(count.compactCount) views")
+                .font(.appFootnote)
+                .monospacedDigit()
+        }
+        .foregroundStyle(Color.vText3)
+        .accessibilityElement(children: .combine)
     }
 }

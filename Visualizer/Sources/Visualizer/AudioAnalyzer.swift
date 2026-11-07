@@ -10,7 +10,8 @@ final class AudioAnalyzer {
     private let fftSize = 1024
     private let binCount = 512
 
-    private let fftSetup: FFTSetup
+    /// Nil if vDSP couldn't allocate it — `update` then leaves the bands as-is.
+    private let fftSetup: FFTSetup?
     private var windowReal: [Float]
     private var windowImag: [Float]
     private var magnitudes: [Float]
@@ -27,10 +28,7 @@ final class AudioAnalyzer {
     private var longAvg = [Float](repeating: 1, count: 3)
 
     init() {
-        guard let setup = vDSP_create_fftsetup(vDSP_Length(10), FFTRadix(kFFTRadix2)) else {
-            fatalError("vDSP FFT setup failed")
-        }
-        fftSetup = setup
+        fftSetup = vDSP_create_fftsetup(vDSP_Length(10), FFTRadix(kFFTRadix2))
         windowReal = [Float](repeating: 0, count: binCount)
         windowImag = [Float](repeating: 0, count: binCount)
         magnitudes = [Float](repeating: 0, count: binCount)
@@ -45,7 +43,7 @@ final class AudioAnalyzer {
     }
 
     deinit {
-        vDSP_destroy_fftsetup(fftSetup)
+        if let fftSetup { vDSP_destroy_fftsetup(fftSetup) }
     }
 
     private func configureBands(sampleRate: Float) {
@@ -67,6 +65,8 @@ final class AudioAnalyzer {
     /// Updates `audio`'s six band fields in place.
     func update(_ audio: inout AudioFrame, samples: [Float], rightSamples: [Float],
                 sampleRate: Float, fps: Float, frame: Int) {
+        // The FFT reads exactly `fftSize` samples; a short buffer would overrun.
+        guard let fftSetup, samples.count >= fftSize else { return }
         if sampleRate != configuredSampleRate {
             configureBands(sampleRate: sampleRate)
         }

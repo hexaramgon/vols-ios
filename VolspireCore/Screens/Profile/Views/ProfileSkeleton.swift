@@ -12,6 +12,9 @@ import DesignSystem
 import SwiftUI
 
 struct ProfileSkeleton: View {
+    /// Own profile: Edit + round Share / Settings. Someone else's: Follow +
+    /// Collab (equal width) + a round "…".
+    var isOwnProfile = false
     private let bone = Color.vSkeleton
 
     var body: some View {
@@ -50,7 +53,7 @@ struct ProfileSkeleton: View {
                     capsuleBone(width: 230, height: 12)
                 }
 
-                HStack(spacing: 24) {
+                HStack(spacing: 20) {
                     statBone
                     statDivider
                     statBone
@@ -60,34 +63,37 @@ struct ProfileSkeleton: View {
                 }
 
                 HStack(spacing: 8) {
-                    Capsule()
-                        .fill(bone)
-                        .frame(height: CapsuleButtonLabel.height)
-                        .frame(maxWidth: .infinity)
-                    Capsule()
-                        .fill(bone)
-                        .frame(height: CapsuleButtonLabel.height)
-                        .frame(maxWidth: .infinity)
-                    Capsule()
-                        .fill(bone)
-                        .frame(width: CapsuleButtonLabel.height, height: CapsuleButtonLabel.height)
+                    // The action bar's shape.
+                    ForEach(0..<(isOwnProfile ? 1 : 2), id: \.self) { _ in
+                        Capsule()
+                            .fill(bone)
+                            .frame(height: CapsuleButtonLabel.heroHeight)
+                            .frame(maxWidth: .infinity)
+                    }
+                    ForEach(0..<(isOwnProfile ? 2 : 1), id: \.self) { _ in
+                        Circle()
+                            .fill(bone)
+                            .frame(width: CapsuleButtonLabel.heroHeight, height: CapsuleButtonLabel.heroHeight)
+                    }
                 }
                 .padding(.top, 2)
             }
             .padding(.horizontal, ViewConst.screenPaddings)
             .padding(.bottom, 16)
+            // The real hero's top clearance (status bar + nav row + 8), so
+            // the bones sit where the content lands.
+            .padding(.top, ViewConst.safeAreaInsets.top + 44 + 8)
         }
-        .frame(height: ProfileLayout.heroHeight)
     }
 
     private var statBone: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             RoundedRectangle(cornerRadius: 4)
                 .fill(bone)
-                .frame(width: 14, height: 14)
-            VStack(alignment: .leading, spacing: 3) {
-                capsuleBone(width: 34, height: 14)
-                capsuleBone(width: 44, height: 8)
+                .frame(width: 16, height: 16)
+            VStack(alignment: .leading, spacing: 4) {
+                capsuleBone(width: 36, height: 14)
+                capsuleBone(width: 52, height: 10)
             }
         }
     }
@@ -95,7 +101,7 @@ struct ProfileSkeleton: View {
     private var statDivider: some View {
         Rectangle()
             .fill(Color.vDivider)
-            .frame(width: 1, height: 24)
+            .frame(width: 1, height: 28)
     }
 
     // MARK: - Tab bar (icon tabs + hairline, like ProfileTabBar)

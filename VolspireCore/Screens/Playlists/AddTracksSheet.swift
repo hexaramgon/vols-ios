@@ -52,7 +52,13 @@ struct AddTracksSheet: View {
             case .idle, .loading:
                 ProgressView().tint(Color.vText2)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .loaded, .error:
+            case .error:
+                LoadErrorView(icon: .bookmark, title: "Couldn't load your saved tracks") {
+                    Task { await libraryStore.refresh() }
+                }
+                .padding(.top, 36)
+                .frame(maxWidth: .infinity)
+            case .loaded:
                 EmptyStateView(
                     icon: .bookmark,
                     title: libraryStore.savedTracks.isEmpty ? "No saved tracks yet" : "Everything's already here",
@@ -91,8 +97,8 @@ struct AddTracksSheet: View {
                 if addingId == track.trackId {
                     ProgressView().tint(Color.vText).controlSize(.small)
                 } else {
-                    LucideIcon(added ? .circleCheck : .plus, .lg)
-                        .foregroundStyle(added ? Color.vSuccessText : Color.vText3)
+                    // The pickers' add / added control (pop + drawn check).
+                    AddedCheck(isOn: added)
                 }
             }
             .padding(.horizontal, 8)

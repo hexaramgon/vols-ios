@@ -215,7 +215,7 @@ extension View {
     /// r12, 16×12 padding; `invalid` tints it red instead of ringing it.
     func settingsFieldStyle(focused: Bool = false, invalid: Bool = false) -> some View {
         self
-            .font(.appSubheadline)
+            .font(.appBody)
             .foregroundStyle(Color.vText)
             .tint(Color.vText)
             .padding(.horizontal, 16)

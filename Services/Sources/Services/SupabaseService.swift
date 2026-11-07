@@ -74,6 +74,16 @@ public final class SupabaseService: Sendable {
         await cache.removeAll(matching: "rpc:get_user_folders")
     }
 
+    /// Drops every cached pack response — the marketplace list
+    /// (`get_explore_data`), pack details and profile pack lists — so a pack
+    /// create / edit shows everywhere at once, and Marketplace pull-to-refresh
+    /// really refetches.
+    public func invalidatePackCaches() async {
+        await cache.removeAll(matching: "rpc:get_explore_data")
+        await cache.removeAll(matching: "rpc:get_pack")
+        await cache.removeAll(matching: "rpc:get_user_packs")
+    }
+
     /// Drops the cached library response so a user-initiated refresh refetches
     /// fresh data inside the TTL window (mutations already invalidate this key
     /// themselves; playlist mutations invalidate via `invalidatePlaylists`).
@@ -166,6 +176,7 @@ public final class SupabaseService: Sendable {
     /// pull-to-refresh.
     public func invalidateProfile(userId: String) async {
         await cache.remove(APICache.key("get_user_profile", params: ["profile_id": userId]))
+        await cache.remove(APICache.key("get_user_listings", params: ["p_user_id": userId]))
         await cache.remove(APICache.key("get_tracks_credited_to_user", params: ["p_user_id": userId]))
         await cache.remove(APICache.key("get_user_packs", params: ["p_user_id": userId]))
         await cache.remove(APICache.key("get_user_listings", params: ["p_user_id": userId]))
@@ -217,6 +228,11 @@ public final class SupabaseService: Sendable {
         return try await cachedRpc("get_my_track_analytics", params: nil, ttl: CacheTTL.medium)
     }
 
+    /// Drops the cached analytics so a pull-to-refresh refetches.
+    public func invalidateAnalytics() async {
+        await cache.removeAll(matching: "rpc:get_my_track_analytics")
+    }
+
     /// Creator engagement aggregates — followers / likes / saves / comments
     /// (totals + last-30-day deltas) and 30-day shares (`get_my_engagement_stats`).
     public func getMyEngagementStats() async throws -> ApiEngagementStats {
@@ -261,35 +277,28 @@ public final class SupabaseService: Sendable {
         return try await cachedRpc("get_explore_data", params: nil, ttl: CacheTTL.short)
     }
 
-    /// The cheapest paid, available license per track — the Marketplace
-    /// tab's "Beats for sale" (the web's `useForSaleTracks`: a plain
-    /// `track_licenses` read; track details come from `getTracksByIds`).
+    /// The cheapest paid, available license per sellable track — the
+    /// Marketplace tab's "Beats for sale" (`get_for_sale_track_prices`; track
+    /// details come from `getTracksByIds`).
     public func getForSaleTrackPrices(limit: Int = 300) async throws -> [ApiTrackPrice] {
-        do {
-            let rows: [ApiTrackPrice] = try await client.from("track_licenses")
-                .select("track_id, price, currency")
-                .eq("available", value: true)
-                .gt("price", value: 0)
-                .limit(limit)
-                .execute()
-                .value
-            var cheapest: [String: ApiTrackPrice] = [:]
-            for r in rows where (cheapest[r.trackId]?.price ?? .infinity) > r.price {
-                cheapest[r.trackId] = r
-            }
-            return Array(cheapest.values)
-        } catch {
-            throw mapError(error)
-        }
+        try await performRpc("get_for_sale_track_prices", params: ["p_limit": limit])
     }
 
-    /// The public collab-board feed (`get_listings`). `category` nil = all.
-    public func getListings(category: String?, limit: Int = 100, offset: Int = 0) async throws -> [ApiListing] {
-        return try await performRpc("get_listings", params: [
-            "p_category": category ?? NSNull(),
+    /// The collab board, hottest first (`get_listings_feed`: engagement +
+    /// recency, see its migration). Pass the previous page's last
+    /// `ApiListing.cursor` for the next page; empty `categories` = all.
+    public func getListingsFeed(categories: Set<String>, limit: Int = 20, cursor: String?) async throws -> [ApiListing] {
+        try await performRpc("get_listings_feed", params: [
+            "p_categories": categories.isEmpty ? NSNull() : Array(categories).sorted(),
             "p_limit": limit,
-            "p_offset": offset,
+            "p_cursor": cursor ?? NSNull(),
         ])
+    }
+
+    /// Counts a view of a listing (`record_listing_view`: one per viewer per
+    /// day; the author's own views don't count). Feeds the board ranking.
+    public func recordListingView(listingId: String) async throws {
+        try await executeRpc("record_listing_view", params: ["p_listing_id": listingId])
     }
 
     /// The signed-in user's saved collab listings (`get_saved_listings`),
@@ -370,9 +379,177 @@ public final class SupabaseService: Sendable {
         return try await cachedRpc("get_pack", params: ["p_pack_id": packId], ttl: CacheTTL.medium)
     }
 
+    /// A short-lived (10 min) download link to a FREE pack's zip. The
+    /// `pack-zip` edge function checks access via `get_pack`, builds + caches
+    /// the zip if needed, and returns `url` for free packs only — paid packs
+    /// never get one here.
+    public func freePackDownloadURL(packId: String) async throws -> URL {
+        struct Response: Decodable { let url: String? }
+        do {
+            let response: Response = try await client.functions.invoke(
+                "pack-zip",
+                options: .init(body: ["pack_id": packId])
+            )
+            guard let raw = response.url, let url = URL(string: raw) else { throw SupabaseError.notFound }
+            return url
+        } catch let error as SupabaseError {
+            throw error
+        } catch {
+            throw mapError(error)
+        }
+    }
+
+    /// Counts a pack download (`increment_pack_downloads`).
+    public func recordPackDownload(packId: String) async throws {
+        try await executeRpc("increment_pack_downloads", params: ["p_pack_id": packId])
+    }
+
     /// Full detail for a marketplace service (`get_service_detail`).
     public func getServiceDetail(serviceId: String) async throws -> ApiServiceDetail {
         return try await cachedRpc("get_service_detail", params: ["p_service_id": serviceId], ttl: CacheTTL.medium)
+    }
+
+    // MARK: - Reviews (packs + services — `reviews` table, same as the web)
+
+    /// `target_type` for the review RPCs.
+    public enum ReviewTarget: String, Sendable {
+        case pack, service
+    }
+
+    /// Whether the caller may review this item, and whether they already did.
+    public func reviewEligibility(targetId: String, target: ReviewTarget) async throws -> ApiReviewEligibility {
+        try await performRpc("can_review", params: ["p_target_id": targetId, "p_target_type": target.rawValue])
+    }
+
+    /// Posts a 1–5 star review with optional text (`create_review`; one per
+    /// person per item — the table's unique key rejects a second).
+    public func createReview(targetId: String, target: ReviewTarget, rating: Int, body: String) async throws {
+        try await executeRpc("create_review", params: [
+            "p_target_id": targetId,
+            "p_target_type": target.rawValue,
+            "p_rating": rating,
+            "p_body": body,
+        ])
+        await invalidateReviewCaches()
+    }
+
+    /// The owner's performance numbers for a pack (`get_pack_stats`; uncached
+    /// — it's "how is it doing right now").
+    public func getPackStats(packId: String) async throws -> ApiPackStats {
+        try await performRpc("get_pack_stats", params: ["p_pack_id": packId])
+    }
+
+    /// The author's performance numbers for a collab listing
+    /// (`get_listing_stats`; uncached).
+    public func getListingStats(listingId: String) async throws -> ApiListingStats {
+        try await performRpc("get_listing_stats", params: ["p_listing_id": listingId])
+    }
+
+    /// Deletes one of the caller's own reviews (`delete_review`).
+    public func deleteReview(reviewId: String) async throws {
+        try await executeRpc("delete_review", params: ["p_review_id": reviewId])
+        await invalidateReviewCaches()
+    }
+
+    /// Reviews ride inside the cached pack / service detail (and the average
+    /// rating on the Marketplace cards), so drop those after a change.
+    private func invalidateReviewCaches() async {
+        await invalidatePackCaches()
+        await cache.removeAll(matching: "rpc:get_service_detail")
+    }
+
+    // MARK: - Releases (grouped releases on a profile — RPC-only)
+
+    /// A profile's releases, newest first (`get_user_releases`).
+    public func getUserReleases(userId: String) async throws -> [ApiRelease] {
+        return try await performRpc("get_user_releases", params: ["p_user_id": userId])
+    }
+
+    /// A release with its ordered tracks (`get_release`).
+    public func getRelease(releaseId: String) async throws -> ApiReleaseDetail {
+        return try await performRpc("get_release", params: ["p_release_id": releaseId])
+    }
+
+    /// The caller's releases + whether each holds `trackId` (`get_releases_for_track`).
+    public func getReleasesForTrack(trackId: String) async throws -> [ApiReleaseMembership] {
+        return try await performRpc("get_releases_for_track", params: ["p_track_id": trackId])
+    }
+
+    /// Creates a release (`create_release`) and returns its id. `releaseDate`
+    /// is "yyyy-MM-dd"; `trackIds` (the caller's own tracks) land in order.
+    public func createRelease(
+        title: String,
+        description: String? = nil,
+        visibility: String = "public",
+        releaseDate: String? = nil,
+        trackIds: [String] = []
+    ) async throws -> String {
+        let params: [String: Any] = [
+            "p_title": title,
+            "p_description": (description?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? NSNull(),
+            "p_visibility": visibility,
+            "p_release_date": releaseDate ?? NSNull(),
+            "p_track_ids": trackIds,
+        ]
+        let created: CreatedRelease = try await performRpc("create_release", params: params)
+        return created.releaseId
+    }
+
+    private struct CreatedRelease: Decodable {
+        let releaseId: String
+    }
+
+    /// Updates a release (`update_release`). nil leaves a field; an empty
+    /// description clears it; `clearReleaseDate` removes the date.
+    public func updateRelease(
+        releaseId: String,
+        title: String? = nil,
+        description: String? = nil,
+        visibility: String? = nil,
+        coverUrl: String? = nil,
+        releaseDate: String? = nil,
+        clearReleaseDate: Bool = false
+    ) async throws {
+        var params: [String: Any] = ["p_release_id": releaseId, "p_clear_release_date": clearReleaseDate]
+        if let title { params["p_title"] = title }
+        if let description { params["p_description"] = description }
+        if let visibility { params["p_visibility"] = visibility }
+        if let coverUrl { params["p_cover_url"] = coverUrl }
+        if let releaseDate { params["p_release_date"] = releaseDate }
+        try await executeRpc("update_release", params: params)
+    }
+
+    /// Deletes a release (`delete_release`) — its tracks are untouched.
+    public func deleteRelease(releaseId: String) async throws {
+        try await executeRpc("delete_release", params: ["p_release_id": releaseId])
+    }
+
+    /// Appends the caller's tracks to a release (`add_tracks_to_release`).
+    public func addTracksToRelease(releaseId: String, trackIds: [String]) async throws {
+        try await executeRpc("add_tracks_to_release", params: ["p_release_id": releaseId, "p_track_ids": trackIds])
+    }
+
+    /// Removes a track from a release (`remove_track_from_release`).
+    public func removeTrackFromRelease(releaseId: String, trackId: String) async throws {
+        try await executeRpc("remove_track_from_release", params: ["p_release_id": releaseId, "p_track_id": trackId])
+    }
+
+    /// Sets a release's track order (`reorder_release`).
+    public func reorderRelease(releaseId: String, trackIds: [String]) async throws {
+        try await executeRpc("reorder_release", params: ["p_release_id": releaseId, "p_track_ids": trackIds])
+    }
+
+    /// Uploads a release cover to `post-uploads` and returns its storage path
+    /// (bare, like the other covers the RPCs store). Second path segment is the
+    /// uploader's auth id (storage RLS); the stamp busts image caches.
+    public func uploadReleaseCover(releaseId: String, userId: String, imageData: Data) async throws -> String {
+        let stamp = Int(Date().timeIntervalSince1970)
+        return try await uploadToStorage(
+            .postUploads,
+            path: "Releases/\(userId.lowercased())/\(releaseId)-\(stamp).jpg",
+            data: imageData,
+            contentType: "image/jpeg"
+        )
     }
 
     // MARK: - Playlists
@@ -503,6 +680,67 @@ public final class SupabaseService: Sendable {
         await cache.remove(APICache.key("get_folder_files", params: ["p_folder_id": folderId]))
     }
 
+    /// The viewer's saved packs, newest-saved first (`get_saved_packs`).
+    public func getSavedPacks() async throws -> [ApiMarketplacePack] {
+        try await performRpc("get_saved_packs")
+    }
+
+    public func savePack(packId: String) async throws {
+        try await executeRpc("save_pack", params: ["p_pack_id": packId])
+    }
+
+    public func unsavePack(packId: String) async throws {
+        try await executeRpc("unsave_pack", params: ["p_pack_id": packId])
+    }
+
+    // MARK: Folder share links (owner only)
+
+    /// The folder's active public link, nil when it has none.
+    public func getFolderShareLink(folderId: String) async throws -> ApiFolderShareLink? {
+        try await performRpc("get_folder_share_link", params: ["p_folder_id": folderId])
+    }
+
+    /// Creates the folder's public link — or a fresh one, revoking the old.
+    public func createFolderShareLink(folderId: String, allowDownloads: Bool, expiresInDays: Int?) async throws -> ApiFolderShareLink {
+        try await performRpc("create_folder_share_link", params: [
+            "p_folder_id": folderId,
+            "p_allow_downloads": allowDownloads,
+            "p_expires_in_days": expiresInDays ?? NSNull(),
+        ])
+    }
+
+    /// Changes the active link's options (nil = unchanged; `clearExpiry` =
+    /// never expires; `expiresInDays` counts from now).
+    public func updateFolderShareLink(folderId: String, allowDownloads: Bool? = nil, expiresInDays: Int? = nil,
+                                      clearExpiry: Bool = false) async throws -> ApiFolderShareLink {
+        try await performRpc("update_folder_share_link", params: [
+            "p_folder_id": folderId,
+            "p_allow_downloads": allowDownloads ?? NSNull(),
+            "p_expires_in_days": expiresInDays ?? NSNull(),
+            "p_clear_expiry": clearExpiry,
+        ])
+    }
+
+    /// Turns the folder's public link off (it stops working immediately).
+    public func revokeFolderShareLink(folderId: String) async throws {
+        try await executeRpc("revoke_folder_share_link", params: ["p_folder_id": folderId])
+    }
+
+    /// Links a free pack into a folder (`add_pack_to_folder`; idempotent).
+    public func addPackToFolder(packId: String, folderId: String) async throws {
+        try await executeRpc("add_pack_to_folder", params: ["p_folder_id": folderId, "p_pack_id": packId])
+    }
+
+    /// Unlinks a pack from a folder (`remove_pack_from_folder`).
+    public func removePackFromFolder(packId: String, folderId: String) async throws {
+        try await executeRpc("remove_pack_from_folder", params: ["p_folder_id": folderId, "p_pack_id": packId])
+    }
+
+    /// The packs linked into a folder, newest first (`get_folder_packs`).
+    public func getFolderPacks(folderId: String) async throws -> [ApiFolderPack] {
+        try await performRpc("get_folder_packs", params: ["p_folder_id": folderId])
+    }
+
     /// Ids of the folders the caller can access that already contain the track
     /// (`get_folders_for_track`) — used to pre-check the "Add to Workspace" rows.
     public func getFoldersForTrack(trackId: String) async throws -> [String] {
@@ -550,6 +788,12 @@ public final class SupabaseService: Sendable {
         NotificationCenter.default.post(name: .userBlockStateChanged, object: nil)
     }
 
+    /// The caller's followers, newest first (`get_my_followers`), each with
+    /// whether the caller follows them back.
+    public func getMyFollowers(limit: Int = 200, offset: Int = 0) async throws -> [ApiFollower] {
+        return try await performRpc("get_my_followers", params: ["p_limit": limit, "p_offset": offset])
+    }
+
     /// Users the current account has blocked (`get_blocked_users`).
     public func getBlockedUsers() async throws -> [ApiUserSummary] {
         return try await performRpc("get_blocked_users")
@@ -558,8 +802,10 @@ public final class SupabaseService: Sendable {
     /// Sends a collaboration request to an artist (`send_collab_request`), optionally
     /// attaching up to 3 of the sender's tracks. The DB raises `collab_rate_limited`
     /// (one request per artist per week) and `collab_attachment_cap` — surfaced via
-    /// the thrown error's text so callers can show a friendly message.
-    public func sendCollabRequest(targetId: String, message: String, trackIds: [String]? = nil) async throws {
+    /// the thrown error's text so callers can show a friendly message. Returns the
+    /// pair's DM convo id (the RPC finds or creates it).
+    @discardableResult
+    public func sendCollabRequest(targetId: String, message: String, trackIds: [String]? = nil) async throws -> String {
         let params: [String: Any] = [
             "p_target_id": targetId,
             "p_message": message,
@@ -567,9 +813,10 @@ public final class SupabaseService: Sendable {
         ]
         // mapError keeps the raw error text (PostgrestError includes its
         // `message`), so the caller can detect guards like `collab_rate_limited`.
-        try await executeRpc("send_collab_request", params: params)
+        let convoId: String = try await performRpc("send_collab_request", params: params)
         // The viewer's collaborator status changed — drop the cached profile.
         await invalidateProfile(userId: targetId)
+        return convoId.lowercased()
     }
 
     /// Live collaborator status with another user — 'none' / 'pending' /
@@ -786,9 +1033,10 @@ public final class SupabaseService: Sendable {
     }
 
     /// Creates a track via `create_track_v2`, mirroring the web's track-create
-    /// submit flow: cover + streamable master go to `post-uploads`, paid
-    /// downloadables go to the private `track-assets` bucket, and only bare
-    /// storage paths are persisted.
+    /// submit flow: the cover goes to `post-uploads`, the streamable master to
+    /// the private `track-media` bucket (`<uid>/…` — the tracks row's
+    /// constraint requires the owner's folder), paid downloadables to the
+    /// private `track-assets` bucket, and only bare storage paths are persisted.
     @discardableResult
     public func createTrackV2(
         userId: String,
@@ -818,12 +1066,11 @@ public final class SupabaseService: Sendable {
             "Visuals/\(uid)/\(UUID().uuidString)_cover.\($0)"
         }
 
-        // The streamable master — always lands in p_audio_url; videos live
-        // under Visuals/ and flip p_has_visual.
-        let folder = isVideo ? "Visuals" : "Posts"
+        // The streamable master (audio, or the video for a visual track —
+        // p_has_visual flips) — always lands in p_audio_url.
         let mediaPath = try await uploadToStorage(
-            .postUploads,
-            path: "\(folder)/\(uid)/\(UUID().uuidString)_\(Self.safeStorageName(mediaFileName))",
+            .trackMedia,
+            path: "\(uid)/\(UUID().uuidString)_\(Self.safeStorageName(mediaFileName))",
             data: mediaData,
             contentType: isVideo ? "video/mp4" : Self.audioMimeType(forExt: Self.safeStorageExt(mediaFileName))
         )
@@ -988,7 +1235,6 @@ public final class SupabaseService: Sendable {
         description: String?,
         price: Double,
         formats: [String],
-        gradient: String,
         tags: [String],
         isPublished: Bool,
         files: [PackFileUpload],
@@ -1031,13 +1277,13 @@ public final class SupabaseService: Sendable {
             "p_price": price,
             "p_currency": "USD",
             "p_formats": formats,
-            "p_gradient": gradient,
             "p_tags": tags,
             "p_is_published": isPublished,
             "p_files": fileRows,
             "p_cover_url": coverPath ?? NSNull(),
         ]
         try await executeRpc("create_pack", params: params)
+        await invalidatePackCaches()
 
         // Fire-and-forget zip warm-up — the download route has a fallback
         // if this fails or is still in flight (mirrors the web).
@@ -1059,7 +1305,6 @@ public final class SupabaseService: Sendable {
         packType: String,
         description: String?,
         price: Double,
-        gradient: String,
         tags: [String],
         isPublished: Bool,
         coverData: Data?,
@@ -1075,12 +1320,12 @@ public final class SupabaseService: Sendable {
             "p_pack_type": packType,
             "p_description": description ?? NSNull(),
             "p_price": price,
-            "p_gradient": gradient,
             "p_tags": tags,
             "p_is_published": isPublished,
             "p_cover_url": coverPath ?? NSNull(),
         ]
         try await executeRpc("update_pack", params: params)
+        await invalidatePackCaches()
     }
 
     // MARK: - Service create (web service-create parity)
@@ -1254,6 +1499,11 @@ public final class SupabaseService: Sendable {
         contentType: String? = nil,
         upsert: Bool = false
     ) async throws -> String {
+        // Every upload funnels through here — refuse over-cap files with a
+        // clear message instead of the server's generic rejection.
+        guard data.count <= bucket.maxUploadBytes else {
+            throw SupabaseError.fileTooLarge(maxBytes: bucket.maxUploadBytes)
+        }
         try await client.storage
             .from(bucket)
             .upload(path, data: data, options: .init(contentType: contentType, upsert: upsert))
@@ -1624,26 +1874,11 @@ public final class SupabaseService: Sendable {
 
     // MARK: - Social: open to collab + collab responses
 
-    private struct OpenToCollabRow: Decodable {
-        let openToCollab: Bool?
-        enum CodingKeys: String, CodingKey { case openToCollab = "open_to_collab" }
-    }
-
     /// Whether the signed-in user is listed on the Collab map
-    /// (`users.open_to_collab`). False when signed out or the row is missing.
+    /// (`get_open_to_collab`). False when signed out.
     public func getOpenToCollab() async throws -> Bool {
-        guard let uid = currentUserId else { return false }
-        do {
-            let rows: [OpenToCollabRow] = try await client.from("users")
-                .select("open_to_collab")
-                .eq("user_id", value: uid)
-                .limit(1)
-                .execute()
-                .value
-            return rows.first?.openToCollab ?? false
-        } catch {
-            throw mapError(error)
-        }
+        guard currentUserId != nil else { return false }
+        return try await performRpc("get_open_to_collab")
     }
 
     /// Opts the signed-in user in/out of the Collab map (`set_open_to_collab`).
@@ -1766,8 +2001,19 @@ public final class SupabaseService: Sendable {
         // Serialize params up front (Sendable) so the fetch closure can cross into the
         // cache actor; concurrent misses for this key then share one round-trip.
         let paramsData = try rpcParamsData(params)
-        let data = try await cache.coalescedData(cacheKey, ttl: ttl) { [self] in
-            try await performRpcData(functionName, paramsData: paramsData)
+        let data: Data
+        do {
+            data = try await cache.coalescedData(cacheKey, ttl: ttl) { [self] in
+                try await performRpcData(functionName, paramsData: paramsData)
+            }
+        } catch SupabaseError.network(let message) {
+            // Offline: the last copy (even past its TTL) beats nothing — your
+            // profile, its avatar link, feeds you've seen. Online errors still throw.
+            if let stale: T = await cache.stale(cacheKey) {
+                debugLog("[SupabaseService] rpc(\(functionName)) OFFLINE → stale cache")
+                return stale
+            }
+            throw SupabaseError.network(message)
         }
         let value: T
         do { value = try JSONDecoder.api.decode(T.self, from: data) }
@@ -1778,7 +2024,7 @@ public final class SupabaseService: Sendable {
             debugLog("[SupabaseService] rpc(\(functionName)) DECODE ERROR: \(error)")
             throw mapError(error)
         }
-        await cache.storeDecoded(cacheKey, value)
+        await cache.storeDecoded(cacheKey, value, decodedFrom: data)
         return value
     }
 
@@ -1833,19 +2079,25 @@ public final class SupabaseService: Sendable {
         catch { throw mapError(error) }
     }
 
-    private func mapError(_ error: Error) -> SupabaseError {
-        if let urlError = error as? URLError {
-            return .serverError("Network error: \(urlError.localizedDescription)")
+    /// Normalizes any thrown error. Cancellation passes through as
+    /// `CancellationError` (SwiftUI cancelling a `.task` / pull-to-refresh is
+    /// not a failure — `Error.isCancellation` lets screens ignore it); all
+    /// else becomes a `SupabaseError` whose `errorDescription` is safe to show.
+    private func mapError(_ error: Error) -> any Error {
+        if error.isCancellation { return CancellationError() }
+        if let alreadyMapped = error as? SupabaseError { return alreadyMapped }
+        if SupabaseError.isConnectionError(error) {
+            return SupabaseError.network(error.localizedDescription)
         }
         if error is DecodingError {
-            return .decodingError(error)
+            return SupabaseError.decodingError(error)
         }
-        if let alreadyMapped = error as? SupabaseError { return alreadyMapped }
-        // Keep the FULL error dump: PostgrestError's message/code carry server
-        // signatures (`collab_rate_limited`, `listing_closed`, …) that
-        // `serverRawDetail` matchers depend on. `friendly()` still gates what
-        // users ever see.
-        return .serverError("\(error)")
+        if let pg = error as? PostgrestError {
+            // Keep the FULL dump as raw detail: `serverRawDetail` matchers
+            // (`collab_rate_limited`, `listing_closed`, …) read it.
+            return SupabaseError.database(code: pg.code, message: pg.message, raw: "\(error)")
+        }
+        return SupabaseError.serverError("\(error)")
     }
 }
 
@@ -1857,23 +2109,38 @@ public enum SupabaseError: Error, LocalizedError {
     case unauthorized
     case notFound
     case clientError(Int)
+    /// An error we couldn't classify — shown as generic copy.
     case serverError(String)
+    /// A Postgres/PostgREST error: the SQLSTATE `code` and the `message`
+    /// (for RPCs, the `raise exception` text — our error signatures).
+    case database(code: String?, message: String, raw: String)
+    /// The request never got an answer (offline, timed out, DNS…).
+    case network(String)
     case decodingError(Error)
     case unknown(Int)
-    
+    case fileTooLarge(maxBytes: Int)
+
+    /// The one offline sentence (also used by `AuthManager`).
+    public static let offlineMessage = "Can't reach Volspire. Check your connection and try again."
+    static let genericMessage = "Something went wrong. Please try again."
+
     /// User-facing copy. Deliberately generic/actionable — the raw server text
     /// (Postgres / PostgREST / constraint detail) is NEVER surfaced here; it's
     /// available via `rawDetail` for logging + programmatic matching only.
     public var errorDescription: String? {
         switch self {
-        case .serverError(let message):
-            return Self.friendly(rawDetail: message)
+        case let .database(code, message, _):
+            return Self.friendly(message: message, code: code)
+        case .network:
+            return Self.offlineMessage
         case .unauthorized:
             return "Please sign in and try again."
         case .notFound:
             return "That content is no longer available."
-        case .invalidURL, .invalidResponse, .clientError, .decodingError, .unknown:
-            return "Something went wrong. Please try again."
+        case .fileTooLarge(let maxBytes):
+            return FileTooLargeError(maxBytes: maxBytes).errorDescription
+        case .serverError, .invalidURL, .invalidResponse, .clientError, .decodingError, .unknown:
+            return Self.genericMessage
         }
     }
 
@@ -1882,6 +2149,8 @@ public enum SupabaseError: Error, LocalizedError {
     public var rawDetail: String {
         switch self {
         case .serverError(let m): return m
+        case .database(_, _, let raw): return raw
+        case .network(let m): return "Network error: \(m)"
         case .decodingError(let e): return e.localizedDescription
         case .invalidURL: return "invalidURL"
         case .invalidResponse: return "invalidResponse"
@@ -1889,57 +2158,81 @@ public enum SupabaseError: Error, LocalizedError {
         case .notFound: return "notFound"
         case .clientError(let c): return "clientError \(c)"
         case .unknown(let c): return "unknown \(c)"
+        case .fileTooLarge(let maxBytes): return "fileTooLarge \(maxBytes)"
         }
     }
 
-    /// Maps a raw server error string to safe, human copy. Known, user-actionable
-    /// signatures get specific messages; everything else falls back to a generic line
-    /// so Postgres / constraint internals never reach the UI. Raw text stays in
-    /// `debugLog` (logged at the call site before mapping).
-    static func friendly(rawDetail raw: String) -> String {
-        let s = raw.lowercased()
-        if let offline = connectionFriendly(fromLowercased: s) {
-            return offline
+    /// True for transport failures (URLSession / NSURLErrorDomain), decided by
+    /// error type — never by searching message text, which matched any server
+    /// error that happened to mention "connection".
+    public static func isConnectionError(_ error: Error) -> Bool {
+        guard !error.isCancellation else { return false }
+        return error is URLError || (error as NSError).domain == NSURLErrorDomain
+    }
+
+    /// Copy for the server's known error signatures (the `raise exception`
+    /// texts in our RPCs, lowercased, up to any `:` argument). Exact matches
+    /// only — anything unlisted falls through to the SQLSTATE / family rules.
+    private static let signatureCopy: [String: String] = [
+        "not_authenticated": "Please sign in and try again.",
+        "not authenticated": "Please sign in and try again.",
+        "auth required": "Please sign in and try again.",
+        "account_suspended": "Your account is suspended. Contact support if you think this is a mistake.",
+        "user_unavailable": "You can't do that with this user.",
+        "collab_rate_limited": "You're doing that a bit too fast — give it a moment and try again.",
+        "collab_request_pending": "Your collab request is still waiting for a reply.",
+        "collab_request_declined": "Your collab request was declined.",
+        "collab_request_respond_first": "Respond to their collab request first.",
+        "collab_request_you_declined": "You declined their collab request.",
+        "already_collaborators": "You're already collaborators.",
+        "listing_closed": "This listing is closed.",
+        "username already taken": "That username is taken.",
+        "unsupported_file_type": "That file type isn't supported.",
+        "please confirm your email before publishing.": "Please confirm your email before publishing.",
+        "forbidden_on_service_order_folder": "That can't be changed in an order folder.",
+    ]
+
+    /// Maps a database error to safe, human copy: exact signature first, then
+    /// the SQLSTATE class, then our naming families (`*_too_long`,
+    /// `*_required`, `*_not_found`, `not_your_*`, …). Unknown → generic.
+    static func friendly(message: String, code: String?) -> String {
+        let lower = message.lowercased()
+        let signature = lower.split(separator: ":", maxSplits: 1).first
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? lower
+        if let copy = signatureCopy[signature] { return copy }
+
+        switch code {
+        case "23505": return "That already exists."                      // unique_violation
+        case "22001": return "That's too long — please shorten it and try again." // value too long
+        case "23514":                                                     // check_violation
+            // Our length caps are CHECK constraints named *_length; other
+            // checks (enums, ranges) aren't a "too long" problem.
+            return lower.contains("length")
+                ? "That's too long — please shorten it and try again."
+                : genericMessage
+        case "42501": return "You don't have permission to do that."     // insufficient_privilege
+        case "PGRST301", "PGRST302": return "Please sign in and try again." // JWT expired / missing
+        default: break
         }
-        if s.contains("rate limit") || s.contains("too many") || s.contains("rate_limited") || s.contains("once every") {
-            return "You're doing that a bit too fast — give it a moment and try again."
-        }
-        if s.contains("not_authenticated") || s.contains("auth required") || s.contains("jwt") {
-            return "Please sign in and try again."
-        }
-        if s.contains("account_suspended") || s.contains("suspended") {
-            return "Your account is suspended. Contact support if you think this is a mistake."
-        }
-        if s.contains("user_unavailable") || s.contains("blocked") {
-            return "You can't do that with this user."
-        }
-        if s.contains("not_authorized") || s.contains("not_a_member") || s.contains("forbidden") || s.contains("permission") {
-            return "You don't have permission to do that."
-        }
-        if s.contains("unsupported_file_type") {
-            return "That file type isn't supported."
-        }
-        if s.contains("too_long") || s.contains("too long") || s.contains("value too long")
-            || s.contains("_length") || s.contains("check constraint") {
+
+        if signature.hasSuffix("_too_long") {
             return "That's too long — please shorten it and try again."
         }
-        if s.contains("duplicate") || s.contains("already exists") || s.contains("unique constraint") {
-            return "That already exists."
+        if signature.hasSuffix("_required") {
+            return "Something required is missing — fill it in and try again."
         }
-        if s.contains("not found") || s.contains("no rows") {
+        if signature.hasSuffix("_not_found") || signature.hasSuffix(" not found")
+            || signature.contains("not found or") {
             return "That content is no longer available."
         }
-        return "Something went wrong. Please try again."
-    }
-
-    /// Connection-outage detection + copy — shared with `AuthManager`'s
-    /// auth-error mapping so the offline sentence exists exactly once.
-    public static func connectionFriendly(fromLowercased s: String) -> String? {
-        if s.contains("network") || s.contains("offline") || s.contains("connection")
-            || s.contains("timed out") || s.contains("could not connect") || s.contains("internet") {
-            return "Can't reach Volspire. Check your connection and try again."
+        if signature == "forbidden" || signature.hasPrefix("not_authorized") || signature.hasPrefix("not authorized")
+            || signature.hasPrefix("not_your_") || signature.hasPrefix("only_") || signature == "not_a_member" {
+            return "You don't have permission to do that."
         }
-        return nil
+        if signature.hasPrefix("cannot_") || signature.hasPrefix("cannot ") {
+            return "You can't do that with your own account."
+        }
+        return genericMessage
     }
 }
 

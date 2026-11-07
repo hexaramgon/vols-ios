@@ -64,6 +64,12 @@ public final class AuthManager {
     /// `finishOnboarding()` releases the hold and reveals the session.
     public var holdSessionForOnboarding = false
 
+    /// Runs just before a session that wasn't already open becomes
+    /// `.authenticated` — the app's chance to drop any per-user in-memory state
+    /// a late response from the PREVIOUS account wrote after sign-out's reset.
+    /// The response cache is cleared here too, before the flip.
+    public var willOpenAccount: (() -> Void)?
+
     public func setError(_ message: String?) {
         errorMessage = message
     }
@@ -75,8 +81,9 @@ public final class AuthManager {
     }
 
     /// Translates raw Supabase auth errors into actionable, human copy.
-    /// Falls back to the raw message for anything unrecognised.
+    /// Anything unrecognised gets generic copy — SDK text is never shown.
     private func friendly(_ error: Error) -> String {
+        if SupabaseError.isConnectionError(error) { return SupabaseError.offlineMessage }
         let raw = error.localizedDescription
         let lower = raw.lowercased()
         if lower.contains("invalid login credentials") {
@@ -91,16 +98,17 @@ public final class AuthManager {
         if lower.contains("rate limit") || lower.contains("once every") || lower.contains("too many") {
             return "Too many attempts — give it a minute and try again."
         }
-        if let offline = SupabaseError.connectionFriendly(fromLowercased: lower) {
-            return offline
-        }
         if lower.contains("expired") {
             return "That code expired — request a new one."
         }
         if lower.contains("weak password") || lower.contains("password should") {
             return "That password is too weak — try a longer one with a mix of characters."
         }
-        return raw
+        if lower.contains("already registered") || lower.contains("already exists") {
+            return "An account with this email already exists — try signing in."
+        }
+        debugLog("[AuthManager] unmapped auth error: \(raw)")
+        return "Something went wrong. Please try again."
     }
 
     private let client: SupabaseClient
@@ -145,8 +153,35 @@ public final class AuthManager {
     /// foreign key (analytics, push tokens, uploading a track).
     private func resolve(_ session: Session) async {
         let userId = session.lowercasedUserId
+        // A sign-in resolves explicitly AND fires `.signedIn` — both share
+        // one `get_account_status` round-trip instead of running it twice.
+        if let inFlight = resolving, inFlight.userId == userId {
+            return await inFlight.task.value
+        }
+        let token = UUID()
+        let task = Task { await applyAccountStatus(userId: userId) }
+        resolving = (token, userId, task)
+        await task.value
+        if resolving?.token == token { resolving = nil }
+    }
+
+    /// The in-flight `resolve`, shared by concurrent callers for the same user.
+    private var resolving: (token: UUID, userId: String, task: Task<Void, Never>)?
+
+    /// Already resolved for this session's user — a late `.signedIn` event
+    /// after an explicit sign-in finished needs no second status check.
+    private func isResolved(_ session: Session) -> Bool {
+        let userId = session.lowercasedUserId
+        return state == .authenticated(userId: userId) || state == .needsProfile(userId: userId)
+    }
+
+    private func applyAccountStatus(userId: String) async {
         switch await accountStatus() {
         case .active:
+            if state != .authenticated(userId: userId) {
+                await APICache.shared.clear()
+                willOpenAccount?()
+            }
             state = .authenticated(userId: userId)
         case .missing:
             state = .needsProfile(userId: userId)
@@ -174,7 +209,7 @@ public final class AuthManager {
         for await (event, session) in client.auth.authStateChanges {
             switch event {
             case .signedIn:
-                if let session, !holdSessionForOnboarding {
+                if let session, !holdSessionForOnboarding, !isResolved(session) {
                     await resolve(session)
                 }
             case .signedOut:
@@ -311,7 +346,9 @@ public final class AuthManager {
 
     // MARK: - Sign in with Apple
 
-    public func signInWithApple(credential: ASAuthorizationAppleIDCredential) async {
+    /// `nonce` is the one the request was made with (its hash is in the ID
+    /// token) — Supabase checks the two match, so a replayed token fails.
+    public func signInWithApple(credential: ASAuthorizationAppleIDCredential, nonce: AppleSignInNonce) async {
         errorMessage = nil
         guard let identityToken = credential.identityToken,
               let tokenString = String(data: identityToken, encoding: .utf8)
@@ -332,7 +369,8 @@ public final class AuthManager {
             let session = try await client.auth.signInWithIdToken(
                 credentials: .init(
                     provider: .apple,
-                    idToken: tokenString
+                    idToken: tokenString,
+                    nonce: nonce.raw
                 )
             )
             await resolve(session)
@@ -468,9 +506,7 @@ public final class AuthManager {
             }
             return "Couldn't delete your account just now. Please try again."
         } catch {
-            if let offline = SupabaseError.connectionFriendly(fromLowercased: error.localizedDescription.lowercased()) {
-                return offline
-            }
+            if SupabaseError.isConnectionError(error) { return SupabaseError.offlineMessage }
             return "Couldn't delete your account just now. Please try again."
         }
         // Server side is done (the auth user is gone) — the revoke inside

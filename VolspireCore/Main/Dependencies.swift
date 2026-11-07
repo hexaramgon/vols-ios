@@ -30,6 +30,11 @@ class Dependencies: Observable {
     let inboxStore: InboxStore
     let listingsStore: ListingsStore
     let feedStore: FeedStore
+    /// The viewer's saved marketplace packs.
+    let packsStore: PacksStore
+    /// Destructive actions (delete / block) — optimistic across the stores
+    /// above, with a toast; see Stores/ContentActions.swift.
+    let contentActions: ContentActions
 
     init(
         supabaseService: SupabaseService,
@@ -54,15 +59,37 @@ class Dependencies: Observable {
         inboxStore = InboxStore(service: supabaseService)
         listingsStore = ListingsStore(service: supabaseService)
         feedStore = FeedStore(service: supabaseService, storage: storageService)
+        packsStore = PacksStore(service: supabaseService)
         libraryStore.mediaState = mediaState
+        // Track media is private: sign each placeholder right before the
+        // player downloads it (play + read-ahead).
+        mediaPlayer.resolveMediaURL = { url in await StorageService().playableURL(url) }
         playerController.library = libraryStore
         feedStore.social = socialStore
+        contentActions = ContentActions(
+            service: supabaseService,
+            feed: feedStore,
+            library: libraryStore,
+            listings: listingsStore,
+            inbox: inboxStore,
+            social: socialStore,
+            workspace: workspaceStore,
+            mediaState: mediaState,
+            mediaPlayer: mediaPlayer,
+            playerController: playerController
+        )
+        // Sign-out resets on the way out (AppView); this resets again on the
+        // way in, after any late response from the previous account has landed.
+        authManager.willOpenAccount = { [unowned self] in resetForSignOut() }
     }
 }
 
 extension Dependencies {
-    /// Auth-boundary teardown (sign-out): silence and fully clear the player,
-    /// wipe the in-memory media registry, and reset per-user controller state.
+    /// Auth-boundary teardown — runs at sign-out AND again when the next
+    /// account opens (`AuthManager.willOpenAccount`), since an in-flight load
+    /// from the old account can land after the first reset: silence and fully
+    /// clear the player, wipe the in-memory media registry, and reset per-user
+    /// controller state.
     /// Server-response caches are cleared by `AuthManager.signOut` itself;
     /// Kingfisher's image cache stays (covers, avatars — public content).
     func resetForSignOut() {
@@ -76,6 +103,7 @@ extension Dependencies {
         inboxStore.resetForSignOut()
         listingsStore.resetForSignOut()
         feedStore.resetForSignOut()
+        packsStore.resetForSignOut()
     }
 }
 

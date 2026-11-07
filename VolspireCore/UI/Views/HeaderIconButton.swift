@@ -38,7 +38,7 @@ struct HeaderIconButton: View {
                             .offset(x: 2, y: -2)
                     }
                 }
-                .frame(width: 42, height: 42)
+                .frame(width: ViewConst.headerButtonSize, height: ViewConst.headerButtonSize)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)

@@ -90,7 +90,7 @@ struct PlayerAboutModal: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 30, height: 30)
                         .background(Color.white.opacity(0.1), in: Circle())
-                        .contentShape(.rect)
+                        .minimumHitArea(for: 30)
                 }
                 .buttonStyle(.plain)
             }

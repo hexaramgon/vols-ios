@@ -10,6 +10,7 @@
 
 import AuthenticationServices
 import DesignSystem
+import Services
 import SwiftUI
 import UIKit
 
@@ -137,7 +138,7 @@ struct AuthSecureRow: View {
                 LucideIcon(revealed ? .eyeOff : .eye, .lg)
                     .foregroundStyle(Color.vText3)
                     .frame(width: 32, height: 32)
-                    .contentShape(.rect)
+                    .minimumHitArea(for: 32)
             }
             .buttonStyle(.plain)
         }
@@ -173,33 +174,62 @@ struct AuthCTA: View {
 
 // MARK: - Provider buttons (flat, matching the field cards)
 
+/// A tap-only control for the provider buttons. A SwiftUI `Button` fires on
+/// any release inside it — so a sideways swipe across these full-width rows
+/// (including the left-edge back swipe) opened Google / Apple sign-in. A tap
+/// gesture fails as soon as the finger moves, so only a real tap triggers;
+/// the press-down look (CardPress) is kept via a pressing tracker that also
+/// cancels on movement.
+private struct TapOnly: ViewModifier {
+    let enabled: Bool
+    let action: () -> Void
+    @GestureState private var pressed = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(pressed && enabled ? 0.97 : 1)
+            .opacity(pressed && enabled ? 0.92 : 1)
+            .animation(.easeOut(duration: 0.15), value: pressed)
+            .onTapGesture { if enabled { action() } }
+            // Press look only — runs alongside the tap (never competes with
+            // it) and lets go once the finger moves.
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: .infinity, maximumDistance: 8)
+                    .updating($pressed) { current, state, _ in state = current }
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { if enabled { action() } }
+    }
+}
+
 /// Custom "Continue with Apple" — official wording + logo per the HIG's
 /// custom-button allowance; flat dark style to match the page.
 struct AppleAuthButton: View {
     let label: String
-    let onCredential: (ASAuthorizationAppleIDCredential) -> Void
+    /// The credential plus the nonce its request carried (pass both to
+    /// `AuthManager.signInWithApple`).
+    let onCredential: (ASAuthorizationAppleIDCredential, AppleSignInNonce) -> Void
     let onError: (Error) -> Void
 
     @State private var coordinator = AppleSignInCoordinator()
 
     var body: some View {
-        Button {
-            coordinator.start(onCredential: onCredential, onError: onError)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "apple.logo")
-                    .font(.system(size: 17, weight: .medium))
-                    .padding(.bottom, 2) // optical centre — the glyph sits low
-                Text(label)
-                    .font(.appBodyMedium)
-            }
-            .foregroundStyle(Color.vText)
-            .frame(maxWidth: .infinity)
-            .frame(height: 52)
-            .background(Color.vControl, in: Capsule())
-            .contentShape(Capsule())
+        HStack(spacing: 10) {
+            Image(systemName: "apple.logo")
+                .font(.system(size: 17, weight: .medium))
+                .padding(.bottom, 2) // optical centre — the glyph sits low
+            Text(label)
+                .font(.appBodyMedium)
         }
-        .buttonStyle(CardPress())
+        .foregroundStyle(Color.vText)
+        .frame(maxWidth: .infinity)
+        .frame(height: 52)
+        .background(Color.vControl, in: Capsule())
+        .contentShape(Capsule())
+        .modifier(TapOnly(enabled: true) {
+            coordinator.start(onCredential: onCredential, onError: onError)
+        })
     }
 }
 
@@ -210,39 +240,45 @@ struct GoogleAuthButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image("google-logo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 17, height: 17)
-                Text(isLoading ? "Signing in…" : label)
-                    .font(.appBodyMedium)
-                    .foregroundStyle(Color.vText)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 52)
-            .background(Color.vControl, in: Capsule())
-            .contentShape(Capsule())
+        HStack(spacing: 10) {
+            Image("google-logo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 17, height: 17)
+            Text(isLoading ? "Signing in…" : label)
+                .font(.appBodyMedium)
+                .foregroundStyle(Color.vText)
         }
-        .buttonStyle(CardPress())
-        .disabled(isLoading)
+        .frame(maxWidth: .infinity)
+        .frame(height: 52)
+        .background(Color.vControl, in: Capsule())
+        .contentShape(Capsule())
+        .opacity(isLoading ? 0.6 : 1)
+        .modifier(TapOnly(enabled: !isLoading, action: action))
     }
 }
 
 /// Drives the native Apple ID authorization sheet for `AppleAuthButton`.
 @MainActor
 final class AppleSignInCoordinator: NSObject {
-    private var onCredential: ((ASAuthorizationAppleIDCredential) -> Void)?
+    private var onCredential: ((ASAuthorizationAppleIDCredential, AppleSignInNonce) -> Void)?
     private var onError: ((Error) -> Void)?
+    /// This attempt's nonce — a fresh one per request, handed back with the
+    /// credential it was issued for.
+    private var nonce: AppleSignInNonce?
 
     func start(
-        onCredential: @escaping (ASAuthorizationAppleIDCredential) -> Void,
+        onCredential: @escaping (ASAuthorizationAppleIDCredential, AppleSignInNonce) -> Void,
         onError: @escaping (Error) -> Void
     ) {
         self.onCredential = onCredential
         self.onError = onError
+        let nonce = AppleSignInNonce()
+        self.nonce = nonce
         let request = ASAuthorizationAppleIDProvider().createRequest()
+        // Apple embeds this hash in the ID token; Supabase verifies it against
+        // the raw nonce sent with the token (anti-replay).
+        request.nonce = nonce.hashed
         // Both scopes are load-bearing. `.email` gives Supabase the email claim
         // in the ID token to create/link the auth user; `.fullName` is what the
         // profile step seeds its username from, so a first-time Apple sign-in
@@ -266,8 +302,9 @@ extension AppleSignInCoordinator: ASAuthorizationControllerDelegate, ASAuthoriza
         didCompleteWithAuthorization authorization: ASAuthorization
     ) {
         MainActor.assumeIsolated {
-            if let credential = authorization.credential as? ASAuthorizationAppleIDCredential {
-                onCredential?(credential)
+            if let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+               let nonce {
+                onCredential?(credential, nonce)
             }
         }
     }

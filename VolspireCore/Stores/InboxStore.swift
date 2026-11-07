@@ -90,6 +90,15 @@ final class InboxStore {
     /// The conversation list, newest first.
     private(set) var conversations: [ConversationItem] = []
     private(set) var loadState: LoadState = .idle
+    /// The server has conversations past the loaded ones (the last page came
+    /// back full) — list footers fetch the next page as they scroll into view.
+    private(set) var hasMoreConversations = false
+    private var isLoadingMore = false
+    /// The last next-page fetch failed — the footer offers a retry instead of
+    /// spinning.
+    private(set) var pageLoadFailed = false
+    /// Conversations per page (the RPC caps a page at 100).
+    static let pageSize = 40
     /// Unread counts from `get_unread_counts` — the only fetch path for them.
     private(set) var unreadMessages = 0
     private(set) var unreadNotifications = 0
@@ -113,6 +122,7 @@ final class InboxStore {
         conversationsTask = nil
         conversations = []
         loadState = .idle
+        hasMoreConversations = false
         unreadMessages = 0
         unreadNotifications = 0
         draftsByConvo = [:]
@@ -130,17 +140,71 @@ final class InboxStore {
         conversationsTask = nil
     }
 
+    /// A user was blocked — their threads leave the inbox now.
+    func removeConversations(with userId: String) {
+        let id = key(userId)
+        conversations.removeAll { $0.otherUserId.map(key) == id }
+    }
+
     /// Always refetches (the RPC is uncached) — pull-to-refresh + foreground.
     func refreshConversations() async {
         await fetchConversations()
     }
 
+    /// The DM thread with `userId` (e.g. the collab-request thread a
+    /// notification points at). Refetches once on a miss — the thread may be
+    /// newer than the loaded list.
+    func dmConversation(with userId: String) async -> ConversationItem? {
+        await loadConversationsIfNeeded()
+        let find = { [self] in
+            conversations.first { $0.type == "dm" && $0.otherUserId.map(key) == key(userId) }
+        }
+        if let hit = find() { return hit }
+        await refreshConversations()
+        // An older thread lives past the loaded pages — page until it shows up.
+        while find() == nil, hasMoreConversations {
+            let before = conversations.count
+            await loadMoreConversations()
+            if conversations.count == before { break }   // failed / nothing new
+        }
+        return find()
+    }
+
+    /// Appends the next page. Offset paging over a newest-first list: activity
+    /// since the last fetch shifts the window, so a page can re-deliver rows
+    /// already shown — deduped by id.
+    func loadMoreConversations() async {
+        guard hasMoreConversations, !isLoadingMore else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        pageLoadFailed = false
+        do {
+            let rows = try await service.getUserConversations(limit: Self.pageSize, offset: conversations.count)
+            hasMoreConversations = rows.count == Self.pageSize
+            let me = service.currentUserId
+            let existing = Set(conversations.map(\.id))
+            conversations = (conversations + rows.map { Self.map($0, me: me) }.filter { !existing.contains($0.id) })
+                .sorted { ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast) }
+        } catch {
+            debugLog("[InboxStore] conversations page: \(error)")
+            pageLoadFailed = true
+        }
+    }
+
     private func fetchConversations() async {
         do {
-            let rows = try await service.getUserConversations(limit: 40, offset: 0)
+            let rows = try await service.getUserConversations(limit: Self.pageSize, offset: 0)
             let me = service.currentUserId
-            conversations = rows
-                .map { Self.map($0, me: me) }
+            let page = rows.map { Self.map($0, me: me) }
+            // A refresh replaces the first page but keeps older pages already
+            // loaded (rows past the page's oldest that it didn't re-deliver).
+            let fresh = Set(page.map(\.id))
+            let floor = page.last?.lastMessageAt ?? .distantPast
+            let olderKept = rows.count == Self.pageSize
+                ? conversations.filter { !fresh.contains($0.id) && ($0.lastMessageAt ?? .distantPast) < floor }
+                : []
+            if olderKept.isEmpty { hasMoreConversations = rows.count == Self.pageSize }
+            conversations = (page + olderKept)
                 .sorted { ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast) }
             loadState = .loaded
         } catch {

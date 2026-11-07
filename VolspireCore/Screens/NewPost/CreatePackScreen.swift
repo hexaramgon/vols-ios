@@ -2,9 +2,11 @@
 //  CreatePackScreen.swift
 //  Volspire
 //
-//  Pack upload form, mirroring the web's pack-create page: cover + type +
-//  gradient, basic info, tags, files with preview selection, visibility,
-//  with the pinned Publish CTA at the bottom.
+//  Pack upload / edit, as a mobile composer (same pieces as a track,
+//  release or listing): big cover, the type as a chip row, the name + story
+//  written on the page, price / visibility rows, the files and preview picks
+//  as cards, tags — and the pinned Publish CTA. A Workspace folder can open
+//  it prefilled ("Publish as pack"). A cover-less pack gets its name mesh.
 //
 
 import DesignSystem
@@ -14,21 +16,21 @@ import UniformTypeIdentifiers
 
 struct CreatePackScreen: View {
     @State var viewModel: CreatePackViewModel
+    /// A Workspace folder's files to start with, applied once.
+    var prefill: PackPrefill? = nil
+    @State private var prefillApplied = false
+    @State private var showVisibility = false
     @Environment(\.dismiss) private var dismiss
     @State private var showCoverPicker = false
     @State private var showFilePicker = false
     @State private var selectedPhoto: PhotosPickerItem?
+    /// A freshly-picked cover awaiting crop in the full-screen cropper.
+    @State private var coverCropTarget: CropTarget?
     @FocusState private var priceFieldFocused: Bool
 
     private let tagSuggestions = [
         "808", "hard", "dark", "melodic", "ambient", "vinyl",
         "crispy", "warm", "groovy", "lo-fi", "afro", "soulful",
-    ]
-
-    private let typeColumns = [
-        GridItem(.flexible(), spacing: 8),
-        GridItem(.flexible(), spacing: 8),
-        GridItem(.flexible(), spacing: 8),
     ]
 
     private var isUploading: Bool {
@@ -41,17 +43,41 @@ struct CreatePackScreen: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 28) {
-                    identitySection
-                    basicInfoSection
-                    tagsSection
-                    // Files aren't editable via update_pack — hide when editing.
-                    if !viewModel.isEditing {
+                    if viewModel.isEditing {
+                        // Edit keeps the Edit Track layout: section headings
+                        // and labeled fields. (Files aren't editable via
+                        // update_pack, so they don't show here.)
+                        UploadCoverSection(
+                            image: viewModel.coverImage,
+                            existingURL: viewModel.existingCoverURL,
+                            caption: "Optional. Without one, the pack gets art made from its name."
+                        ) { showCoverPicker = true }
+                        editTypeSection
+                        editDetailsSection
+                        tagsSection
+                        editVisibilitySection
+                    } else {
+                        ComposerCoverHero(
+                            image: viewModel.coverImage,
+                            existingURL: viewModel.existingCoverURL,
+                            caption: "Optional — without one, the pack gets art made from its name"
+                        ) { showCoverPicker = true }
+                        typeSection
+                        VStack(alignment: .leading, spacing: 10) {
+                            ComposerTitleField(text: $viewModel.name, prompt: "Pack name", limit: 80)
+                            ComposerStoryField(
+                                text: $viewModel.description,
+                                prompt: "What's in it — the sounds, the vibe, what makes it special…",
+                                limit: 600
+                            )
+                        }
+                        detailRows
                         filesSection
                         if viewModel.files.contains(where: \.isAudio) {
                             previewSamplesSection
                         }
+                        tagsSection
                     }
-                    visibilitySection
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
@@ -63,7 +89,8 @@ struct CreatePackScreen: View {
                 bottomBar
             }
         }
-        .gradientBackground()
+        // Flat app-base canvas — same as the upload flow.
+        .background(Color.vBase.ignoresSafeArea())
         .photosPicker(isPresented: $showCoverPicker, selection: $selectedPhoto, matching: .images)
         .fileImporter(
             isPresented: $showFilePicker,
@@ -78,14 +105,43 @@ struct CreatePackScreen: View {
                    let data = try? await newValue.loadTransferable(type: Data.self),
                    let image = UIImage(data: data)
                 {
-                    viewModel.handleCoverImage(image)
+                    coverCropTarget = CropTarget(image: image.normalizedUp())
                 }
             }
+        }
+        .fullScreenCover(item: $coverCropTarget) { target in
+            ImageCropperView(
+                image: target.image,
+                onCrop: { data in
+                    if let cropped = UIImage(data: data) { viewModel.handleCoverImage(cropped) }
+                    coverCropTarget = nil
+                },
+                onCancel: { coverCropTarget = nil }
+            )
         }
         .onChange(of: viewModel.uploadState) { _, newValue in
             if newValue == .success {
                 dismiss()
             }
+        }
+        .task {
+            guard let prefill, !prefillApplied else { return }
+            prefillApplied = true
+            viewModel.applyPrefill(prefill)
+        }
+        .sheet(isPresented: $showVisibility) {
+            ChoiceSheet(
+                title: "Visibility",
+                icon: TrackVisibility(viewModel.visibility).icon,
+                choices: [
+                    SheetChoice(icon: TrackVisibility.public.icon, title: "Public",
+                                subtitle: "In the marketplace and on your profile",
+                                selected: viewModel.visibility == "public") { viewModel.visibility = "public" },
+                    SheetChoice(icon: TrackVisibility.private.icon, title: "Private",
+                                subtitle: "Hidden from the marketplace — flip it public later from the pack page",
+                                selected: viewModel.visibility != "public") { viewModel.visibility = "private" },
+                ]
+            )
         }
     }
 
@@ -111,90 +167,111 @@ struct CreatePackScreen: View {
         }
     }
 
-    // MARK: - Cover & identity
+    // MARK: - Type · picks
 
-    private var identitySection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            UploadSectionDivider("Cover & Identity")
+    private var typeSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ComposerHeading(title: "Type")
+            ComposerChipRow(
+                chips: packTypes.map { ComposerChip(id: $0.id, label: $0.id, icon: $0.icon) },
+                selected: viewModel.packType
+            ) { viewModel.packType = $0 }
+        }
+    }
 
-            HStack(alignment: .top, spacing: 16) {
-                Button {
-                    showCoverPicker = true
-                } label: {
-                    UploadCoverBox(image: viewModel.coverImage)
+    /// Price (only when packs can be paid) and who can see it.
+    private var detailRows: some View {
+        ComposerRowGroup {
+            if !FeatureFlags.freePacksOnly {
+                HStack(spacing: 12) {
+                    LucideIcon(.tag, .md).foregroundStyle(Color.vText2)
+                    Text("Price").font(.appSubheadlineMedium).foregroundStyle(Color.vText)
+                    Spacer(minLength: 8)
+                    Text("$").font(.appSubheadline).foregroundStyle(Color.vText3)
+                    TextField("", text: $viewModel.price.decimalFiltered(),
+                              prompt: Text("Free").foregroundStyle(Color.vText3))
+                        .font(.appSubheadline)
+                        .foregroundStyle(Color.vText)
+                        .multilineTextAlignment(.trailing)
+                        .keyboardType(.decimalPad)
+                        .focused($priceFieldFocused)
+                        .doneKeyboardToolbar($priceFieldFocused)
+                        .frame(maxWidth: 90)
                 }
-                .buttonStyle(.plain)
-
-                UploadCoverCaption(
-                    text: "Optional cover image. When uploaded it replaces the gradient on tiles and the pack page. Square, at least 1000×1000.",
-                    hasCover: viewModel.coverImage != nil
-                ) {
-                    viewModel.clearCover()
-                }
+                .padding(.horizontal, 16)
+                .frame(height: 52)
+                SettingsDivider()
             }
+            ComposerRow(
+                icon: viewModel.visibility == "public" ? TrackVisibility.public.icon : TrackVisibility.private.icon,
+                title: "Visibility",
+                value: viewModel.visibility == "public" ? "Public" : "Private"
+            ) { showVisibility = true }
+        }
+    }
 
+    // MARK: - Edit layout (like Edit Track)
+
+    private let typeColumns = [
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+        GridItem(.flexible(), spacing: 8),
+    ]
+
+    private var editTypeSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            UploadSectionDivider("Type")
             LazyVGrid(columns: typeColumns, spacing: 8) {
                 ForEach(packTypes) { type in
-                    UploadTypeTile(
-                        label: type.id,
-                        icon: type.icon,
-                        selected: viewModel.packType == type.id
-                    ) {
+                    UploadTypeTile(label: type.id, icon: type.icon,
+                                   selected: viewModel.packType == type.id) {
                         viewModel.packType = type.id
                     }
                 }
             }
+        }
+    }
 
-            // The cover overrides the gradient everywhere, so the picker
-            // hides once one is set (mirrors the web).
-            if viewModel.coverImage == nil {
-                UploadGradientPicker(options: packGradients, value: $viewModel.gradient)
+    private var editDetailsSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            UploadSectionDivider("Details")
+            UploadTextField(label: "Name", text: $viewModel.name, prompt: "Pack name", limit: 80)
+            if !FeatureFlags.freePacksOnly {
+                VStack(alignment: .leading, spacing: 8) {
+                    UploadFieldLabel("Price")
+                    HStack(spacing: 6) {
+                        Text("$").font(.appBody).foregroundStyle(Color.vText3)
+                        TextField("", text: $viewModel.price.decimalFiltered(),
+                                  prompt: Text("Leave blank or 0 for free").foregroundStyle(Color.vText3))
+                            .font(.appBody)
+                            .foregroundStyle(Color.vText)
+                            .keyboardType(.decimalPad)
+                            .focused($priceFieldFocused)
+                            .doneKeyboardToolbar($priceFieldFocused)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 13)
+                    .uploadFieldShell()
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                UploadFieldLabel("Description (optional)")
+                UploadDescriptionField(
+                    text: $viewModel.description,
+                    prompt: "What's in it — the sounds, the vibe, what makes it special…",
+                    limit: 600
+                )
             }
         }
     }
 
-    // MARK: - Basic info
-
-    private var basicInfoSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            UploadSectionDivider("Basic Info")
-
-            TextField(
-                "",
-                text: $viewModel.name,
-                prompt: Text("Pack name").foregroundStyle(Color.vText3)
-            )
-            .font(.appBody)
-            .foregroundStyle(Color.vText)
-            .submitLabel(.done)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .uploadFieldShell()
-            .charLimited($viewModel.name, 80)
-
-            HStack(spacing: 6) {
-                Text("$")
-                    .font(.appBody)
-                    .foregroundStyle(Color.vText3)
-                TextField(
-                    "",
-                    text: $viewModel.price.decimalFiltered(),
-                    prompt: Text("Price (leave blank or 0 for free)").foregroundStyle(Color.vText3)
-                )
-                .font(.appBody)
-                .foregroundStyle(Color.vText)
-                .keyboardType(.decimalPad)
-                .focused($priceFieldFocused)
-                .doneKeyboardToolbar($priceFieldFocused)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .uploadFieldShell()
-
-            UploadDescriptionField(
-                text: $viewModel.description,
-                prompt: "Describe what's in the pack: sounds, vibe, what makes it special…",
-                limit: 600
+    private var editVisibilitySection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            UploadSectionDivider("Privacy")
+            UploadVisibilityPicker(
+                visibility: $viewModel.visibility,
+                publicHint: "Public: in the marketplace and on your profile.",
+                privateHint: "Private: hidden from the marketplace. You can flip it public later from the pack page."
             )
         }
     }
@@ -202,161 +279,117 @@ struct CreatePackScreen: View {
     // MARK: - Tags
 
     private var tagsSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            UploadSectionDivider("Tags")
+        VStack(alignment: .leading, spacing: viewModel.isEditing ? 14 : 12) {
+            if viewModel.isEditing {
+                UploadSectionDivider("Tags")
+            } else {
+                ComposerHeading(title: "Tags")
+            }
             UploadTagInput(tags: $viewModel.tags, suggestions: tagSuggestions)
-            Text("Tags help buyers find your pack.")
-                .font(.appCaption)
-                .foregroundStyle(Color.vText3)
+            Text("Tags help people find your pack.")
+                .font(.appFootnote)
+                .foregroundStyle(Color.vText2)
         }
     }
 
     // MARK: - Files
 
+    /// The files as one card of rows (name, size, ×), "Add files" its last
+    /// row; zipped on publish.
     private var filesSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            UploadSectionDivider("Files")
+        VStack(alignment: .leading, spacing: 12) {
+            ComposerHeading(title: "Files", trailing: viewModel.files.isEmpty ? nil : "\(viewModel.files.count)")
 
-            Button {
-                showFilePicker = true
-            } label: {
-                VStack(spacing: 14) {
-                    LucideIcon(.upload, .xl)
-                        .foregroundStyle(Color.vText3)
-                    VStack(spacing: 4) {
-                        Text("Tap to choose files")
-                            .font(.appCallout)
+            ComposerRowGroup {
+                ForEach(viewModel.files) { file in
+                    if file.id != viewModel.files.first?.id { SettingsDivider() }
+                    HStack(spacing: 12) {
+                        LucideIcon(file.isAudio ? .fileAudio : .file, .md)
                             .foregroundStyle(Color.vText2)
-                        Text("WAV, AIFF, MIDI, FXP, ALS, FLP, MP3, ZIP · select multiple at once")
-                            .font(.appFootnote)
-                            .foregroundStyle(Color.vText3)
-                            .multilineTextAlignment(.center)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 32)
-                .background(
-                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                        .fill(Color.vField)
-                )
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-
-            if !viewModel.files.isEmpty {
-                VStack(spacing: 0) {
-                    ForEach(viewModel.files) { file in
-                        HStack(spacing: 12) {
-                            LucideIcon(.fileAudio, .sm)
-                                .foregroundStyle(Color.vText3)
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(file.name)
-                                .font(.appFootnote)
-                                .foregroundStyle(Color.vText2)
+                                .font(.appFont.fileTitle)
+                                .foregroundStyle(Color.vTextRow)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            Spacer()
                             Text(UploadClipRows.formatBytes(file.data.count))
-                                .font(.appCaption)
-                                .foregroundStyle(Color.vText3)
-                            Button {
-                                viewModel.removeFile(file.id)
-                            } label: {
-                                LucideIcon(.x, .xs)
-                                    .foregroundStyle(Color.vText3)
-                                    .frame(width: 32, height: 32)
-                                    .contentShape(.rect)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.leading, 12)
-                        .padding(.trailing, 4)
-                        .padding(.vertical, 4)
-                        if file.id != viewModel.files.last?.id {
-                            Rectangle().fill(Color.vBorder).frame(height: 1)
-                        }
-                    }
-                }
-                .uploadFieldShell()
-
-                HStack(alignment: .top, spacing: 8) {
-                    LucideIcon(.triangleAlert, .xs)
-                        .foregroundStyle(Color.vText3)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") selected, packaged into a .zip on publish")
-                            .font(.appFootnote)
-                            .foregroundStyle(Color.vText3)
-                        if !viewModel.formats.isEmpty {
-                            Text("Formats: \(viewModel.formats.joined(separator: ", "))")
-                                .font(.appCaption)
+                                .font(.appFont.fileSubtitle)
                                 .foregroundStyle(Color.vText3)
                         }
+                        Spacer(minLength: 8)
+                        Button {
+                            viewModel.removeFile(file.id)
+                        } label: {
+                            LucideIcon(.x, .md)
+                                .foregroundStyle(Color.vText2)
+                                .frame(width: 32, height: 32)
+                                .minimumHitArea(for: 32)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Remove \(file.name)")
                     }
+                    .padding(.leading, 16)
+                    .padding(.trailing, 8)
+                    .padding(.vertical, 10)
                 }
+                if !viewModel.files.isEmpty { SettingsDivider() }
+                ComposerAddRow(
+                    title: viewModel.files.isEmpty ? "Add files" : "Add more files",
+                    trailing: viewModel.files.isEmpty ? "Files or iCloud Drive" : nil
+                ) { showFilePicker = true }
             }
+
+            Text(viewModel.files.isEmpty
+                ? "WAV, AIFF, MIDI, presets, project files or a ZIP — pick several at once."
+                : "Zipped on publish\(viewModel.formats.isEmpty ? "" : " · \(viewModel.formats.joined(separator: ", "))")")
+                .font(.appFootnote)
+                .foregroundStyle(Color.vText2)
         }
     }
 
     // MARK: - Preview samples
 
+    /// Up to 5 audio files people can play before downloading — a check per
+    /// row in one card.
     private var previewSamplesSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            UploadSectionDivider("Preview Samples")
-
-            Text("Select up to 5 audio files buyers can listen to before purchasing. \(viewModel.previewCount)/5 selected")
-                .font(.appFootnote)
-                .foregroundStyle(Color.vText2)
-
-            VStack(spacing: 0) {
-                let audioFiles = viewModel.files.filter(\.isAudio)
+        VStack(alignment: .leading, spacing: 12) {
+            ComposerHeading(title: "Preview samples", trailing: "\(viewModel.previewCount)/5")
+            let audioFiles = viewModel.files.filter(\.isAudio)
+            ComposerRowGroup {
                 ForEach(audioFiles) { file in
+                    if file.id != audioFiles.first?.id { SettingsDivider() }
                     let disabled = viewModel.previewCount >= 5 && !file.isPreview
                     Button {
+                        Haptics.selection()
                         viewModel.togglePreview(file.id)
                     } label: {
                         HStack(spacing: 12) {
                             Text(file.name)
-                                .font(.appFootnote)
-                                .foregroundStyle(Color.vText2)
+                                .font(.appFont.fileTitle)
+                                .foregroundStyle(Color.vTextRow)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            Spacer()
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(file.isPreview ? Color.vInverse : Color.vControlActive)
-                                if file.isPreview {
-                                    LucideIcon(.check, .xs)
-                                        .foregroundStyle(Color.vOnInverse)
-                                }
-                            }
-                            .frame(width: 22, height: 22)
+                            Spacer(minLength: 8)
+                            LucideIcon(.check, .xs)
+                                .foregroundStyle(file.isPreview ? Color.vOnInverse : Color.clear)
+                                .frame(width: 22, height: 22)
+                                .background(file.isPreview ? Color.vInverse : Color.vControlActive,
+                                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 11)
+                        .padding(.horizontal, 16)
+                        .frame(height: 48)
                         .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                     .disabled(disabled)
                     .opacity(disabled ? 0.4 : 1)
-                    if file.id != audioFiles.last?.id {
-                        Rectangle().fill(Color.vBorder).frame(height: 1)
-                    }
+                    .accessibilityAddTraits(file.isPreview ? .isSelected : [])
                 }
             }
-            .uploadFieldShell()
+            Text("Pick up to 5 people can play before they download.")
+                .font(.appFootnote)
+                .foregroundStyle(Color.vText2)
         }
     }
 
-    // MARK: - Visibility
-
-    private var visibilitySection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            UploadSectionDivider("Visibility")
-
-            UploadVisibilityPicker(
-                visibility: $viewModel.visibility,
-                publicHint: "Public: appears in the marketplace and on your profile.",
-                privateHint: "Private: hidden from the marketplace. You can flip it public later from the pack page."
-            )
-        }
-    }
 }

@@ -11,18 +11,19 @@ import Observation
 import Services
 import SharedUtilities
 
-/// The notification toggles surfaced in Settings (mirrors the web's
-/// `notificationItems`). `messages` is preserved by the RPC but not shown here.
+/// The notification toggles surfaced in Settings — only ones a push actually
+/// checks (notify_activity_targets / notify_message_targets). `shares` and
+/// `uploads` exist in the table but nothing pushes for them, so they're not
+/// shown; their values are still round-tripped.
 enum NotificationPref: String, CaseIterable, Identifiable {
     case newFollowers = "new_followers"
     case likes
     case saves
     case comments
-    case shares
-    case purchases
-    case uploads
+    case messages
     case collaborations
     case folders
+    case purchases
 
     var id: String { rawValue }
 
@@ -41,9 +42,8 @@ enum NotificationPref: String, CaseIterable, Identifiable {
         case .likes: "Likes"
         case .saves: "Saves"
         case .comments: "Comments"
-        case .shares: "Shares"
+        case .messages: "Messages"
         case .purchases: "Purchases"
-        case .uploads: "New uploads"
         case .collaborations: "Collaborations"
         case .folders: "Folders"
         }
@@ -55,9 +55,8 @@ enum NotificationPref: String, CaseIterable, Identifiable {
         case .likes: "When someone likes your track"
         case .saves: "When someone saves your track"
         case .comments: "When someone comments on your posts"
-        case .shares: "When someone shares your track"
+        case .messages: "When someone messages you or responds to your listing"
         case .purchases: "When someone buys a track, pack, or books a service"
-        case .uploads: "When an artist you follow uploads new music"
         case .collaborations: "When someone wants to collaborate"
         case .folders: "When you're added to or shared a folder"
         }

@@ -22,8 +22,9 @@ struct ProfileTrack: Identifiable {
     let coverURL: URL?
     let audioURL: URL?
     let streams: Int
-    /// Own-profile rows surface a lock when the track isn't public.
-    let isPrivate: Bool
+    /// Own-profile rows mark a track that isn't public (private / unlisted).
+    let visibility: TrackVisibility
+    var isPrivate: Bool { visibility == .private }
 }
 
 /// A track owned by another artist that credits this profile's user ("Featured On").
@@ -51,7 +52,6 @@ struct UserPack: Identifiable {
     let fileCount: Int?
     let downloads: Int
     let coverURL: URL?
-    let gradient: String?
     let isPublished: Bool
 
     var priceLabel: String { price.priceLabel(free: true) }
@@ -169,8 +169,6 @@ final class ProfileScreenViewModel {
     var trackOptionsTrack: ProfileTrack? = nil
     /// Non-nil once `startEditingTrack` resolves — drives the edit fullScreenCover.
     var editingTrackDetail: ApiTrackDetail? = nil
-    var showDeleteTrackConfirm = false
-    var pendingDeleteTrackId: String? = nil
 
     var playerState: MediaPlayerState = .paused(media: .none)
     var cancellables = Set<AnyCancellable>()
@@ -200,7 +198,7 @@ final class ProfileScreenViewModel {
             apply(try await supabaseService.getUserProfile(userId: userId))
             loadingState = .loaded
         } catch {
-            loadingState = .error(error.localizedDescription)
+            loadingState.fail(error, ifEmpty: true)
         }
     }
 
@@ -248,9 +246,9 @@ final class ProfileScreenViewModel {
             id: track.id,
             title: track.title,
             coverURL: storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) },
-            audioURL: storageService.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) },
+            audioURL: storageService.trackMediaURL(track.audioUrl),
             streams: track.streams ?? 0,
-            isPrivate: (track.visibility ?? "public") != "public"
+            visibility: TrackVisibility(track.visibility)
         )
     }
 
@@ -276,7 +274,7 @@ final class ProfileScreenViewModel {
                     artist: row.artist ?? "",
                     artistId: row.artistId,
                     coverURL: storageService.resolveTrackUrl(row.coverUrl).flatMap { URL(string: $0) },
-                    audioURL: storageService.resolveTrackUrl(row.audioUrl).flatMap { URL(string: $0) },
+                    audioURL: storageService.trackMediaURL(row.audioUrl),
                     streams: row.streams ?? 0,
                     role: row.role ?? "",
                     isUnavailable: row.isUnavailable ?? false,
@@ -297,6 +295,18 @@ final class ProfileScreenViewModel {
         } catch {
             debugLog("[ProfileVM] Failed to load listings: \(error)")
         }
+    }
+
+    /// The packs the profile's Marketplace tab shows, marketplace-shaped —
+    /// free ones only while the paid marketplace is off (your own paid
+    /// drafts still show to you).
+    func marketplacePacks(isOwnProfile: Bool) -> [ApiMarketplacePack] {
+        apiPacks
+            .filter { !FeatureFlags.freePacksOnly || isOwnProfile || ($0.price ?? 0) <= 0 }
+            .map {
+                $0.asMarketplacePack(creatorUserId: profileUserId, creatorUsername: username,
+                                     creatorImageUrl: profileImageURL?.absoluteString)
+            }
     }
 
     /// Builds a marketplace pack/service (for navigating to its detail) from the
@@ -332,7 +342,6 @@ final class ProfileScreenViewModel {
                     fileCount: row.fileCount,
                     downloads: row.downloads ?? 0,
                     coverURL: storageService.resolveTrackUrl(row.coverUrl).flatMap { URL(string: $0) },
-                    gradient: row.gradient,
                     isPublished: row.isPublished ?? true
                 )
             }
@@ -378,7 +387,7 @@ final class ProfileScreenViewModel {
                 coverURL: storageService.resolveTrackUrl(detail.coverUrl).flatMap { URL(string: $0) },
                 audioURL: t.audioURL,
                 streams: t.streams,
-                isPrivate: (detail.visibility ?? "public") != "public"
+                visibility: TrackVisibility(detail.visibility)
             )
         } catch {
             debugLog("[ProfileVM] Failed to refresh track: \(error)")
@@ -386,17 +395,12 @@ final class ProfileScreenViewModel {
     }
 
     /// Soft-deletes a track and drops it from the local list.
-    func deleteTrack(trackId: String) async -> Bool {
-        guard let userId = profileUserId else { return false }
-        do {
-            try await supabaseService.deleteTrack(trackId: trackId, userId: userId)
-            tracks.removeAll { $0.id == trackId }
-            trackCount = max(0, trackCount - 1)
-            return true
-        } catch {
-            debugLog("[ProfileVM] Failed to delete track: \(error)")
-            return false
-        }
+    /// Optimistic delete (ContentActions does the RPC): drop it from this
+    /// profile's list and count now.
+    func removeTrackLocally(_ trackId: String) {
+        guard let index = tracks.firstIndex(where: { $0.id.caseInsensitiveCompare(trackId) == .orderedSame }) else { return }
+        tracks.remove(at: index)
+        trackCount = max(0, trackCount - 1)
     }
 
     /// Toggles a track's visibility (the "Hide"/"Unhide" quick action).
@@ -409,7 +413,7 @@ final class ProfileScreenViewModel {
                 let t = tracks[idx]
                 tracks[idx] = ProfileTrack(
                     id: t.id, title: t.title, coverURL: t.coverURL, audioURL: t.audioURL,
-                    streams: t.streams, isPrivate: hide
+                    streams: t.streams, visibility: hide ? .private : .public
                 )
             }
             return true
@@ -494,18 +498,26 @@ final class ProfileScreenViewModel {
         collabError = nil
         defer { isSendingCollab = false }
         do {
-            try await supabaseService.sendCollabRequest(
+            let convoId = try await supabaseService.sendCollabRequest(
                 targetId: userId,
                 message: trimmed,
                 trackIds: trackIds.isEmpty ? nil : trackIds
             )
             seededCollabStatus = "pending"
-            social?.setCollabStatus("pending", userId: userId)
+            seededCollabConvoId = convoId
+            social?.setCollabStatus("pending", userId: userId, convoId: convoId)
             collabRequestSent = true
+            Haptics.success()
             return true
         } catch {
             let text = "\(error)".lowercased()
-            if text.contains("collab_rate_limited") {
+            if text.contains("collab_pending") {
+                // A request is already open between you — reflect it so the
+                // button flips to Pending (→ the thread) instead of Collab.
+                seededCollabStatus = "pending"
+                social?.setCollabStatus("pending", userId: userId, convoId: nil)
+                collabError = "You already have a collab request pending with this artist."
+            } else if text.contains("collab_rate_limited") {
                 collabError = "You can only send one collab request to this artist per week."
             } else if text.contains("attachment") {
                 collabError = "A collab request can attach at most 3 items."
@@ -514,21 +526,6 @@ final class ProfileScreenViewModel {
             }
             debugLog("[ProfileVM] sendCollab failed: \(error)")
             return false
-        }
-    }
-
-    /// Ends an accepted collaboration: the backend deletes the relationship and
-    /// archives the pair's DM for this user; locally the Collab button and the
-    /// hero badge reset immediately.
-    func removeCollaborator(userId: String) async {
-        guard collaboratorStatus == "accepted" else { return }
-        do {
-            try await supabaseService.removeCollaborator(userId: userId)
-            seededCollabStatus = "none"
-            seededCollabConvoId = nil
-            social?.setCollabStatus("none", userId: userId)
-        } catch {
-            debugLog("[ProfileVM] removeCollaborator failed: \(error)")
         }
     }
 
@@ -550,7 +547,7 @@ final class ProfileScreenViewModel {
         Task { await player.play(MediaID(track.id), queue: tracks.map(mediaFor)) }
     }
 
-    private func mediaFor(_ track: ProfileTrack) -> Media {
+    func mediaFor(_ track: ProfileTrack) -> Media {
         Media(
             id: MediaID(track.id),
             meta: MediaMeta(

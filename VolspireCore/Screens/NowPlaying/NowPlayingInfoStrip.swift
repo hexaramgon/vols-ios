@@ -52,11 +52,21 @@ private extension NowPlayingInfoStrip {
     /// Save (bookmark) below — saves the horizontal space the labels took.
     var actionsColumn: some View {
         VStack(spacing: 12) {
-            iconAction(.listMusic, label: "Add to playlist") { showAddToPlaylist = true }
-            iconAction(controller.isSaved ? .bookmarkFill : .bookmark,
-                       label: controller.isSaved ? "Saved" : "Save") {
-                Task { await controller.toggleSave() }
+            // list-plus is wider than the bookmark / sliders (its + hangs off
+            // the right), so it draws a size down to line up with them.
+            iconAction(.listPlus, label: "Add to playlist", size: 24) { showAddToPlaylist = true }
+            // The shared save glyph (fill + pop + ripple on save).
+            Button { Task { await controller.toggleSave() } } label: {
+                // White when saved too (for now), like the player's other icons.
+                SaveBookmarkIcon(saved: controller.isSaved, size: 26,
+                                 idleColor: Color(Palette.PlayerCard.opaque),
+                                 savedColor: Color(Palette.PlayerCard.opaque))
+                    .frame(width: 26, height: 26)
+                    .frame(width: 44, height: 44, alignment: .trailing)
+                    .contentShape(.rect)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(controller.isSaved ? "Saved" : "Save")
         }
         .frame(maxHeight: .infinity, alignment: .center)
     }
@@ -157,8 +167,11 @@ private extension NowPlayingInfoStrip {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // One soft crossfade as the detail lands.
-        .animation(.easeInOut(duration: 0.3), value: detailLoaded)
+        // One soft fade as the NEW detail lands — but a track change drops
+        // the old description instantly. Animating that removal too kept the
+        // previous track's text fading out for 0.3s while the strip itself
+        // faded back in after a swipe, so the old description showed first.
+        .animation(detailLoaded ? .easeInOut(duration: 0.3) : nil, value: detailLoaded)
     }
 
     /// A single description-line bone (the strip shows text only).
@@ -170,10 +183,13 @@ private extension NowPlayingInfoStrip {
     /// A bare icon action, sized and tinted like the transport's shuffle /
     /// repeat glyphs. Its trailing edge sits on the player inset, so the
     /// column lines up with the repeat button below.
-    func iconAction(_ icon: LucideIcon.Name, label: String, action: @escaping () -> Void = {}) -> some View {
+    func iconAction(_ icon: LucideIcon.Name, label: String, size: CGFloat = 26,
+                    action: @escaping () -> Void = {}) -> some View {
         Button(action: action) {
-            LucideIcon(icon, size: 26)
+            LucideIcon(icon, size: size)
                 .foregroundStyle(Color(Palette.PlayerCard.opaque))
+                // Fixed 26pt slot so a smaller glyph stays centred on the column.
+                .frame(width: 26, height: 26)
                 .frame(width: 44, height: 44, alignment: .trailing)
                 .contentShape(.rect)
         }

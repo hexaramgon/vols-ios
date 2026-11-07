@@ -45,7 +45,8 @@ enum FolderPalette {
     }
 }
 
-/// The folder tile: its colour with the name's first letter as a monogram.
+/// The folder tile: its name-seeded colour mesh. Only the folder page's
+/// hero shows the name's first letter on it (`showsLetter`).
 struct FolderArt: View {
     enum Size {
         /// `row`: the 44pt tile of a track row's cover (radius 8), for lists
@@ -71,19 +72,12 @@ struct FolderArt: View {
             case .lgCompact, .lg: Radius.panel
             }
         }
-        var font: Font {
-            switch self {
-            case .xs: .appMicroBold
-            case .sm, .row: .appSubheadlineBold
-            case .md: .appTitle3Bold
-            case .lgCompact, .lg: .appDisplayLarge
-            }
-        }
     }
 
     let id: String
     let name: String
     var size: Size = .sm
+    var showsLetter = false
 
     var body: some View {
         let mesh = PlaylistCoverFallback.mesh(for: name)
@@ -91,17 +85,20 @@ struct FolderArt: View {
             .frame(width: size.side, height: size.side)
             .clipShape(RoundedRectangle(cornerRadius: size.radius, style: .continuous))
             .overlay {
-                Text(monogram)
-                    .font(size == .lg || size == .lgCompact ? .appDisplayLarge.weight(.bold) : size.font)
-                    .scaleEffect(size == .lg ? 1.26 : 1) // 48pt monogram at lg (38 at lgCompact)
-                    .foregroundStyle(Color.vOnColor.opacity(0.9))
-                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                if showsLetter {
+                    Text(letter)
+                        .font(.appDisplayLarge)
+                        // 48pt at lg, 38pt at lgCompact (the hero sizes).
+                        .scaleEffect(size == .lg ? 1.26 : 1)
+                        .foregroundStyle(Color.vOnColor.opacity(0.9))
+                        .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                }
             }
             .shadow(color: .black.opacity(size == .xs ? 0 : 0.3), radius: 8, y: 4)
             .accessibilityHidden(true)
     }
 
-    private var monogram: String {
+    private var letter: String {
         (name.trimmingCharacters(in: .whitespaces).first).map { String($0).uppercased() } ?? "?"
     }
 }

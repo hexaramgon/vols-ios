@@ -26,7 +26,9 @@ struct UploadFlowHeader: View {
     let onClose: () -> Void
 
     var body: some View {
-        SheetHeader(icon: icon, title: title, subtitle: subtitle, onClose: onClose)
+        // Full-screen pages: no drag indicator to clear, so just a little air
+        // under the status bar.
+        SheetHeader(icon: icon, title: title, subtitle: subtitle, topPadding: 8, onClose: onClose)
     }
 }
 
@@ -183,49 +185,6 @@ extension Binding where Value == String {
             get: { wrappedValue },
             set: { wrappedValue = $0.filter { "0123456789.".contains($0) } }
         )
-    }
-}
-
-// MARK: - Track title + genre column (create + edit track)
-
-/// The track-title field (100-char cap) + genre chooser that sit beside the
-/// cover tile on both the upload and edit forms.
-struct UploadTitleGenreColumn: View {
-    @Binding var title: String
-    @Binding var genre: String
-    let onPickGenre: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField(
-                "",
-                text: $title,
-                prompt: Text("Track title").foregroundStyle(Color.vText3)
-            )
-            .font(.appBody)
-            .foregroundStyle(Color.vText)
-            .submitLabel(.done)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 13)
-            .uploadFieldShell()
-            .charLimited($title, 100)
-
-            Button(action: onPickGenre) {
-                HStack {
-                    Text(genre.isEmpty ? "Genre" : genre)
-                        .font(.appBody)
-                        .foregroundStyle(genre.isEmpty ? Color.vText3 : Color.vText)
-                    Spacer()
-                    LucideIcon(.chevronDown, .sm)
-                        .foregroundStyle(Color.vText3)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 13)
-                .uploadFieldShell()
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-        }
     }
 }
 
@@ -414,7 +373,7 @@ struct UploadTwoFieldRow: View {
                     prompt: Text(detailPlaceholder).foregroundStyle(Color.vText3),
                     axis: .vertical
                 )
-                .font(.appFootnote)
+                .font(.appBody)
                 .foregroundStyle(Color.vText)
                 .lineLimit(2...4)
                 .padding(.horizontal, 12)
@@ -424,10 +383,10 @@ struct UploadTwoFieldRow: View {
 
             if let onRemove {
                 Button(action: onRemove) {
-                    LucideIcon(.x, .sm)
+                    LucideIcon(.x, .md)
                         .foregroundStyle(Color.vText3)
                         .frame(width: 36, height: 36)
-                        .contentShape(.rect)
+                        .minimumHitArea(for: 36)
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 2)
@@ -486,7 +445,7 @@ struct UploadCoverCaption: View {
             if hasCover {
                 Button(action: onRemove) {
                     HStack(spacing: 6) {
-                        LucideIcon(.x, .xs)
+                        LucideIcon(.x, .sm)
                         Text("Remove cover")
                             .font(.appFootnote)
                     }
@@ -495,6 +454,94 @@ struct UploadCoverCaption: View {
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+}
+
+/// The track / release "Cover Art" section: the tile beside a caption and a
+/// Choose / Change button — either one opens the picker.
+struct UploadCoverSection: View {
+    var image: UIImage?
+    /// The current remote cover when editing.
+    var existingURL: URL? = nil
+    let caption: String
+    let onPick: () -> Void
+
+    var body: some View {
+        let hasCover = image != nil || existingURL != nil
+        VStack(alignment: .leading, spacing: 14) {
+            UploadSectionDivider("Cover Art")
+
+            HStack(alignment: .center, spacing: 16) {
+                Button(action: onPick) {
+                    UploadCoverBox(image: image, existingURL: existingURL, size: 112)
+                }
+                .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(caption)
+                        .font(.appFootnote)
+                        .foregroundStyle(Color.vText2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(action: onPick) {
+                        CapsuleButtonLabel(icon: hasCover ? .refreshCw : .image,
+                                           title: hasCover ? "Change" : "Choose image",
+                                           style: .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Title + genre fields (track / release Details)
+
+/// A labeled one-line field in the upload shell, clamped at `limit`.
+struct UploadTextField: View {
+    let label: String
+    @Binding var text: String
+    let prompt: String
+    let limit: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            UploadFieldLabel(label)
+            TextField("", text: $text, prompt: Text(prompt).foregroundStyle(Color.vText3))
+                .font(.appBody)
+                .foregroundStyle(Color.vText)
+                .submitLabel(.done)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+                .uploadFieldShell()
+                .charLimited($text, limit)
+        }
+    }
+}
+
+/// A labeled genre row that opens the picker (`GenrePickerSheet`).
+struct UploadGenreField: View {
+    var label = "Genre"
+    let genre: String
+    let onTap: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            UploadFieldLabel(label)
+            Button(action: onTap) {
+                HStack {
+                    Text(genre.isEmpty ? "Choose a genre" : genre)
+                        .font(.appBody)
+                        .foregroundStyle(genre.isEmpty ? Color.vText3 : Color.vText)
+                    Spacer()
+                    LucideIcon(.chevronDown, .sm).foregroundStyle(Color.vText3)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 13)
+                .uploadFieldShell()
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
         }
     }
 }
@@ -589,6 +636,9 @@ struct UploadTypeTile: View {
                     .font(.appCaption)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
+                    // Inset from the tile edge — long labels ("Mixing /
+                    // Mastering") wrap instead of running edge to edge.
+                    .padding(.horizontal, 10)
             }
             .foregroundStyle(selected ? Color.vOnInverse : Color.vText2)
             .frame(maxWidth: .infinity, minHeight: 78)
@@ -797,10 +847,10 @@ struct UploadClipRows: View {
                 Button {
                     clips.removeAll { $0.id == row.id }
                 } label: {
-                    LucideIcon(.x, .sm)
+                    LucideIcon(.x, .md)
                         .foregroundStyle(Color.vText3)
                         .frame(width: 36, height: 36)
-                        .contentShape(.rect)
+                        .minimumHitArea(for: 36)
                 }
                 .buttonStyle(.plain)
             }
@@ -858,8 +908,7 @@ struct UploadSuccessOverlay: View {
         ZStack {
             Color.vScrim.ignoresSafeArea()
             VStack(spacing: 14) {
-                LucideIcon(.circleCheck, .hero)
-                    .foregroundStyle(Color.vSuccessText)
+                SuccessMark(size: 60)
                 VStack(spacing: 3) {
                     Text(title)
                         .font(.appHeadline)
@@ -900,59 +949,24 @@ struct UploadTagInput: View {
         tags.append(cleaned)
     }
 
+    private var trimmedInput: String { input.trimmingCharacters(in: .whitespaces) }
+
+    private func commitInput() {
+        withAnimation(.snappy(duration: 0.25)) { add(input) }
+        input = ""
+    }
+
+    // The app's chip language (FilterBar): the field on top, added tags as
+    // ink chips with an × (applied filters), suggestions as off chips with a +.
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 10) {
-                if !tags.isEmpty {
-                    ChipFlowLayout(spacing: 8, lineSpacing: 8) {
-                        ForEach(tags, id: \.self) { tag in
-                            Button {
-                                tags.removeAll { $0 == tag }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Text("#\(tag)")
-                                        .font(.appFootnote)
-                                        .foregroundStyle(Color.vText)
-                                    LucideIcon(.x, .xs)
-                                        .foregroundStyle(Color.vText3)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(Capsule().fill(Color.vControl))
-                                .contentShape(.rect)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
+            field
 
-                TextField(
-                    "",
-                    text: $input,
-                    prompt: Text("Add your own custom tags…").foregroundStyle(Color.vText3)
-                )
-                .font(.appBody)
-                .foregroundStyle(Color.vText)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .submitLabel(.done)
-                .onSubmit {
-                    add(input)
-                    input = ""
-                }
-                // Space commits the tag too (matches the web tag input) — and a
-                // pasted "a b c" becomes tags a + b with "c" left editable.
-                .onChange(of: input) { _, newValue in
-                    guard newValue.contains(" ") else { return }
-                    var pieces = newValue.components(separatedBy: " ")
-                    let remainder = pieces.removeLast()
-                    pieces.forEach { add($0) }
-                    input = remainder
+            if !tags.isEmpty {
+                ChipFlowLayout(spacing: 8, lineSpacing: 8) {
+                    ForEach(tags, id: \.self) { tag in addedChip(tag) }
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .uploadFieldShell()
 
             let remaining = suggestions.filter { !tags.contains($0) }
             if !remaining.isEmpty {
@@ -962,23 +976,83 @@ struct UploadTagInput: View {
                         .foregroundStyle(Color.vText3)
                     ChipFlowLayout(spacing: 8, lineSpacing: 8) {
                         ForEach(remaining, id: \.self) { tag in
-                            Button {
-                                add(tag)
-                            } label: {
-                                Text("+ \(tag)")
-                                    .font(.appFootnote)
-                                    .foregroundStyle(Color.vText3)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .background(Capsule().fill(Color.vCard))
-                                    .contentShape(.rect)
+                            FilterChip(tag, icon: .plus, isOn: false) {
+                                withAnimation(.snappy(duration: 0.25)) { add(tag) }
                             }
-                            .buttonStyle(.plain)
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
                         }
                     }
                 }
             }
         }
+        .animation(.snappy(duration: 0.25), value: tags)
+    }
+
+    /// "# tag name" with an Add button once there's something to add.
+    private var field: some View {
+        HStack(spacing: 8) {
+            LucideIcon(.hash, .sm)
+                .foregroundStyle(Color.vText3)
+            TextField(
+                "",
+                text: $input,
+                prompt: Text("Add a tag").foregroundStyle(Color.vText3)
+            )
+            .font(.appBody)
+            .foregroundStyle(Color.vText)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.never)
+            .submitLabel(.done)
+            .onSubmit(commitInput)
+            // Space commits the tag too (matches the web tag input) — and a
+            // pasted "a b c" becomes tags a + b with "c" left editable.
+            .onChange(of: input) { _, newValue in
+                guard newValue.contains(" ") else { return }
+                var pieces = newValue.components(separatedBy: " ")
+                let remainder = pieces.removeLast()
+                withAnimation(.snappy(duration: 0.25)) { pieces.forEach { add($0) } }
+                input = remainder
+            }
+
+            if !trimmedInput.isEmpty {
+                Button(action: commitInput) {
+                    Text("Add")
+                        .font(.appFootnoteMedium)
+                        .foregroundStyle(Color.vOnInverse)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.vInverse, in: Capsule())
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: trimmedInput.isEmpty)
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .frame(minHeight: 48)
+        .uploadFieldShell()
+    }
+
+    /// An added tag — the FilterBar's applied-filter chip: tap to remove.
+    private func addedChip(_ tag: String) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.25)) { tags.removeAll { $0 == tag } }
+        } label: {
+            HStack(spacing: 6) {
+                Text("#\(tag)").font(.appFootnoteMedium)
+                LucideIcon(.x, .sm)
+            }
+            .foregroundStyle(Color.vOnInverse)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color.vInverse, in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+            .contentShape(.rect(cornerRadius: Radius.panel))
+        }
+        .buttonStyle(.plain)
+        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        .accessibilityLabel("Remove tag \(tag)")
     }
 }
 
@@ -1005,6 +1079,9 @@ struct GenrePickerSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // The app's sheet header (Collab Request / Respond).
+            SheetHeader(icon: .music, title: "Genre", subtitle: "Pick one, or type your own") { dismiss() }
+
             HStack(spacing: 8) {
                 LucideIcon(.search, .sm)
                     .foregroundStyle(Color.vText3)
@@ -1021,7 +1098,7 @@ struct GenrePickerSheet: View {
             .padding(.vertical, 12)
             .uploadFieldShell()
             .padding(.horizontal, 20)
-            .padding(.top, 24)
+            .padding(.top, 14)
             .padding(.bottom, 12)
 
             ScrollView(showsIndicators: false) {
@@ -1065,6 +1142,58 @@ struct GenrePickerSheet: View {
 
 // MARK: - Select pill (web visibility buttons: ink when active, control fill when not)
 
+/// One option of an `UploadSegmentedSwitch`.
+struct UploadSegment<Value: Hashable>: Identifiable {
+    let value: Value
+    let title: String
+    let icon: LucideIcon.Name
+    var id: Value { value }
+}
+
+/// A two-or-more-way switch: a control-fill capsule track with an ink thumb
+/// that slides to the picked segment. Labels in full ink (paper on the
+/// thumb) so the unpicked side still reads.
+struct UploadSegmentedSwitch<Value: Hashable>: View {
+    let segments: [UploadSegment<Value>]
+    let selected: Value
+    let onSelect: (Value) -> Void
+
+    @Namespace private var thumb
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(segments) { segment in
+                let on = segment.value == selected
+                Button {
+                    Haptics.selection()
+                    onSelect(segment.value)
+                } label: {
+                    HStack(spacing: 6) {
+                        LucideIcon(segment.icon, .md)
+                        Text(segment.title).font(.appSubheadlineSemibold)
+                    }
+                    .foregroundStyle(on ? Color.vOnInverse : Color.vText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 38)
+                    .background {
+                        if on {
+                            Capsule()
+                                .fill(Color.vInverse)
+                                .matchedGeometryEffect(id: "thumb", in: thumb)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(Color.vControl, in: Capsule())
+        .animation(.smooth(duration: 0.25), value: selected)
+    }
+}
+
 struct UploadPill: View {
     let label: String
     var icon: LucideIcon.Name?
@@ -1097,7 +1226,9 @@ struct UploadPill: View {
                     .font(.appCallout)
                     .lineLimit(1)
             }
-            .foregroundStyle(selected ? Color.vOnInverse : Color.vControlLabel)
+            // Unselected labels in full ink — vControlLabel (70%) on the
+            // control fill read washed out.
+            .foregroundStyle(selected ? Color.vOnInverse : Color.vText)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .frame(maxWidth: expands ? .infinity : nil)
@@ -1111,28 +1242,77 @@ struct UploadPill: View {
     }
 }
 
-// MARK: - Visibility picker (Public/Private pill pair + optional hint)
+// MARK: - Visibility picker (Public / Unlisted / Private pills + hint)
 
+/// A track's `tracks.visibility`.
+/// - public: listed everywhere, playable by anyone.
+/// - unlisted: never listed (feeds, search, profile, others' playlists) —
+///   anyone with its link, or a folder's public share link, can listen.
+/// - private: you, credited collaborators and folder members.
+enum TrackVisibility: String, CaseIterable, Identifiable {
+    case `public`, unlisted, `private`
+
+    var id: String { rawValue }
+
+    init(_ raw: String?) { self = TrackVisibility(rawValue: raw ?? "") ?? .public }
+
+    var label: String {
+        switch self {
+        case .public: "Public"
+        case .unlisted: "Unlisted"
+        case .private: "Private"
+        }
+    }
+
+    var icon: LucideIcon.Name {
+        switch self {
+        case .public: .globe
+        case .unlisted: .link
+        case .private: .lock
+        }
+    }
+
+    /// The picker's one-line explanation.
+    var hint: String {
+        switch self {
+        case .public: "Anyone can find and listen to it."
+        case .unlisted: "Hidden from feeds, search and your profile. Anyone with the link can listen."
+        case .private: "Only you, credited collaborators and folder members can listen."
+        }
+    }
+}
+
+/// Visibility pills. Tracks pass `allowsUnlisted` (Public / Unlisted /
+/// Private, with each option's hint); releases, packs and services keep the
+/// Public / Private pair with their own optional hints.
 struct UploadVisibilityPicker: View {
     @Binding var visibility: String
+    var allowsUnlisted = false
     var publicHint: String? = nil
     var privateHint: String? = nil
+
+    private var options: [TrackVisibility] { allowsUnlisted ? TrackVisibility.allCases : [.public, .private] }
+
+    private var hint: String? {
+        if allowsUnlisted { return TrackVisibility(visibility).hint }
+        return visibility == "public" ? publicHint : privateHint
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                UploadPill("Public", icon: .globe, expands: true, selected: visibility == "public") {
-                    visibility = "public"
-                }
-                UploadPill("Private", icon: .lock, expands: true, selected: visibility == "private") {
-                    visibility = "private"
+                ForEach(options) { option in
+                    UploadPill(option.label, icon: option.icon, expands: true, selected: visibility == option.rawValue) {
+                        visibility = option.rawValue
+                    }
                 }
             }
 
-            if let hint = visibility == "public" ? publicHint : privateHint {
+            if let hint {
                 Text(hint)
                     .font(.appFootnote)
                     .foregroundStyle(Color.vText3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -1152,6 +1332,16 @@ struct UploadPreviewPlayer: View {
     let isVideo: Bool
     /// Fired when preview playback starts (used to pause the app's music).
     var onStartPlaying: () -> Void = {}
+    /// Audio only: a header inside the card (title over a detail line, on a
+    /// music tile) so the picked file and its player read as one thing.
+    var title: String? = nil
+    var detail: String? = nil
+    /// Audio only: just the transport (no card) — for a card that draws its
+    /// own header around it (a listing clip with an editable title).
+    var bare = false
+    /// Video only: the tallest the picture gets (portrait clips narrow to
+    /// their own ratio under it). Callers that must leave room below pass less.
+    var maxVideoHeight: CGFloat = 460
 
     @State private var player: AVPlayer?
     @State private var tempURL: URL?
@@ -1170,10 +1360,19 @@ struct UploadPreviewPlayer: View {
     /// Measured card width, for turning the ratio into a concrete height.
     @State private var cardWidth: CGFloat = 0
 
-    /// Full width over the native ratio, capped so portrait videos stay a card.
-    private var videoCardHeight: CGFloat {
-        guard cardWidth > 0 else { return 220 }
-        return min(cardWidth / (videoAspect ?? 16 / 9), 420)
+    /// The card IS the video's shape — no black bars. Landscape/square: full
+    /// width. Portrait: capped height, narrowed to the clip's own ratio (like
+    /// the full-screen player shows it), centered. 16:9 placeholder until the
+    /// asset reports its size.
+    private var videoCardSize: CGSize {
+        let width = cardWidth > 0 ? cardWidth : 320
+        guard let aspect = videoAspect, aspect > 0 else {
+            return CGSize(width: width, height: width * 9 / 16)
+        }
+        let maxHeight = maxVideoHeight
+        let fullWidthHeight = width / aspect
+        if fullWidthHeight <= maxHeight { return CGSize(width: width, height: fullWidthHeight) }
+        return CGSize(width: maxHeight * aspect, height: maxHeight)
     }
 
     var body: some View {
@@ -1181,42 +1380,74 @@ struct UploadPreviewPlayer: View {
         // staged) — an empty conditional here would never fire `onAppear`.
         Group {
             if isVideo {
-                ZStack(alignment: .bottom) {
-                    RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
-                        .fill(Color.vShade)
+                // The clip on its own (its exact shape, nothing over it), then
+                // the transport under it across the full width.
+                VStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+                            .fill(Color.vShade)
 
-                    if let player {
-                        PlayerVideoView(player: player, gravity: .resizeAspect)
-                            .contentShape(.rect)
-                            .onTapGesture { toggle() }
-                    } else {
-                        ProgressView()
-                            .tint(Color.vText2)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        if let player {
+                            // Fill in a box of the clip's own ratio = no crop, no bars.
+                            PlayerVideoView(player: player, gravity: .resizeAspectFill)
+                                .contentShape(.rect)
+                                .onTapGesture { toggle() }
+                        } else {
+                            ProgressView()
+                                .tint(Color.vText2)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+
+                        // Paused: a soft play glyph says "tap to play".
+                        if player != nil, !isPlaying {
+                            LucideIcon(.playFill, .lg)
+                                .foregroundStyle(.white)
+                                .offset(x: 1)
+                                .frame(width: 52, height: 52)
+                                .background(.black.opacity(0.35), in: Circle())
+                                .allowsHitTesting(false)
+                                .transition(.opacity)
+                        }
                     }
-
-                    // Legibility scrim under the transport, like the player.
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(0.6)],
-                        startPoint: .top, endPoint: .bottom
-                    )
-                    .frame(height: 84)
-                    .allowsHitTesting(false)
+                    .frame(width: videoCardSize.width, height: videoCardSize.height)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                    .alwaysDark()
+                    .animation(.easeInOut(duration: 0.15), value: isPlaying)
+                    // Centered in the full row; the row's width drives the size.
+                    .frame(maxWidth: .infinity)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { cardWidth = $0 })
 
                     transportRow
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 10)
                 }
-                // Full-width card whose height follows the video's native ratio
-                // (16:9 until the asset reports its size), capped so portrait
-                // videos don't swallow the form — they pillarbox inside while
-                // the transport row keeps the card's full width.
-                .frame(height: videoCardHeight)
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { cardWidth = $0 })
-                .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-                // Video chrome sits over the picture → keep it dark.
-                .alwaysDark()
                 .animation(.smooth(duration: 0.25), value: videoAspect)
+            } else if bare {
+                transportRow
+            } else if let title {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        LucideIcon(.music2, .lg)
+                            .foregroundStyle(Color.vText)
+                            .frame(width: 52, height: 52)
+                            .background(Color.vControlActive,
+                                        in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(title)
+                                .font(.appBodyMedium)
+                                .foregroundStyle(Color.vText)
+                                .lineLimit(2)
+                            if let detail {
+                                Text(detail)
+                                    .font(.appFootnote)
+                                    .foregroundStyle(Color.vText2)
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    transportRow
+                }
+                .padding(14)
+                .background(Color.vField, in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
             } else {
                 transportRow
                     .padding(12)
@@ -1264,7 +1495,7 @@ struct UploadPreviewPlayer: View {
 
             Text("\(format(current)) / \(format(duration))")
                 .font(.appCaption2)
-                .foregroundStyle(isVideo ? Color.vText2 : Color.vText3)
+                .foregroundStyle(Color.vText3)
                 .monospacedDigit()
         }
     }
@@ -1371,4 +1602,254 @@ struct UploadPreviewPlayer: View {
     }
 
     private func format(_ seconds: Double) -> String { seconds.durationLabel }
+}
+
+// MARK: - Composer (the mobile create flows: track, release, listing)
+//
+// Built like a phone composer, not a web form: a big tappable cover, a
+// borderless title and story written straight onto the page, then
+// settings-style rows for the picks. Shared so every create flow matches.
+
+/// The cover, full width (capped at 340 on big phones), tap to choose.
+/// Empty, it says what's needed; filled, it carries a small Edit chip.
+struct ComposerCoverHero: View {
+    let image: UIImage?
+    /// The current remote cover when editing.
+    var existingURL: URL? = nil
+    let caption: String
+    let onPick: () -> Void
+
+    private var hasCover: Bool { image != nil || existingURL != nil }
+
+    var body: some View {
+        Button(action: onPick) {
+            Color.vField
+                .aspectRatio(1, contentMode: .fit)
+                // Fill images live in an overlay of a sized box so they can't
+                // widen the page (fill-images rule).
+                .overlay {
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFill()
+                    } else if let existingURL {
+                        ArtworkView(.webImage(existingURL), cornerRadius: 0)
+                    } else {
+                        VStack(spacing: 10) {
+                            LucideIcon(.image, .xxl).foregroundStyle(Color.vText3)
+                            VStack(spacing: 3) {
+                                Text("Add cover art")
+                                    .font(.appSubheadlineSemibold)
+                                    .foregroundStyle(Color.vText)
+                                Text(caption)
+                                    .font(.appFootnote)
+                                    .foregroundStyle(Color.vText2)
+                                    .multilineTextAlignment(.center)
+                            }
+                            .padding(.horizontal, 24)
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Radius.sheet, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    if hasCover {
+                        HStack(spacing: 6) {
+                            LucideIcon(.pencil, .sm)
+                            Text("Edit").font(.appSubheadlineSemibold)
+                        }
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 12)
+                        .frame(height: 32)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .environment(\.colorScheme, .dark)
+                        .padding(12)
+                    }
+                }
+                .shadow(color: .black.opacity(hasCover ? 0.18 : 0), radius: 18, y: 8)
+                .contentShape(RoundedRectangle(cornerRadius: Radius.sheet, style: .continuous))
+        }
+        .buttonStyle(CardPress())
+        .accessibilityLabel(hasCover ? "Change cover art" : "Add cover art")
+        .frame(maxWidth: 340)
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// The big borderless title. Return finishes it instead of adding a line.
+struct ComposerTitleField: View {
+    @Binding var text: String
+    let prompt: String
+    let limit: Int
+
+    var body: some View {
+        TextField("", text: $text,
+                  prompt: Text(prompt).foregroundStyle(Color.vText4),
+                  axis: .vertical)
+            .font(.appLargeTitle)
+            .foregroundStyle(Color.vText)
+            .lineLimit(1...3)
+            .charLimited($text, limit)
+            .onChange(of: text) { _, value in
+                if value.contains("\n") {
+                    text = value.replacingOccurrences(of: "\n", with: "")
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+            }
+    }
+}
+
+/// The borderless story under the title; the counter shows only near the cap.
+struct ComposerStoryField: View {
+    @Binding var text: String
+    let prompt: String
+    let limit: Int
+    var lines: ClosedRange<Int> = 2...10
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            TextField("", text: $text,
+                      prompt: Text(prompt).foregroundStyle(Color.vText3),
+                      axis: .vertical)
+                .font(.appBody)
+                .foregroundStyle(Color.vText2)
+                .lineLimit(lines)
+                .charLimited($text, limit)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if text.count > limit * 4 / 5 {
+                Text("\(text.count)/\(limit)")
+                    .font(.appCaption)
+                    .foregroundStyle(Color.vText3)
+                    .monospacedDigit()
+            }
+        }
+    }
+}
+
+/// A section label above a composer group ("Tracks", "Tags") with an
+/// optional trailing count.
+struct ComposerHeading: View {
+    let title: String
+    var trailing: String? = nil
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.appHeadline).foregroundStyle(Color.vText)
+            Spacer(minLength: 8)
+            if let trailing {
+                Text(trailing)
+                    .font(.appSubheadline)
+                    .foregroundStyle(Color.vText2)
+                    .monospacedDigit()
+            }
+        }
+    }
+}
+
+/// A card of settings-style rows (put a `SettingsDivider()` between rows).
+struct ComposerRowGroup<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(Color.vCard, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+    }
+}
+
+/// Icon · title … value ›  — opens a picker. `placeholder` greys the value
+/// ("Required", "Optional").
+struct ComposerRow: View {
+    let icon: LucideIcon.Name
+    let title: String
+    let value: String
+    var placeholder = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                LucideIcon(icon, .md).foregroundStyle(Color.vText2)
+                Text(title).font(.appSubheadlineMedium).foregroundStyle(Color.vText)
+                Spacer(minLength: 8)
+                Text(value)
+                    .font(.appSubheadline)
+                    .foregroundStyle(placeholder ? Color.vText3 : Color.vText2)
+                    .lineLimit(1)
+                LucideIcon(.chevronRight, .sm).foregroundStyle(Color.vText3)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// "+ Add …" as the last row of a composer group.
+struct ComposerAddRow: View {
+    let title: String
+    var trailing: String? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                LucideIcon(.plus, .md)
+                    .foregroundStyle(Color.vText)
+                    .frame(width: 28, height: 28)
+                    .background(Color.vControlActive, in: Circle())
+                Text(title).font(.appSubheadlineMedium).foregroundStyle(Color.vText)
+                Spacer(minLength: 8)
+                if let trailing {
+                    Text(trailing).font(.appSubheadline).foregroundStyle(Color.vText3)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// One option in a `ComposerChipRow`.
+struct ComposerChip: Identifiable {
+    let id: String
+    let label: String
+    let icon: LucideIcon.Name
+}
+
+/// A single swipeable row of pick-one chips (listing "I'm looking for",
+/// pack type) — reads at a glance in one line instead of a tile grid. Runs
+/// to the screen edges; call it inside the composer's 20pt-padded column.
+struct ComposerChipRow: View {
+    let chips: [ComposerChip]
+    let selected: String
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(chips) { chip in
+                    let on = chip.id == selected
+                    Button {
+                        Haptics.selection()
+                        onSelect(chip.id)
+                    } label: {
+                        HStack(spacing: 6) {
+                            LucideIcon(chip.icon, .sm)
+                            Text(chip.label).font(.appSubheadlineSemibold)
+                        }
+                        .foregroundStyle(on ? Color.vOnInverse : Color.vText)
+                        .padding(.horizontal, 14)
+                        .frame(height: 38)
+                        .background(on ? Color.vInverse : Color.vControl, in: Capsule())
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+        .padding(.horizontal, -20)
+        .animation(.easeInOut(duration: 0.18), value: selected)
+    }
 }

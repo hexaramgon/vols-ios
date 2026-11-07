@@ -22,21 +22,31 @@ struct MessagesScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = MessagesScreenViewModel()
     @FocusState private var searchFocused: Bool
+    /// The search field is open (from the header's search icon — Workspace's
+    /// folder-search pattern).
+    @State private var showSearch = false
     @State private var archivedOpen = false
     /// This page instance's list entrance (see `staggeredAppear`).
     @State private var entranceKey = "messages-\(UUID().uuidString)"
 
     private var bottomInset: CGFloat { playerController.contentBottomInset }
 
-    /// The web's brand-accent unread badge (fixed in both modes, dark label).
-    static let badgeFill = Color(red: 0x7E / 255, green: 0xB2 / 255, blue: 0xD6 / 255)
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                MessagesSearchField(text: $viewModel.searchText, focus: $searchFocused)
+                if showSearch {
+                    MessagesSearchField(text: $viewModel.searchText, focus: $searchFocused) {
+                        searchFocused = false
+                        withAnimation(.smooth(duration: 0.22)) {
+                            showSearch = false
+                            viewModel.searchText = ""
+                        }
+                    }
                     .padding(.horizontal, ViewConst.screenPaddings)
                     .padding(.bottom, 12)
+                    .transition(.opacity)
+                }
                 content
                     .animation(.easeOut(duration: 0.25), value: inboxStore.loadState)
                     .animation(.easeOut(duration: 0.25), value: inboxStore.conversations.isEmpty)
@@ -45,9 +55,16 @@ struct MessagesScreen: View {
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.interactively)
         .refreshable { await inboxStore.refreshConversations() }
-        // Pushed from the Workspace header — back chevron + title, with the
-        // notifications bell on the right.
-        .appNavBar(title: "Messages", onBack: { dismiss() })
+        // Pushed from Explore's header — back chevron + title, search far right.
+        .appNavBar(title: "Messages", onBack: { dismiss() }) {
+            if !inboxStore.conversations.isEmpty {
+                HeaderIconButton(icon: .search) {
+                    withAnimation(.smooth(duration: 0.22)) { showSearch = true }
+                    searchFocused = true
+                }
+                .accessibilityLabel("Search messages")
+            }
+        }
         .task {
             viewModel.inbox = inboxStore
             await inboxStore.loadConversationsIfNeeded()
@@ -117,6 +134,7 @@ struct MessagesScreen: View {
                 .staggeredAppear(index, in: entranceKey)
         }
         archivedSection
+        InboxPageFooter()
     }
 
     /// A tappable "folder" row — pushes a `MessageCategoryScreen` via the Router,
@@ -135,28 +153,30 @@ struct MessagesScreen: View {
                 HStack(spacing: 12) {
                     LucideIcon(icon, .lg)
                         .foregroundStyle(Color.vText2)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 48, height: 48)
                         .background(Color.vSurface, in: Circle())
                         .overlay(alignment: .topTrailing) {
                             if unread > 0 {
                                 Text(unread > 9 ? "9+" : "\(unread)")
                                     .font(.appMicroBold)
-                                    .foregroundStyle(Color.vOnBright)
+                                    .foregroundStyle(Color.vOnColor)
                                     .monospacedDigit()
                                     .padding(.horizontal, 4)
                                     .frame(minWidth: 18, minHeight: 18)
-                                    .background(Self.badgeFill, in: Capsule())
+                                    // The app's unread red (the unread dots'
+                                    // colour), white count.
+                                    .background(Color.vUnread, in: Capsule())
                                     .offset(x: 4, y: -4)
                             }
                         }
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(label)
-                            .font(unread > 0 ? .appSubheadlineSemibold : .appSubheadlineMedium)
+                            .font(unread > 0 ? .appCalloutSemibold : .appCallout)
                             .foregroundStyle(unread > 0 ? Color.vText : Color.vTextRow)
                             .lineLimit(1)
                         Text(categorySubtitle(bucket, items))
-                            .font(.appCaption)
+                            .font(.appSubheadline)
                             .foregroundStyle(unread > 0 ? Color.vText : Color.vText3)
                             .lineLimit(1)
                     }
@@ -243,27 +263,31 @@ extension MessageBucket {
 private struct MessagesSearchField: View {
     @Binding var text: String
     var focus: FocusState<Bool>.Binding
+    /// × closes the field (and clears the search).
+    let onClose: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
             LucideIcon(.search, .md).foregroundStyle(Color.vText3)
             TextField("", text: $text, prompt: Text("Search messages…").foregroundStyle(Color.vText3))
-                .font(.appSubheadline)
+                .font(.appBody)
                 .foregroundStyle(Color.vText)
                 .tint(Color.vText)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.search)
                 .focused(focus)
-            if !text.isEmpty {
-                Button { text = "" } label: {
-                    LucideIcon(.circleX, .md).foregroundStyle(Color.vText3)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
+            Button(action: onClose) {
+                LucideIcon(.x, .md)
+                    .foregroundStyle(Color.vText3)
+                    .frame(width: 28, height: 28)
+                    .minimumHitArea(for: 28)
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close search")
         }
-        .padding(.horizontal, 14)
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
         .frame(height: 40)
         .background(
             focus.wrappedValue ? Color.vFieldFocus : Color.vField,
@@ -380,10 +404,10 @@ private struct MessagesSkeleton: View {
     var body: some View {
         SkeletonRows(
             count: 6,
-            thumb: .circle(size: 40),
-            line1: CGSize(width: 130, height: 12),
-            line2: CGSize(width: 200, height: 10),
-            lineSpacing: 7,
+            thumb: .circle(size: 48),
+            line1: CGSize(width: 140, height: 14),
+            line2: CGSize(width: 210, height: 11),
+            lineSpacing: 8,
             thumbSpacing: 12,
             verticalPadding: 12
         )

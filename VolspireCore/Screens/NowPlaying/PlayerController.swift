@@ -54,12 +54,20 @@ final class PlayerController {
     var isScrubbing: Bool = false
     var nowPlayingMeta: MediaMeta?
     var audioEffects: AudioEffects = .default
-    /// Repeat toggle — replay the current track indefinitely when it ends. Mirrored
-    /// to the player, which owns the auto-advance.
-    var isRepeatOn = false
+    /// Saved between sessions and never reset on track change, unlike
+    /// `audioEffects`: it's a listening preference, not a per-track edit.
+    private(set) var equalizer = PlayerController.savedEqualizer()
+    /// The repeat button's mode (off → all → one). Mirrored to the player,
+    /// which owns the auto-advance.
+    var repeatMode: RepeatMode = .off
     /// Shuffle toggle — mirrored FROM the player (which owns the queue reorder),
     /// so shuffle-all entry points like a playlist's Shuffle button light it up too.
     var isShuffleOn = false
+    /// The live play queue in play order — mirrored FROM the player (which
+    /// owns it), so the queue sheet follows shuffle and new queues.
+    var queue: [MediaID] = []
+    /// Shows the queue sheet from the expanded player.
+    var showingQueue = false
     /// When false (default), audio edits reset on track change; when true they
     /// carry to every track. Mirrors the web's "Carry to next track".
     var persistAudioEdits: Bool = false
@@ -146,6 +154,7 @@ final class PlayerController {
     weak var player: MediaPlayer? {
         didSet {
             observeMediaPlayerState()
+            player?.applyEqualizer(equalizer)
             // Tap only when the feature is on — otherwise "off" still pays for
             // sample conversion on every audio buffer.
             if let player, FeatureFlags.visualizer {
@@ -166,6 +175,9 @@ final class PlayerController {
     var analytics: AnalyticsService?
 
     private var cancellables = Set<AnyCancellable>()
+    /// Workspace items already given one fresh-link retry since they last
+    /// played (see `handlePlaybackFailure`).
+    private var linkRetriedMediaIDs: Set<MediaID> = []
     private let supabaseService = SupabaseService()
     private var lastFetchedTrackId: String?
 
@@ -279,10 +291,10 @@ final class PlayerController {
         player?.backward(alwaysPrevious: true)
     }
 
-    /// Toggle repeating the current track (the repeat button).
-    func toggleRepeat() {
-        isRepeatOn.toggle()
-        player?.repeatEnabled = isRepeatOn
+    /// The repeat button: cycles off → all → one → off.
+    func cycleRepeat() {
+        repeatMode = repeatMode.next
+        player?.repeatMode = repeatMode
     }
 
     /// Toggle queue shuffle (the shuffle button). State flows back via the
@@ -299,11 +311,14 @@ final class PlayerController {
         lastFetchedTrackId = nil
         fileIdByMediaId = [:]
         fileArtistIdByMediaId = [:]
+        linkRetriedMediaIDs = []
         currentFileId = nil
-        isRepeatOn = false
+        repeatMode = .off
         persistAudioEdits = false
         audioEffects = .default
+        applyEqualizer(.flat)
         showVisualizer = false
+        showingQueue = false
         pendingProfileNavigation = nil
         pendingExpand = false
     }
@@ -323,18 +338,69 @@ final class PlayerController {
         player?.applyEffects(effects)
     }
 
+    func applyEqualizer(_ settings: AudioEqualizer) {
+        equalizer = settings
+        player?.applyEqualizer(settings)
+        if let data = try? JSONEncoder().encode(settings) {
+            UserDefaults.standard.set(data, forKey: Self.equalizerKey)
+        }
+    }
+
+    /// Gains + frequencies as JSON. (The old 3-band gains lived under
+    /// "player.equalizerGains" — never shipped, so not migrated.)
+    private static let equalizerKey = "player.equalizer"
+
+    private static func savedEqualizer() -> AudioEqualizer {
+        guard let data = UserDefaults.standard.data(forKey: equalizerKey),
+              let saved = try? JSONDecoder().decode(AudioEqualizer.self, from: data)
+        else { return .flat }
+        return saved
+    }
+
     /// Saves/unsaves the current track through the shared LibraryStore (which
     /// flips the bookmark optimistically and rolls back on failure).
     func toggleSave() async {
         guard currentFileId == nil, let trackId = state.currentMediaID?.value, let library else { return }
         let next = !isSaved
-        Haptics.impact(.soft) // very subtle tap on save/unsave (matches Follow)
         analytics?.log(next ? .trackSaved : .trackUnsaved, trackId: trackId)
         await library.setSaved(next, trackId: trackId)
     }
 }
 
 private extension PlayerController {
+    /// A track couldn't play. Workspace files stream from signed links that
+    /// expire after an hour (a folder opened earlier still holds the old one):
+    /// fetch a fresh link and retry once before telling the user. Track media
+    /// is signed fresh at every load (`MediaPlayer.resolveMediaURL`), so
+    /// anything else goes straight to the toast.
+    func handlePlaybackFailure(_ id: MediaID) {
+        guard fileIdByMediaId[id.value] != nil,
+              !linkRetriedMediaIDs.contains(id),
+              let meta = mediaState?.metaOfMedia(withID: id),
+              let staleURL = meta.audioURL
+        else {
+            ToastCenter.shared.show("Couldn't play this track.", style: .error)
+            return
+        }
+        linkRetriedMediaIDs.insert(id)
+        Task {
+            guard let fresh = await StorageService().signUrl(bucket: .files, pathOrUrl: staleURL.absoluteString),
+                  let freshURL = URL(string: fresh), freshURL != staleURL,
+                  // Still the item the user is on.
+                  state.currentMediaID == id
+            else {
+                ToastCenter.shared.show("Couldn't play this track.", style: .error)
+                return
+            }
+            await mediaState?.addTrack(Media(id: id, meta: MediaMeta(
+                artwork: meta.artwork, title: meta.title, subtitle: meta.subtitle,
+                description: meta.description, artist: meta.artist, genre: meta.genre,
+                audioURL: freshURL, duration: meta.duration, timestamp: meta.timestamp
+            )))
+            player?.skip(to: id)
+        }
+    }
+
     private func observeMediaPlayerState() {
         guard let player else { return }
         cancellables.removeAll()
@@ -372,7 +438,13 @@ private extension PlayerController {
 
         player.$progress
             .sink { [weak self] prog in
-                guard let self, !self.isScrubbing else { return }
+                guard let self else { return }
+                // Audio is actually flowing — a later failure of this item
+                // earns a fresh link retry again.
+                if let prog, prog.duration > 0, let id = self.state.currentMediaID {
+                    self.linkRetriedMediaIDs.remove(id)
+                }
+                guard !self.isScrubbing else { return }
                 self.progress = prog
             }
             .store(in: &cancellables)
@@ -383,6 +455,15 @@ private extension PlayerController {
 
         player.$shuffleEnabled
             .sink { [weak self] enabled in self?.isShuffleOn = enabled }
+            .store(in: &cancellables)
+
+        player.$items
+            .sink { [weak self] items in self?.queue = items }
+            .store(in: &cancellables)
+
+        player.$failedMediaID
+            .compactMap { $0 }
+            .sink { [weak self] id in self?.handlePlaybackFailure(id) }
             .store(in: &cancellables)
     }
 
@@ -522,12 +603,24 @@ private extension PlayerController {
     }
 
     func fetchTrackDetailIfNeeded() {
+        guard let trackId = state.currentMediaID?.value else { return }
+        // Reset per-item UI state + audio effects ONLY on a genuine change of what's
+        // playing — a self-healing re-fetch of the SAME track must NOT wipe the
+        // user's speed/pitch. Runs for workspace files too: it used to sit below
+        // the file early-return, so a track's speed carried into a folder file.
+        if lastFetchedTrackId?.caseInsensitiveCompare(trackId) != .orderedSame {
+            lastFetchedTrackId = trackId
+            trackDetail = nil
+            // New item starts at 1× unless "carry edits" is on.
+            if !persistAudioEdits, audioEffects != .default {
+                applyEffects(.default)
+            }
+        }
         // A workspace file isn't a track — no track detail / like / save to fetch.
         if currentFileId != nil {
             trackDetail = nil
             return
         }
-        guard let trackId = state.currentMediaID?.value else { return }
         // Already have THIS track's detail? Nothing to do. Case-insensitive because a
         // MediaID.value and the RPC's `track_id` can differ in case across queue sources
         // ([[user-id-casing]]). Keying off the loaded detail (not `lastFetchedTrackId`)
@@ -535,17 +628,6 @@ private extension PlayerController {
         // during rapid skipping still (re)fetches instead of early-returning.
         if let loaded = trackDetail?.trackId,
            loaded.caseInsensitiveCompare(trackId) == .orderedSame { return }
-
-        // Reset per-track UI state + audio effects ONLY on a genuine track change — a
-        // self-healing re-fetch of the SAME track must NOT wipe the user's speed/pitch.
-        if lastFetchedTrackId?.caseInsensitiveCompare(trackId) != .orderedSame {
-            lastFetchedTrackId = trackId
-            trackDetail = nil
-            // New track starts at 1× unless "carry edits" is on.
-            if !persistAudioEdits, audioEffects != .default {
-                applyEffects(.default)
-            }
-        }
         // Independent RPCs, fetched in parallel — serialized, every track skip
         // paid two round-trips before the like/save glyphs settled.
         Task {
@@ -635,6 +717,37 @@ extension PlayerController {
     /// Plays exactly the track the feed landed on.
     func skip(to id: MediaID) {
         player?.skip(to: id)
+    }
+}
+
+// MARK: - Queue editing
+
+extension PlayerController {
+    /// "Play next" / "Add to queue" from a track's options. Starts playback
+    /// when nothing is loaded.
+    func enqueue(_ media: Media, _ placement: MediaPlayer.QueuePlacement) {
+        guard let player, media.meta.audioURL != nil else {
+            ToastCenter.shared.show("Couldn't add this track.", style: .error)
+            return
+        }
+        let wasEmpty = queue.isEmpty
+        Task {
+            await player.enqueue(media, placement)
+            guard !wasEmpty else { return }
+            ToastCenter.shared.show(placement == .next ? "Playing next" : "Added to queue")
+        }
+    }
+
+    func moveQueueItems(fromOffsets source: IndexSet, toOffset destination: Int) {
+        player?.moveQueueItems(fromOffsets: source, toOffset: destination)
+    }
+
+    func removeFromQueue(_ id: MediaID) {
+        player?.removeFromQueue(id)
+    }
+
+    func clearUpNext() {
+        player?.clearUpNext()
     }
 }
 

@@ -3,7 +3,7 @@
 //  Volspire
 //
 //  The shared create/edit form sheet (`ItemFormSheet`): SheetHeader + name +
-//  description fields + white-capsule submit, with an optional cover-picker
+//  labeled fields + the app's Cancel / action footer, with an optional cover-picker
 //  block (PhotosPicker + cropper) for playlist forms. The folder and playlist
 //  forms were near-identical twins; `FolderFormSheet` remains as the text-only
 //  convenience so "New Folder" / "Edit Folder" call sites read unchanged.
@@ -30,6 +30,11 @@ struct ItemFormSheet: View {
     @Binding var name: String
     @Binding var description: String
     var cover: CoverPicker? = nil
+    /// Name cap — playlists are 50 (the playlist RPCs enforce it too);
+    /// releases pass their own.
+    var nameLimit = 50
+    /// Description cap — the server's: playlists 300 (default), releases 1000.
+    var descriptionLimit = 300
     let actionTitle: String
     let busy: Bool
     let onSubmit: () async -> Void
@@ -56,20 +61,39 @@ struct ItemFormSheet: View {
                     .buttonStyle(.plain)
                 }
 
-                VStack(spacing: 12) {
-                    SheetTextField(prompt: namePrompt, text: $name, autoFocus: true)
-                    SheetTextField(prompt: "Description (optional)", text: $description)
+                VStack(alignment: .leading, spacing: 8) {
+                    SheetFieldLabel("Name")
+                    SheetTextField(prompt: namePrompt, text: $name, maxLength: nameLimit, autoFocus: true)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    SheetFieldLabel("Description", optional: true)
+                    // The folder form's description: multi-line with its counter.
+                    SheetTextField(prompt: "What's it about?", text: $description,
+                                   axis: .vertical, lines: 3, maxLength: descriptionLimit)
+                        .overlay(alignment: .bottomTrailing) {
+                            Text("\(description.count)/\(descriptionLimit)")
+                                .font(.appCaption)
+                                .foregroundStyle(Color.vText3)
+                                .monospacedDigit()
+                                .padding(10)
+                        }
                 }
 
                 // Straight under the fields (not pinned to the sheet's bottom),
-                // so the keyboard never covers it.
-                PrimaryButton(actionTitle, busy: busy, enabled: valid) {
-                    Task { await onSubmit() }
-                }
+                // so the keyboard never covers it. The app's sheet footer.
+                CancelSendButtons(
+                    sendTitle: actionTitle,
+                    canSend: valid,
+                    isSending: busy,
+                    onCancel: { dismiss() },
+                    onSend: { Task { await onSubmit() } }
+                )
+                .padding(.top, 4)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 18)
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
             .padding(.bottom, 16)
+            .keyboardSafeForm()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // Full height from the start, name field auto-focused. A short .height
@@ -174,10 +198,9 @@ private struct EditCoverPreview: View {
 
 // MARK: - FolderFormSheet
 
-/// Shared create/edit-folder form (web `NewFolderModal` / `FolderEditModal`):
-/// labelled name + description fields (with a counter), Cancel + the white
-/// primary; edit mode adds a danger-soft "Delete Folder". Presented from
-/// Home's Workspace tab and a folder's own "…" menu.
+/// The New Folder form (web `NewFolderModal`): labelled name + description
+/// fields (with a counter), Cancel + the white primary. Editing a folder uses
+/// the full-screen `EditDetailsScreen`.
 struct FolderFormSheet: View {
     var icon: LucideIcon.Name = .folder
     let title: String
@@ -186,26 +209,15 @@ struct FolderFormSheet: View {
     @Binding var description: String
     let actionTitle: String
     let busy: Bool
-    /// Edit mode: "Save changes" stays disabled until something changed, and
-    /// the danger-soft Delete row shows (when `onDelete` is set).
-    var isEdit: Bool = false
-    var originalName: String = ""
-    var originalDescription: String = ""
-    var onDelete: (() -> Void)? = nil
     let onSubmit: () async -> Void
 
     @Environment(\.dismiss) private var dismiss
 
-    private static let nameMax = 80
+    /// 50 — the server's cap (create_folder / update_folder), as playlists.
+    private static let nameMax = 50
     private static let descriptionMax = 300
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var dirty: Bool {
-        trimmedName != originalName.trimmingCharacters(in: .whitespacesAndNewlines)
-            || description.trimmingCharacters(in: .whitespacesAndNewlines)
-            != originalDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    private var canSubmit: Bool { !trimmedName.isEmpty && (!isEdit || dirty) && !busy }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -213,14 +225,14 @@ struct FolderFormSheet: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
-                    fieldLabel("Folder name *")
+                    SheetFieldLabel("Folder name")
                     SheetTextField(prompt: "e.g. Album Sessions, Client Work…", text: $name, maxLength: Self.nameMax,
                                    autoFocus: true)
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    fieldLabel("Description")
+                    SheetFieldLabel("Description", optional: true)
                     SheetTextField(
-                        prompt: "What's this folder for? (optional)",
+                        prompt: "What's this folder for?",
                         text: $description,
                         axis: .vertical,
                         lines: 3,
@@ -228,36 +240,27 @@ struct FolderFormSheet: View {
                     )
                     .overlay(alignment: .bottomTrailing) {
                         Text("\(description.count)/\(Self.descriptionMax)")
-                            .font(.appCaption2)
-                            .foregroundStyle(Color.vText4)
+                            .font(.appCaption)
+                            .foregroundStyle(Color.vText3)
                             .monospacedDigit()
                             .padding(10)
                     }
                 }
 
-                HStack(spacing: 10) {
-                    SecondaryButton("Cancel", size: .inline) { dismiss() }
-                    primaryButton
-                }
+                CancelSendButtons(
+                    sendTitle: actionTitle,
+                    canSend: !trimmedName.isEmpty,
+                    isSending: busy,
+                    onCancel: { dismiss() },
+                    onSend: { Task { await onSubmit() } }
+                )
                 .padding(.top, 4)
 
-                if isEdit, let onDelete {
-                    Button(action: onDelete) {
-                        HStack(spacing: 8) {
-                            LucideIcon(.trash2, .md)
-                            Text("Delete Folder").font(.appSubheadlineSemibold)
-                        }
-                        .foregroundStyle(Color.vError)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 42)
-                        .background(Color.vDangerSoft, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 16)
             .padding(.bottom, 16)
+            .keyboardSafeForm()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // Full height + auto-focused name field, so the keyboard never springs
@@ -265,29 +268,147 @@ struct FolderFormSheet: View {
         .presentationDetents([.large])
         .sheetBackground()
     }
+}
 
-    private func fieldLabel(_ text: String) -> some View {
-        Text(text).font(.appFootnoteMedium).foregroundStyle(Color.vText2)
+// MARK: - EditDetailsScreen
+
+/// The full-screen edit page in the Edit Track layout — header, Cover Art
+/// (optional), Details (labeled name + description), any extra sections
+/// (e.g. Privacy), an optional danger Delete, and the pinned Save Changes,
+/// which stays off until something changed. Shared by Edit Release,
+/// Edit Playlist and Edit Folder.
+struct EditDetailsScreen<Extra: View>: View {
+    struct Cover {
+        let data: Binding<Data?>
+        var savedURL: URL? = nil
+        let caption: String
     }
 
-    /// White capsule; "Create Folder" carries a Plus and reads "Creating…" while busy.
-    private var primaryButton: some View {
-        Button { Task { await onSubmit() } } label: {
-            HStack(spacing: 8) {
-                if busy {
-                    ProgressView().tint(Color.vOnInverse).controlSize(.small)
-                } else if !isEdit {
-                    LucideIcon(.plus, .md)
+    struct Delete {
+        let title: String
+        let confirm: DestructiveConfirm
+    }
+
+    var icon: LucideIcon.Name = .squarePen
+    let title: String
+    let subtitle: String
+    var cover: Cover? = nil
+    var nameLabel = "Name"
+    let namePrompt: String
+    var nameLimit = 50
+    @Binding var name: String
+    var descriptionPrompt = "What's it about?"
+    var descriptionLimit = 300
+    @Binding var description: String
+    /// Whether anything differs from what was loaded.
+    let hasChanges: Bool
+    let busy: Bool
+    var error: String? = nil
+    var delete: Delete? = nil
+    let onSave: () async -> Void
+    @ViewBuilder var extra: () -> Extra
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var showCoverPicker = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var coverCropTarget: CropTarget?
+    @State private var deleteConfirm: DestructiveConfirm?
+
+    private var nameMissing: Bool { name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            UploadFlowHeader(icon: icon, title: title, subtitle: subtitle) { dismiss() }
+
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 28) {
+                    if let cover {
+                        UploadCoverSection(
+                            image: cover.data.wrappedValue.flatMap(UIImage.init(data:)),
+                            existingURL: cover.savedURL,
+                            caption: cover.caption
+                        ) { showCoverPicker = true }
+                    }
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        UploadSectionDivider("Details")
+                        UploadTextField(label: nameLabel, text: $name, prompt: namePrompt, limit: nameLimit)
+                        VStack(alignment: .leading, spacing: 8) {
+                            UploadFieldLabel("Description (optional)")
+                            UploadDescriptionField(text: $description, prompt: descriptionPrompt,
+                                                   limit: descriptionLimit)
+                        }
+                    }
+
+                    extra()
+
+                    if let delete {
+                        Button {
+                            deleteConfirm = delete.confirm
+                        } label: {
+                            HStack(spacing: 8) {
+                                LucideIcon(.trash2, .md)
+                                Text(delete.title).font(.appSubheadlineSemibold)
+                            }
+                            .foregroundStyle(Color.vError)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: CancelSendButtons.height)
+                            .background(Color.vDangerSoft, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                Text(busy && !isEdit ? "Creating…" : actionTitle).font(.appSubheadlineSemibold)
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 24)
             }
-            .foregroundStyle(Color.vOnInverse)
-            .frame(maxWidth: .infinity)
-            .frame(height: 42)
-            .background(Color.vInverse, in: Capsule())
+            .scrollDismissesKeyboard(.interactively)
+            .tapToDismissKeyboard()
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                UploadBottomBar(error: error, hint: nameMissing ? "Add a \(nameLabel.lowercased()) to save" : nil) {
+                    PrimaryButton("Save Changes", busy: busy, enabled: !nameMissing && hasChanges) {
+                        Task { await onSave() }
+                    }
+                }
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!canSubmit)
-        .opacity(canSubmit || busy ? 1 : 0.3)
+        .background(Color.vBase.ignoresSafeArea())
+        .confirmModal($deleteConfirm)
+        .photosPicker(isPresented: $showCoverPicker, selection: $selectedPhoto, matching: .images)
+        .onChange(of: selectedPhoto) { _, newValue in
+            Task {
+                if let newValue,
+                   let data = try? await newValue.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data)
+                {
+                    coverCropTarget = CropTarget(image: image.normalizedUp())
+                }
+            }
+        }
+        .fullScreenCover(item: $coverCropTarget) { target in
+            ImageCropperView(
+                image: target.image,
+                onCrop: { data in
+                    cover?.data.wrappedValue = data
+                    coverCropTarget = nil
+                },
+                onCancel: { coverCropTarget = nil }
+            )
+        }
+        .interactiveDismissDisabled(busy)
+    }
+}
+
+extension EditDetailsScreen where Extra == EmptyView {
+    init(icon: LucideIcon.Name = .squarePen, title: String, subtitle: String, cover: Cover? = nil,
+         nameLabel: String = "Name", namePrompt: String, nameLimit: Int = 50, name: Binding<String>,
+         descriptionPrompt: String = "What's it about?", descriptionLimit: Int = 300,
+         description: Binding<String>, hasChanges: Bool, busy: Bool, error: String? = nil,
+         delete: Delete? = nil, onSave: @escaping () async -> Void) {
+        self.init(icon: icon, title: title, subtitle: subtitle, cover: cover, nameLabel: nameLabel,
+                  namePrompt: namePrompt, nameLimit: nameLimit, name: name,
+                  descriptionPrompt: descriptionPrompt, descriptionLimit: descriptionLimit,
+                  description: description, hasChanges: hasChanges, busy: busy, error: error,
+                  delete: delete, onSave: onSave) { EmptyView() }
     }
 }

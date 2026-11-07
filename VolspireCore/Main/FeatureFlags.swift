@@ -27,8 +27,28 @@ enum FeatureFlags {
     static let marketplacePreview = false
     // #endif
 
-    /// Whether the Marketplace tab + Sell entries show (live, or the preview).
+    /// Whether the full Marketplace (beats, services, paid packs) + its Sell
+    /// entries show (live, or the preview).
     static var marketplaceSurfaces: Bool { marketplace || marketplacePreview }
+
+    /// Free sample packs — the first slice of the marketplace, live ahead of
+    /// monetization: the Marketplace tab showing free packs only, the pack
+    /// page with a free download, "Pack" in New post (no price field), and
+    /// free packs in search. Beats, services, prices and paid packs stay
+    /// behind `marketplace`.
+    static let freePacks = true
+
+    /// The Marketplace tab shows (full marketplace, or free packs only).
+    static var marketplaceTab: Bool { marketplaceSurfaces || freePacks }
+
+    /// Only the free-packs slice is live: every marketplace surface shows
+    /// free packs and nothing paid.
+    static var freePacksOnly: Bool { freePacks && !marketplaceSurfaces }
+
+    /// Experiment (2026-10-31): the Workspace tab shows folders as a 2-column
+    /// grid of cover cards (the Marketplace pack card's anatomy) instead of
+    /// the list rows. false = back to `WorkspaceFolderRow`.
+    static let workspaceFolderGrid = true
 
     /// Native MilkDrop-style visualizer in the expanded player (full-bleed
     /// behind the controls via the sparkles button; quality toggle in

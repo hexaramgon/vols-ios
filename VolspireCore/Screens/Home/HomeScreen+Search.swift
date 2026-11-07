@@ -3,26 +3,42 @@
 //  Volspire
 //
 //  The full-screen search sheet (web search-sheet.tsx + search-suggestions
-//  .tsx): an X close and a `vField` search field over the web's one
-//  suggestions list — typing shows "Search for “…”", then Tracks, then
-//  Artists (typed text highlighted); an empty field shows Recent searches
-//  (removable) and Trending chips. Submit opens Search.
+//  .tsx), opened from Library's header: an X close and a `vField` search
+//  field over the web's one suggestions list — typing shows "Search for
+//  “…”", then Tracks, then Artists (typed text highlighted); an empty field
+//  shows Recent searches (removable); Trending is commented out until it's
+//  real. Submit opens Search.
 //
 import DesignSystem
+import MediaLibrary
 import Services
 import SwiftUI
 
-extension HomeScreen {
+/// The search sheet itself — mounted as an overlay by its host (Library).
+struct SearchOverlay: View {
+    @Binding var isPresented: Bool
+
+    @Environment(Router.self) private var router
+    @Environment(Dependencies.self) private var dependencies
+    @Environment(PlayerController.self) private var playerController
+    @Environment(FeedStore.self) private var feedStore
+    @Environment(ConversationState.self) private var conversationState
+
+    @State private var searchText = ""
+    @FocusState private var isSearchFocused: Bool
+    @State private var typeahead = SearchTypeahead()
+
+    private var pad: CGFloat { ViewConst.screenPaddings }
     private var trimmedQuery: String { searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var isQueryEmpty: Bool { trimmedQuery.isEmpty }
 
-    var searchOverlay: some View {
+    var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Button { closeSearch() } label: {
-                    LucideIcon(.x, .lg)
+                    LucideIcon(.x, .xl)
                         .foregroundStyle(Color.vText2)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -31,7 +47,7 @@ extension HomeScreen {
                 HStack(spacing: 8) {
                     LucideIcon(.search, .md).foregroundStyle(Color.vText3)
                     TextField("", text: $searchText, prompt: Text("Search tracks, artists...").foregroundColor(Color.vText3))
-                        .font(.appSubheadline)
+                        .font(.appBody)
                         .foregroundStyle(Color.vText)
                         .tint(Color.vText)
                         .focused($isSearchFocused)
@@ -58,17 +74,17 @@ extension HomeScreen {
                 if isQueryEmpty {
                     SearchStartList(onSearch: submitSearch)
                         .padding(.vertical, 8)
-                } else if !viewModel.suggestions.isEmpty || viewModel.suggestionsQuery == trimmedQuery {
+                } else if !typeahead.suggestions.isEmpty || typeahead.suggestionsQuery == trimmedQuery {
                     // "Search for …" always leads (Enter does the same), then
                     // whatever matched — an empty match is just that one row.
                     SearchSuggestionsList(
                         query: trimmedQuery,
-                        suggestions: viewModel.suggestions,
+                        suggestions: typeahead.suggestions,
                         onSearch: submitSearch,
                         onTrack: { t in
                             RecentSearches.shared.add(trimmedQuery)
                             closeSearch()
-                            handleTap(t, in: [t])
+                            play(t)
                         },
                         onArtist: { a in
                             RecentSearches.shared.add(trimmedQuery)
@@ -100,14 +116,22 @@ extension HomeScreen {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.vBase)
         .ignoresSafeArea()
-        .onChange(of: searchText) { _, q in viewModel.runSearch(q) }
+        .onChange(of: searchText) { _, q in typeahead.runSearch(q) }
+        // Tab bar + mini-player slide away while search covers the screen.
+        .onAppear { conversationState.searchOpen = true }
+        .onDisappear { conversationState.searchOpen = false }
+        .task {
+            typeahead.feed = feedStore
+            try? await Task.sleep(for: .milliseconds(200))
+            isSearchFocused = true
+        }
     }
 
-    func closeSearch() {
+    private func closeSearch() {
         isSearchFocused = false
-        withAnimation(.easeOut(duration: 0.18)) { showSearchOverlay = false }
+        withAnimation(.easeOut(duration: 0.18)) { isPresented = false }
         searchText = ""
-        viewModel.clearSearch()
+        typeahead.clearSearch()
     }
 
     private func submitSearch(_ raw: String) {
@@ -115,10 +139,111 @@ extension HomeScreen {
         guard !query.isEmpty else { return }
         RecentSearches.shared.add(query)
         isSearchFocused = false
-        withAnimation(.easeOut(duration: 0.18)) { showSearchOverlay = false }
+        withAnimation(.easeOut(duration: 0.18)) { isPresented = false }
         router.navigateToSearch(query: query)
         searchText = ""
-        viewModel.clearSearch()
+        typeahead.clearSearch()
+    }
+
+    /// A track suggestion: toggle it if it's the one loaded, else play it.
+    private func play(_ t: HomeTrack) {
+        if playerController.state.currentMediaID?.value == t.id {
+            playerController.onPlayPause()
+            return
+        }
+        guard t.audioURL != nil else { return }
+        Task {
+            await dependencies.mediaPlayer.play(MediaID(t.id), queue: [
+                Media(id: MediaID(t.id), meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL)),
+            ])
+        }
+    }
+}
+
+// MARK: - Typeahead
+
+/// The search sheet's debounced typeahead (`search_all` as you type).
+@Observable @MainActor
+final class SearchTypeahead {
+    /// One suggestion row (web `Suggestion`): a track title or an artist.
+    enum Suggestion: Identifiable, Hashable {
+        case track(HomeTrack)
+        case artist(ExploreArtistItem)
+        var id: String {
+            switch self {
+            case .track(let t): "t-\(t.id)"
+            case .artist(let a): "a-\(a.id)"
+            }
+        }
+    }
+
+    /// Up to 6 rows: 3 title/artist prefix matches, 3 artists, then 2
+    /// contains-matches (the web's ordering).
+    private(set) var suggestions: [Suggestion] = []
+    private(set) var isSearching = false
+    /// The query `suggestions` answer — set only on a successful response, so
+    /// the overlay shows bones (not "No results") while in flight or failed.
+    private(set) var suggestionsQuery: String?
+    /// Maps artist rows (and seeds the follow overlay).
+    weak var feed: FeedStore?
+
+    private let supabaseService = SupabaseService()
+    private let storageService = StorageService()
+    private var searchTask: Task<Void, Never>?
+
+    /// Debounced typeahead — runs `search_all` as the user types.
+    func runSearch(_ query: String) {
+        searchTask?.cancel()
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { suggestions = []; suggestionsQuery = nil; isSearching = false; return }
+
+        searchTask = Task { @MainActor in
+            isSearching = true
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            do {
+                let results = try await supabaseService.searchAll(query: q, limit: 8)
+                guard !Task.isCancelled else { return }
+                suggestions = buildSuggestions(q, tracks: mapSearchTracks(results.tracks),
+                                               artists: feed?.mapArtists(results.artists) ?? [])
+                suggestionsQuery = q
+            } catch {
+                guard !Task.isCancelled else { return }
+            }
+            isSearching = false
+        }
+    }
+
+    func clearSearch() {
+        searchTask?.cancel()
+        suggestions = []
+        suggestionsQuery = nil
+        isSearching = false
+    }
+
+    private func buildSuggestions(_ q: String, tracks: [HomeTrack], artists: [ExploreArtistItem]) -> [Suggestion] {
+        let lq = q.lowercased()
+        let prefix = tracks.filter { $0.title.lowercased().hasPrefix(lq) || $0.artist.lowercased().hasPrefix(lq) }
+        let prefixIds = Set(prefix.map(\.id))
+        let contains = tracks.filter { !prefixIds.contains($0.id) }
+        let rows: [Suggestion] = prefix.prefix(3).map { .track($0) }
+            + artists.prefix(3).map { .artist($0) }
+            + contains.prefix(2).map { .track($0) }
+        return Array(rows.prefix(6))
+    }
+
+    private func mapSearchTracks(_ tracks: [ApiSearchTrack]) -> [HomeTrack] {
+        tracks.map { t in
+            HomeTrack(
+                id: t.id,
+                title: t.title,
+                artist: t.artist ?? "unknown",
+                coverURL: storageService.resolveTrackUrl(t.coverUrl).flatMap { URL(string: $0) },
+                audioURL: storageService.trackMediaURL(t.audioUrl),
+                streams: t.streams,
+                durationMs: t.durationMs
+            )
+        }
     }
 }
 
@@ -212,7 +337,7 @@ struct SearchForRow: View {
                     .frame(width: 40, height: 40)
                     .background(Color.vSurface, in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
                 Text("\(Text("Search for ").foregroundStyle(Color.vTextRow))\(Text("“\(query)”").foregroundStyle(Color.vText))")
-                    .font(.appSubheadlineMedium)
+                    .font(.appFont.trackTitle)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -224,11 +349,12 @@ struct SearchForRow: View {
     }
 }
 
+
 /// Typing: "Search for", then Tracks (cover art), then Artists (avatars),
 /// each group under its label, titles with the typed text in full ink.
 struct SearchSuggestionsList: View {
     let query: String
-    let suggestions: [HomeScreenViewModel.Suggestion]
+    let suggestions: [SearchTypeahead.Suggestion]
     let onSearch: (String) -> Void
     let onTrack: (HomeTrack) -> Void
     let onArtist: (ExploreArtistItem) -> Void
@@ -271,7 +397,7 @@ struct SearchSuggestionsList: View {
                 thumb().frame(width: 40, height: 40)
                 VStack(alignment: .leading, spacing: 2) {
                     matched(title)
-                        .font(.appSubheadlineMedium)
+                        .font(.appFont.trackTitle)
                         .lineLimit(1)
                     Text(subtitle)
                         .font(.appCaption)
@@ -292,7 +418,6 @@ struct SearchSuggestionsList: View {
     }
 }
 
-/// Empty field: Recent searches (tap to search, ✕ to remove), then Trending.
 struct SearchStartList: View {
     let onSearch: (String) -> Void
     private let recent = RecentSearches.shared
@@ -306,7 +431,7 @@ struct SearchStartList: View {
                         Button { onSearch(q) } label: {
                             HStack(spacing: 12) {
                                 LucideIcon(.clock, .md).foregroundStyle(Color.vText3)
-                                Text(q).font(.appSubheadlineMedium).foregroundStyle(Color.vTextRow).lineLimit(1)
+                                Text(q).font(.appFont.trackTitle).foregroundStyle(Color.vTextRow).lineLimit(1)
                                 Spacer(minLength: 0)
                             }
                             .padding(.leading, ViewConst.screenPaddings)
@@ -317,7 +442,7 @@ struct SearchStartList: View {
                         Button {
                             withAnimation(.easeOut(duration: 0.2)) { recent.remove(q) }
                         } label: {
-                            LucideIcon(.x, .md)
+                            LucideIcon(.x, .lg)
                                 .foregroundStyle(Color.vText2)
                                 .frame(width: 44, height: 44)
                                 .contentShape(.rect)
@@ -329,23 +454,24 @@ struct SearchStartList: View {
                 }
             }
 
-            SuggestionLabel(title: "Trending")
-            ChipFlowLayout(spacing: 8, lineSpacing: 8) {
-                ForEach(SearchTrending.terms, id: \.self) { term in
-                    Button { onSearch(term) } label: {
-                        HStack(spacing: 6) {
-                            LucideIcon(.trendingUp, .xs).foregroundStyle(Color.vText3)
-                            Text(term).font(.appCaptionMedium).foregroundStyle(Color.vText2)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Color.vControl, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, ViewConst.screenPaddings)
-            .padding(.top, 4)
+            // Trending — hidden until it's backed by real data.
+            // SuggestionLabel(title: "Trending")
+            // ChipFlowLayout(spacing: 8, lineSpacing: 8) {
+            //     ForEach(SearchTrending.terms, id: \.self) { term in
+            //         Button { onSearch(term) } label: {
+            //             HStack(spacing: 6) {
+            //                 LucideIcon(.trendingUp, .xs).foregroundStyle(Color.vText3)
+            //                 Text(term).font(.appCaptionMedium).foregroundStyle(Color.vText2)
+            //             }
+            //             .padding(.horizontal, 12)
+            //             .padding(.vertical, 7)
+            //             .background(Color.vControl, in: Capsule())
+            //         }
+            //         .buttonStyle(.plain)
+            //     }
+            // }
+            // .padding(.horizontal, ViewConst.screenPaddings)
+            // .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

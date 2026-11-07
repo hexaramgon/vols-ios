@@ -41,12 +41,25 @@ final class EditTrackViewModel {
     private let supabaseService: SupabaseService
     private let userId: String
 
+    /// The editable fields as loaded — Save stays off until something differs.
+    private struct Snapshot: Equatable {
+        let title: String, description: String, genre: String, tags: Set<String>, visibility: String
+    }
+    private var original: Snapshot?
+    private var current: Snapshot {
+        Snapshot(title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                 description: description.trimmingCharacters(in: .whitespacesAndNewlines),
+                 genre: genre, tags: Set(tags), visibility: visibility)
+    }
+    var hasChanges: Bool { coverData != nil || current != original }
+
     var canSave: Bool {
-        !title.trimmingCharacters(in: .whitespaces).isEmpty && !genre.isEmpty
+        !title.trimmingCharacters(in: .whitespaces).isEmpty && !genre.isEmpty && hasChanges
     }
 
     var validationHint: String? {
-        canSave ? nil : "Add a title and genre to save"
+        title.trimmingCharacters(in: .whitespaces).isEmpty || genre.isEmpty
+            ? "Add a title and genre to save" : nil
     }
 
     init(editing track: ApiTrackDetail, supabaseService: SupabaseService, storageService: StorageService, userId: String) {
@@ -60,6 +73,7 @@ final class EditTrackViewModel {
         originalTags = Set(track.metadata?.tags ?? [])
         visibility = track.visibility ?? "public"
         existingCoverURL = storageService.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) }
+        original = current
     }
 
     func handleCoverImage(_ image: UIImage) {

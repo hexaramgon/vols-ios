@@ -30,9 +30,22 @@ final class NowPlayingCommentsModel {
     var commentTimestampEnd: Double?
     /// When set, the next send is a reply to this comment (shown as a banner).
     var replyingTo: ApiTrackComment?
+    /// Bumped on every Reply tap — tapping Reply on the comment already being
+    /// replied to (keyboard dismissed since) changes nothing else, so the
+    /// composer refocuses and the list re-scrolls off this instead.
+    var replyRequest = 0
+
+    func reply(to comment: ApiTrackComment) {
+        replyingTo = comment
+        replyRequest += 1
+    }
     /// True while the composer input is focused (keyboard up). The comments panel
     /// reads this so a tap dismisses the keyboard instead of opening a profile.
     var composerFocused = false
+    /// Screen Y of the composer card's visible top while it's lifted over the
+    /// keyboard (`.greatestFiniteMagnitude` when it isn't) — the comments list
+    /// insets its bottom by this so "just above the composer" is real.
+    var composerTopY: CGFloat = .greatestFiniteMagnitude
     /// A comment to scroll to and briefly highlight in the panel — set when the
     /// live comment toast over the cover is tapped.
     var highlightedCommentId: String?
@@ -160,9 +173,11 @@ final class NowPlayingCommentsModel {
                 } else if let trackId {
                     try await supabaseService.deleteComment(commentId: commentId, trackId: trackId)
                 }
+                ToastCenter.shared.show("Comment deleted")
             } catch {
                 debugLog("[NowPlayingComments] delete failed: \(error)")
                 comments = snapshot
+                ToastCenter.shared.show("Couldn't delete the comment — it's back.", style: .error)
             }
         }
     }

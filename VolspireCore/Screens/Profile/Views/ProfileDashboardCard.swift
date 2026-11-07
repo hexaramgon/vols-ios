@@ -10,21 +10,29 @@
 import DesignSystem
 import SwiftUI
 
-struct ProfileDashboardCard: View {
-    @State private var viewModel = AnalyticsViewModel()
+/// The dashboard entry card: grey chart tile, title over a caption, an
+/// optional accessory (Artist Dashboard's trend pill), chevron. Shared by
+/// Artist Dashboard, Pack Analytics and Listing Analytics so they match.
+struct DashboardLinkCard<Accessory: View>: View {
+    let title: String
+    let subtitle: String
+    /// The app's accent tile (Listing / Pack Analytics). The profile's Artist
+    /// Dashboard keeps the grey tile.
+    var accentTile = false
+    let action: () -> Void
+    @ViewBuilder var accessory: Accessory
 
     var body: some View {
-        NavigationLink {
-            AnalyticsScreen()
-        } label: {
+        Button(action: action) {
             HStack(spacing: 12) {
                 LucideIcon(.chartLine, .md)
-                    .foregroundStyle(Color.vText)
+                    .foregroundStyle(accentTile ? Color.vOnColor : Color.vText)
                     .frame(width: 34, height: 34)
-                    .background(Color.vControlActive, in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
+                    .background(accentTile ? Color.vAccent : Color.vControlActive,
+                                in: RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Artist Dashboard")
+                    Text(title)
                         .font(.appSubheadlineSemibold)
                         .foregroundStyle(Color.vText)
                     Text(subtitle)
@@ -33,11 +41,7 @@ struct ProfileDashboardCard: View {
                 }
 
                 Spacer(minLength: 8)
-
-                // Hide the trend pill at 0% — no point showing a green "0%".
-                if viewModel.loaded, viewModel.playsLast30 > 0, viewModel.weekTrend != 0 {
-                    trendPill
-                }
+                accessory
                 LucideIcon(.chevronRight, .sm)
                     .foregroundStyle(Color.vText2)
             }
@@ -45,6 +49,30 @@ struct ProfileDashboardCard: View {
             .background(Color.vCard, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+}
+
+extension DashboardLinkCard where Accessory == EmptyView {
+    init(title: String, subtitle: String, accentTile: Bool = false, action: @escaping () -> Void) {
+        self.init(title: title, subtitle: subtitle, accentTile: accentTile, action: action) { EmptyView() }
+    }
+}
+
+struct ProfileDashboardCard: View {
+    @Environment(Router.self) private var router
+    @State private var viewModel = AnalyticsViewModel()
+
+    var body: some View {
+        // Pushed on the tab's router (not a NavigationLink), so re-tapping
+        // Profile pops back here like every other tab.
+        DashboardLinkCard(title: "Artist Dashboard", subtitle: subtitle) {
+            router.navigateToAnalytics()
+        } accessory: {
+            // Hide the trend pill at 0% — no point showing a green "0%".
+            if viewModel.loaded, viewModel.playsLast30 > 0, viewModel.weekTrend != 0 {
+                trendPill
+            }
+        }
         .task { await viewModel.load() }
     }
 

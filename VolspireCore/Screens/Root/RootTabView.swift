@@ -30,6 +30,10 @@ class ConversationState {
     /// while its keyboard is up, so the tab bar slides away instead of wedging
     /// between the composer and the keyboard — the same hide conversations use.
     var composerActive = false
+
+    /// Set while Explore's full-screen search is open, so the tab bar and
+    /// mini-player slide away instead of floating over it.
+    var searchOpen = false
 }
 
 private struct IsActiveRootTabKey: EnvironmentKey {
@@ -53,6 +57,10 @@ struct RootTabView: View {
     /// Picked in the New post sheet; presented once that sheet has dismissed
     /// (a full-screen cover can't present from a dismissing sheet).
     @State private var pendingPostType: String?
+    /// A file to open the track upload with (Workspace "Post as track").
+    @State private var trackPrefill: TrackFilePrefill?
+    /// A Workspace folder's files for New Pack ("Publish as pack").
+    @State private var packPrefill: PackPrefill?
     @State private var selectedTab: TabBarItem = .home
     @State private var profileAvatarImage: Image?
     @State private var visitedTabs: Set<TabBarItem> = [.home]
@@ -164,14 +172,17 @@ struct RootTabView: View {
                         // drifted from the real bar at larger Dynamic Type).
                         playerController.tabBarHeight = $0
                     }
-                    .offset(y: hideTabBar ? tabBarHeight + ViewConst.safeAreaInsets.bottom : 0)
+                    // Search only moves the bar (not the reservation above),
+                    // so Home's layout doesn't jump behind it.
+                    .offset(y: hideTabBar || conversationState.searchOpen ? tabBarHeight + ViewConst.safeAreaInsets.bottom : 0)
                     // Conversation hide keeps its tuned spring. The composer hide
                     // uses a plain scoped ease — decoupled from the keyboard's
                     // system animation (never withAnimation'd in the keyboard
                     // handler) so it can't merge and overshoot.
                     .animation(.smooth(duration: 0.35), value: isConversationOpen)
                     .animation(.easeInOut(duration: 0.25), value: conversationState.composerActive)
-                    .allowsHitTesting(!hideTabBar)
+                    .animation(.easeInOut(duration: 0.25), value: conversationState.searchOpen)
+                    .allowsHitTesting(!hideTabBar && !conversationState.searchOpen)
             }
             // New post: the app's standard option sheet (header + icon rows).
             .sheet(isPresented: $showNewPost, onDismiss: {
@@ -197,12 +208,20 @@ struct RootTabView: View {
                             authManager: dependencies.authManager
                         )
                     )
+                case "release":
+                    CreateReleaseScreen(
+                        viewModel: CreateReleaseViewModel(
+                            service: dependencies.supabaseService,
+                            auth: dependencies.authManager
+                        )
+                    )
                 case "sample_pack":
                     CreatePackScreen(
                         viewModel: CreatePackViewModel(
                             supabaseService: dependencies.supabaseService,
                             authManager: dependencies.authManager
-                        )
+                        ),
+                        prefill: packPrefill
                     )
                 case "service":
                     NewServiceScreen(
@@ -216,14 +235,20 @@ struct RootTabView: View {
                         viewModel: UploadTrackViewModel(
                             supabaseService: dependencies.supabaseService,
                             authManager: dependencies.authManager
-                        )
+                        ),
+                        prefill: trackPrefill
                     )
                 }
+            }
+            .onChange(of: selectedPostType) { _, type in
+                if type == nil { trackPrefill = nil; packPrefill = nil }
             }
             .ignoresSafeArea(.keyboard)
             // The Marketplace tab's Sell sheet opens a create flow by its
             // New post id ("sample_pack", "service", "track").
             .onReceive(NotificationCenter.default.publisher(for: .openNewPost)) { notification in
+                trackPrefill = notification.userInfo?["trackPrefill"] as? TrackFilePrefill
+                packPrefill = notification.userInfo?["packPrefill"] as? PackPrefill
                 if let type = notification.object as? String { selectedPostType = type }
             }
             .onReceive(NotificationCenter.default.publisher(for: .navigateToProfile)) { notification in
@@ -256,6 +281,18 @@ struct RootTabView: View {
         .task { await dependencies.libraryStore.loadIfNeeded() }
         // Cold launch: route a push tapped before the UI was ready to receive it.
         .task { routePendingPush() }
+        // Push primer: once, a beat after the app settles, for anyone who
+        // hasn't been asked yet. Its button shows the system prompt.
+        .task {
+            let push = PushNotificationManager.shared
+            await push.refreshStatus()
+            guard push.authorizationStatus == .notDetermined else { return }
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            IntroModalCenter.shared.present(.pushPrimer) {
+                Task { await push.requestPermission() }
+            }
+        }
         .onChange(of: selectedTab) { _, _ in
             Task { await dependencies.inboxStore.refreshUnread() }
         }
@@ -339,7 +376,7 @@ struct RootTabView: View {
         Task {
             let storage = StorageService()
             guard let track = (try? await dependencies.supabaseService.getTracksByIds([trackId]))?.first,
-                  let audioURL = storage.resolveTrackUrl(track.audioUrl).flatMap({ URL(string: $0) })
+                  let audioURL = storage.trackMediaURL(track.audioUrl)
             else {
                 if fallbackToNotifications { router(for: selectedTab).navigateToNotifications() }
                 return
@@ -410,10 +447,9 @@ struct RootTabView: View {
                     if item == .newPost {
                         showNewPost = true
                     } else if selectedTab == item {
-                        // Re-tapping the ACTIVE tab pops its nav stack back to
-                        // the tab's root (e.g. Marketplace detail → Marketplace),
-                        // and Home additionally resets to the top of All (it
-                        // observes rootResetTick).
+                        // Re-tapping the ACTIVE tab: first pops its nav stack
+                        // back to the tab's root (your place kept); a further
+                        // tap at the root scrolls it to the top.
                         router(for: item).popToRoot()
                     } else {
                         // Arriving from another tab resumes this tab exactly
@@ -521,6 +557,7 @@ private extension TabBarItem {
         .environment(dependencies.inboxStore)
         .environment(dependencies.listingsStore)
         .environment(dependencies.feedStore)
+        .environment(dependencies.packsStore)
 }
 
 // MARK: - New post sheet
@@ -542,11 +579,16 @@ private struct NewPostSheet: View {
     private var options: [Option] {
         var list: [Option] = [
             .init(id: "track", icon: .music2, title: "Track", caption: "Upload audio or video"),
+            .init(id: "release", icon: .layers, title: "Release", caption: "Upload several tracks as one release"),
             .init(id: "listing", icon: .megaphone, title: "Listing", caption: "Post a collab call"),
         ]
         if FeatureFlags.marketplaceSurfaces {
             list.append(.init(id: "service", icon: .briefcase, title: "Service", caption: "Offer mixing, features and more"))
-            list.append(.init(id: "sample_pack", icon: .package, title: "Pack", caption: "Sell samples or presets"))
+            list.append(.init(id: "sample_pack", icon: .package, title: "Pack",
+                              caption: "Sell samples or presets from Files or iCloud Drive"))
+        } else if FeatureFlags.freePacks {
+            list.append(.init(id: "sample_pack", icon: .package, title: "Pack",
+                              caption: "Free samples or presets from Files or iCloud Drive"))
         }
         return list
     }

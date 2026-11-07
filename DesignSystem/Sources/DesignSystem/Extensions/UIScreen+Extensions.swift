@@ -36,7 +36,7 @@ public extension UIScreen {
     static var deviceCornerRadius: CGFloat {
         // No home indicator ⇒ square display (SE family). Rounding those corners
         // would float the card's arcs against flat screen edges.
-        let hasHomeIndicator = (UIApplication.keyWindow?.safeAreaInsets.bottom ?? 0) > 0
+        let hasHomeIndicator = ViewConst.safeAreaInsets.bottom > 0
         guard hasHomeIndicator else { return 0 }
 
         switch round(size.width) {

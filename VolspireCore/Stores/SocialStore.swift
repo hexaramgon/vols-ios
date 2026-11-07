@@ -42,6 +42,9 @@ final class SocialStore {
     /// AND by an in-thread accept, so a mounted profile's "Message" button
     /// can deep-link without a refetch.
     private var collabConvoIdByUserId: [String: String] = [:]
+    /// This session's answers to INCOMING collab requests, with when they were
+    /// given (see `collabAnswer(from:after:)`).
+    private var collabAnswerByUserId: [String: (accepted: Bool, at: Date)] = [:]
 
     // MARK: Dependencies
 
@@ -65,6 +68,7 @@ final class SocialStore {
         followerDeltas = [:]
         collabStatusByUserId = [:]
         collabConvoIdByUserId = [:]
+        collabAnswerByUserId = [:]
     }
 
     // MARK: - Own profile
@@ -186,6 +190,23 @@ final class SocialStore {
     /// fallback) — drives a profile's "Message" deep-link.
     func collabConvoId(_ userId: String, fallback: String? = nil) -> String? {
         collabConvoIdByUserId[key(userId)] ?? fallback
+    }
+
+    /// Records an accept/decline of `userId`'s collab request (notification
+    /// row or DM strip), so the OTHER surface closes that request too.
+    func recordCollabAnswer(accepted: Bool, from userId: String) {
+        collabAnswerByUserId[key(userId)] = (accepted, Date())
+    }
+
+    /// This session's answer to a request from `userId` created at
+    /// `requestDate` — nil if it hasn't been answered here since it was made.
+    /// The status overlay can't decide this: a profile visit seeds "none"
+    /// long before a new request arrives, which read as "declined" and hid
+    /// Accept until relaunch. Only an answer given AFTER the request counts.
+    func collabAnswer(from userId: String, after requestDate: Date?) -> Bool? {
+        guard let answer = collabAnswerByUserId[key(userId)] else { return nil }
+        if let requestDate, answer.at < requestDate { return nil }
+        return answer.accepted
     }
 
     private func key(_ raw: String) -> String { raw.lowercased() }

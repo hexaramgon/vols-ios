@@ -44,6 +44,8 @@ final class CreateListingViewModel {
 
     /// Server-enforced limits (mirror the create_listing / update_listing RPC).
     static let titleLimit = 50
+    /// Audio clips per listing (client-side; shown as "n/5" on the form).
+    static let clipLimit = 5
     static let descriptionLimit = 500
 
     /// Non-nil when editing an existing listing (drives update vs create).
@@ -56,13 +58,37 @@ final class CreateListingViewModel {
         attachments.allSatisfy(\.isComplete)
     }
 
+    /// Edit mode: the fields as loaded — Save stays off until something differs.
+    private struct Snapshot: Equatable {
+        struct Clip: Equatable { let title: String, existingFileUrl: String?, hasNewFile: Bool }
+        let category: String, title: String, description: String, tags: [String], clips: [Clip]
+    }
+    private var original: Snapshot?
+    private var current: Snapshot {
+        Snapshot(category: category,
+                 title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                 description: description.trimmingCharacters(in: .whitespacesAndNewlines),
+                 tags: tags,
+                 clips: attachments.map {
+                     .init(title: $0.title.trimmingCharacters(in: .whitespaces),
+                           existingFileUrl: $0.existingFileUrl, hasNewFile: $0.data != nil)
+                 })
+    }
+    /// Always true for a new listing.
+    var hasChanges: Bool { original == nil || current != original }
+
     var canPost: Bool {
-        !title.trimmingCharacters(in: .whitespaces).isEmpty && attachmentsComplete
+        hasChanges && !title.trimmingCharacters(in: .whitespaces).isEmpty
+            && !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && attachmentsComplete
     }
 
     var validationHint: String? {
         if title.trimmingCharacters(in: .whitespaces).isEmpty {
             return "Add a title to post"
+        }
+        if description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Add a description to post"
         }
         if !attachmentsComplete {
             return "Finish every audio row (title + file) to post"
@@ -90,16 +116,24 @@ final class CreateListingViewModel {
         attachments = listing.attachments.map { att in
             AudioClipDraft(title: att.title ?? "", existingFileUrl: att.fileUrl)
         }
+        original = current
     }
 
-    func handleAudioFile(rowId: UUID, result: Result<URL, Error>) {
-        guard let index = attachments.firstIndex(where: { $0.id == rowId }) else { return }
+    /// Pick-first: a chosen file becomes a new clip, its title prefilled from
+    /// the file name (editable).
+    func addAudioFile(_ result: Result<URL, Error>) {
+        guard attachments.count < Self.clipLimit else { return }
         switch result {
         case .success(let url):
             do {
-                guard let data = try SecurityScopedFile.read(url) else { return }
-                attachments[index].data = data
-                attachments[index].fileName = url.lastPathComponent
+                guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.postUploads.maxUploadBytes) else { return }
+                var clip = AudioClipDraft()
+                clip.data = data
+                clip.fileName = url.lastPathComponent
+                clip.title = String((url.lastPathComponent as NSString).deletingPathExtension.prefix(80))
+                attachments.append(clip)
+            } catch let error as FileTooLargeError {
+                uploadState = .error(error.localizedDescription)
             } catch {
                 uploadState = .error("Failed to read audio file")
             }
@@ -177,9 +211,13 @@ final class CreateListingViewModel {
     /// users under the limits, but surface these if one slips through).
     private func postError(_ error: Error) -> String {
         let msg = error.serverRawDetail
+        // Clip checks first — "attachment_title_too_long" contains "title_too_long".
+        if msg.contains("too_many_attachments") { return "A listing can have up to \(Self.clipLimit) audio clips." }
+        if msg.contains("attachment_title_too_long") { return "Clip titles must be 80 characters or less." }
         if msg.contains("title_too_long") { return "Title must be \(Self.titleLimit) characters or less." }
         if msg.contains("description_too_long") { return "Description must be \(Self.descriptionLimit) characters or less." }
         if msg.contains("title_required") { return "Add a title to post." }
+        if msg.contains("description_required") { return "Add a description to post." }
         return "Couldn't save your listing. Please try again."
     }
 }

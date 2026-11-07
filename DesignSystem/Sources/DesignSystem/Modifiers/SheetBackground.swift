@@ -18,6 +18,12 @@ public extension View {
     /// visible drag indicator (pass `dragIndicator: false` for sheets that hide
     /// it), and tap-to-dismiss-keyboard. `alwaysDark: true` pins the sheet to
     /// the dark scheme — for sheets presented from the full-screen player.
+    ///
+    /// `alwaysDark` sets the PRESENTATION's scheme too (`preferredColorScheme`
+    /// inside a sheet scopes to that sheet, not the app): the environment
+    /// override alone only reached the SwiftUI content, so the UIKit sheet
+    /// container — grabber, frosted backing — rendered light first and stayed
+    /// a different shade around the grabber.
     func sheetBackground(dragIndicator: Bool = true, alwaysDark: Bool = false) -> some View {
         tapToDismissKeyboard()
             .presentationBackground {
@@ -25,12 +31,15 @@ public extension View {
             }
             .presentationDragIndicator(dragIndicator ? .visible : .hidden)
             .alwaysDark(alwaysDark)
+            .preferredColorScheme(alwaysDark ? .dark : nil)
     }
 
     /// Pins this SUBTREE to the dark scheme (`.environment(\.colorScheme, .dark)`)
     /// — for content that stays dark in light mode (Now Playing, the profile
     /// banner hero, image cropper, video). Never use `.preferredColorScheme`
-    /// for this: it propagates up to the window and forces the whole app.
+    /// for this on in-place content: from a non-presented view it propagates
+    /// up to the window and forces the whole app. (Inside a sheet it scopes to
+    /// that sheet — `sheetBackground(alwaysDark:)` relies on that.)
     @ViewBuilder
     func alwaysDark(_ enabled: Bool = true) -> some View {
         if enabled {

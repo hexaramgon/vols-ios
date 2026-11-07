@@ -2,9 +2,10 @@
 //  CreatePackViewModel.swift
 //  Volspire
 //
-//  Pack creation — mirrors the web's pack-create page: type + gradient +
-//  cover, basic info, tags, multi-file upload with preview selection, and
-//  the create_pack RPC.
+//  Pack creation — the upload flow's layout: cover, type, details, tags,
+//  multi-file upload with preview selection, and the create_pack RPC. No
+//  colour picker: a cover-less pack gets its name-seeded mesh like every
+//  other cover-less item.
 //
 
 import DesignSystem
@@ -27,19 +28,16 @@ let packTypes: [PackTypeOption] = [
     .init(id: "Plugin", icon: .package),
 ]
 
-/// Web GRADIENT_OPTIONS (pack-create) — value strings stored in the DB; the swatch
-/// top colour is derived from each string via TailwindGradient (see UploadGradientOption).
-let packGradients: [UploadGradientOption] = [
-    .init(id: "from-violet-900 via-violet-950 to-black", label: "Violet"),
-    .init(id: "from-rose-900 via-rose-950 to-black", label: "Rose"),
-    .init(id: "from-cyan-900 via-cyan-950 to-black", label: "Cyan"),
-    .init(id: "from-neutral-700 via-neutral-900 to-black", label: "Slate"),
-    .init(id: "from-amber-900 via-amber-950 to-black", label: "Amber"),
-    .init(id: "from-emerald-900 via-emerald-950 to-black", label: "Emerald"),
-    .init(id: "from-orange-900 via-orange-950 to-black", label: "Orange"),
-    .init(id: "from-indigo-900 via-indigo-950 to-black", label: "Indigo"),
-    .init(id: "from-blue-900 via-blue-950 to-black", label: "Blue"),
-]
+/// A Workspace folder handed to New Pack ("Publish as pack"): its name and
+/// its files, already downloaded to temp files the flow owns (and deletes).
+struct PackPrefill: Hashable, Sendable {
+    struct File: Hashable, Sendable {
+        let localURL: URL
+        let fileName: String
+    }
+    let name: String
+    let files: [File]
+}
 
 @MainActor
 @Observable
@@ -58,14 +56,20 @@ final class CreatePackViewModel {
     var name: String = ""
     var packType: String = packTypes[0].id
     var price: String = ""
+    /// What's sent as the price. The free-packs slice has no price field: new
+    /// packs are free, and an edit keeps the price the pack already had.
+    private var effectivePrice: Double {
+        if FeatureFlags.freePacksOnly && editingPackId == nil { return 0 }
+        return Double(price) ?? 0
+    }
     var description: String = ""
     var tags: [String] = []
-    var gradient: String = packGradients[0].id
     var files: [PackFileDraft] = []
     var visibility: String = "public"
 
-    // Cover (optional — overrides the gradient when set), staged via the
-    // shared CoverDraft.
+    // Cover (optional — a cover-less pack shows its name mesh), staged via
+    // the shared CoverDraft. `existingCoverURL`: the current cover when editing.
+    var existingCoverURL: URL?
     private var cover = CoverDraft()
     var coverImage: UIImage? { cover.image }
     var coverData: Data? { cover.data }
@@ -101,7 +105,21 @@ final class CreatePackViewModel {
         return out
     }
 
-    var canPublish: Bool { missing.isEmpty }
+    /// Edit mode: the fields as loaded — Save stays off until something differs.
+    private struct Snapshot: Equatable {
+        let name: String, packType: String, price: String, description: String, tags: [String], visibility: String
+    }
+    private var original: Snapshot?
+    private var current: Snapshot {
+        Snapshot(name: name.trimmingCharacters(in: .whitespacesAndNewlines), packType: packType,
+                 price: price.trimmingCharacters(in: .whitespaces),
+                 description: description.trimmingCharacters(in: .whitespacesAndNewlines),
+                 tags: tags, visibility: visibility)
+    }
+    /// Always true for a new pack.
+    var hasChanges: Bool { original == nil || coverData != nil || current != original }
+
+    var canPublish: Bool { missing.isEmpty && hasChanges }
 
     var validationHint: String? {
         missing.isEmpty ? nil : "Add \(missing.joined(separator: ", ")) to publish"
@@ -126,27 +144,53 @@ final class CreatePackViewModel {
         if let p = detail.price, p > 0 { price = String(p) }
         description = detail.description ?? ""
         tags = detail.tags ?? []
-        gradient = detail.gradient ?? packGradients[0].id
+        existingCoverURL = StorageService().resolveTrackUrl(detail.coverUrl).flatMap { URL(string: $0) }
         visibility = (detail.isPublished ?? true) ? "public" : "draft"
+        original = current
     }
 
     func handleCoverImage(_ image: UIImage) {
         cover.set(image)
     }
 
-    func clearCover() {
-        cover.clear()
-    }
-
     func addFiles(result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
             for url in urls {
-                guard let data = try? SecurityScopedFile.read(url), !data.isEmpty else { continue }
-                files.append(PackFileDraft(name: url.lastPathComponent, data: data))
+                do {
+                    guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.packs.maxUploadBytes),
+                          !data.isEmpty else { continue }
+                    files.append(PackFileDraft(name: url.lastPathComponent, data: data))
+                } catch let error as FileTooLargeError {
+                    uploadState = .error("\(url.lastPathComponent): \(error.localizedDescription)")
+                } catch {
+                    continue
+                }
             }
         case .failure(let error):
             uploadState = .error(error.localizedDescription)
+        }
+    }
+
+    /// Takes a Workspace folder's downloaded files (and its name, if the pack
+    /// has none yet). Reads off the main thread; deletes the temp copies.
+    func applyPrefill(_ prefill: PackPrefill) {
+        if name.isEmpty { name = String(prefill.name.prefix(80)) }
+        let limit = StorageBucket.packs.maxUploadBytes
+        Task {
+            for file in prefill.files {
+                let url = file.localURL
+                let data = await Task.detached(priority: .userInitiated) { () -> Data? in
+                    defer { try? FileManager.default.removeItem(at: url) }
+                    return try? Data(contentsOf: url)
+                }.value
+                guard let data, !data.isEmpty else { continue }
+                guard data.count <= limit else {
+                    uploadState = .error("\(file.fileName): \(FileTooLargeError(maxBytes: limit).localizedDescription)")
+                    continue
+                }
+                files.append(PackFileDraft(name: file.fileName, data: data))
+            }
         }
     }
 
@@ -182,8 +226,7 @@ final class CreatePackViewModel {
                     name: trimmedName,
                     packType: packType,
                     description: desc,
-                    price: Double(price) ?? 0,
-                    gradient: gradient,
+                    price: effectivePrice,
                     tags: tags,
                     isPublished: visibility == "public",
                     coverData: coverData,
@@ -196,9 +239,8 @@ final class CreatePackViewModel {
                     name: trimmedName,
                     packType: packType,
                     description: desc,
-                    price: Double(price) ?? 0,
+                    price: effectivePrice,
                     formats: formats,
-                    gradient: gradient,
                     tags: tags,
                     isPublished: visibility == "public",
                     files: files.map { .init(name: $0.name, data: $0.data, isPreview: $0.isPreview) },
@@ -207,6 +249,7 @@ final class CreatePackViewModel {
                 )
             }
             uploadState = .success
+            NotificationCenter.default.post(name: .packsChanged, object: nil)
         } catch {
             uploadState = .error(error.localizedDescription)
         }

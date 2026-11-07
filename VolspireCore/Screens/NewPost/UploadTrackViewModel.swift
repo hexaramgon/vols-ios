@@ -99,13 +99,22 @@ let trackGenres = [
     "World", "Alternative", "Experimental", "Other",
 ]
 
+/// A file handed to the upload flow from elsewhere (a Workspace folder's
+/// "Post as track") — already downloaded to a local temp file the flow owns.
+struct TrackFilePrefill: Hashable, Sendable {
+    let localURL: URL
+    let fileName: String
+    let isVideo: Bool
+}
+
 @MainActor
 @Observable
 final class UploadTrackViewModel {
     var title: String = ""
     var description: String = ""
     var genre: String = ""
-    var mediaType: UploadMediaType = .audio
+    /// Video first — the flow opens on the camera-roll grid.
+    var mediaType: UploadMediaType = .video
 
     // Public preview (the streamable master)
     var audioData: Data?
@@ -156,6 +165,8 @@ final class UploadTrackViewModel {
     var tierEnabled: [TrackTier: Bool] = [.free: true, .creator: false, .pro: false, .exclusive: false]
     var tierPrice: [TrackTier: String] = [.free: "0", .creator: "", .pro: "", .exclusive: ""]
 
+    /// The (currently commented-out) "Looking for collaborators" toggle;
+    /// sent to `create_track_v2` — false while the section is hidden.
     var lookingForCollab = false
     var visibility: String = "public"
 
@@ -210,6 +221,10 @@ final class UploadTrackViewModel {
 
     private let supabaseService: SupabaseService
     private let authManager: AuthManager
+
+    /// Releases (the user's own) to add the new track to once it's published.
+    var releaseIds: Set<String> = []
+    var currentUserIdForReleases: String? { authManager.currentUserId }
 
     init(supabaseService: SupabaseService, authManager: AuthManager) {
         self.supabaseService = supabaseService
@@ -295,7 +310,7 @@ final class UploadTrackViewModel {
         switch result {
         case .success(let url):
             do {
-                guard let data = try SecurityScopedFile.read(url) else { return }
+                guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.postUploads.maxUploadBytes) else { return }
                 // Validate on pick, not just on Publish — a file that can't be
                 // published should bounce before the rest of the form is filled.
                 // createTrackV2 re-runs the check as a backstop.
@@ -308,6 +323,8 @@ final class UploadTrackViewModel {
                 audioFileError = nil
                 audioData = data
                 audioFileName = url.lastPathComponent
+            } catch let error as FileTooLargeError {
+                audioFileError = error.localizedDescription
             } catch {
                 uploadState = .error("Failed to read audio file")
             }
@@ -316,12 +333,48 @@ final class UploadTrackViewModel {
         }
     }
 
+    /// Attaches a prefilled file as the public preview (audio validated like a
+    /// picked file; video through the same compression path) and seeds the
+    /// title from its name when empty.
+    func applyPrefill(_ prefill: TrackFilePrefill) {
+        if title.isEmpty {
+            title = String((prefill.fileName as NSString).deletingPathExtension.prefix(100))
+        }
+        if prefill.isVideo {
+            mediaType = .video
+            handleVideoFile(at: prefill.localURL, fileName: prefill.fileName)
+            return
+        }
+        mediaType = .audio
+        Task {
+            // Off the main thread — a long WAV is tens of MB.
+            let url = prefill.localURL
+            let data = await Task.detached(priority: .userInitiated) {
+                defer { try? FileManager.default.removeItem(at: url) }
+                return try? Data(contentsOf: url)
+            }.value
+            guard let data else {
+                audioFileError = "Couldn't read that file."
+                return
+            }
+            do {
+                try MediaSniffer.validate(data, fileName: prefill.fileName)
+            } catch {
+                audioFileError = error.localizedDescription
+                return
+            }
+            audioFileError = nil
+            audioData = data
+            audioFileName = prefill.fileName
+        }
+    }
+
     /// Reads a picked buyer-download asset (kind: "mp3" | "wav" | "stems").
     func handleAssetFile(kind: String, result: Result<URL, Error>) {
         switch result {
         case .success(let url):
             do {
-                guard let data = try SecurityScopedFile.read(url) else { return }
+                guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.trackAssets.maxUploadBytes) else { return }
                 switch kind {
                 case "mp3":
                     mp3Data = data
@@ -333,6 +386,8 @@ final class UploadTrackViewModel {
                     stemsData = data
                     stemsFileName = url.lastPathComponent
                 }
+            } catch let error as FileTooLargeError {
+                uploadState = .error(error.localizedDescription)
             } catch {
                 uploadState = .error("Failed to read file")
             }
@@ -355,62 +410,72 @@ final class UploadTrackViewModel {
         }
     }
 
-    /// Kicks off compression for a just-picked video, already staged to a local
-    /// temp file by the picker (no in-memory copy of the original). Consumes
-    /// (deletes) the file when done.
+    /// The in-flight prepare for the latest picked video — a newer pick
+    /// cancels it, so a slow transcode can't land over the newer video.
+    private var videoTask: Task<Void, Never>?
+
+    /// Drops the attached video (and stops one still preparing) — a file
+    /// picked from Files replaces it; a track has one media pick.
+    func clearVideo() {
+        videoTask?.cancel()
+        videoTask = nil
+        videoData = nil
+        videoFileName = nil
+        isProcessingVideo = false
+        videoProcessingProgress = 0
+        videoAudioOnly = false
+    }
+
+    /// Prepares a just-picked video (already staged to a local temp file by
+    /// the picker) for upload: `VideoTranscoder` — 1080p H.264 + 256 kbps
+    /// AAC, or a straight remux when the file already qualifies. Runs in the
+    /// background: the flow can move on to the details while it works; only
+    /// Publish waits. Consumes (deletes) the file when done.
     func handleVideoFile(at url: URL, fileName: String) {
+        videoTask?.cancel()
         videoAudioOnly = false // fresh attach defaults to keeping the video
+        videoData = nil
+        videoFileName = nil
         isProcessingVideo = true
         videoProcessingProgress = 0
-        Task {
-            if let compressed = await compressVideo(inputURL: url) {
-                videoData = compressed
+        videoTask = Task {
+            defer { try? FileManager.default.removeItem(at: url) }
+            let prepared: URL?
+            do {
+                prepared = try await VideoTranscoder.prepare(url) { value in
+                    Task { @MainActor in
+                        guard self.isProcessingVideo else { return }
+                        self.videoProcessingProgress = max(self.videoProcessingProgress, value)
+                    }
+                }
+            } catch {
+                if Task.isCancelled { return }
+                debugLog("[UploadVM] video prepare failed: \(error)")
+                prepared = nil
+            }
+            if Task.isCancelled {
+                if let prepared { try? FileManager.default.removeItem(at: prepared) }
+                return
+            }
+            if let prepared {
+                // Tens of MB — read off-main.
+                videoData = await Task.detached { try? Data(contentsOf: prepared) }.value
+                try? FileManager.default.removeItem(at: prepared)
                 videoFileName = (fileName as NSString).deletingPathExtension + ".mp4"
             } else {
-                // Compression unavailable/failed — upload the original bytes.
+                // Couldn't prepare it — upload the original bytes.
                 videoData = await Task.detached { try? Data(contentsOf: url) }.value
                 videoFileName = fileName
             }
-            try? FileManager.default.removeItem(at: url)
+            guard !Task.isCancelled else { return }
+            videoProcessingProgress = 1
             isProcessingVideo = false
         }
     }
 
-    /// Compresses a video file with AVAssetExportSession (straight from disk —
-    /// no Data round-trip) to keep it under Supabase's upload limit.
-    private func compressVideo(inputURL: URL) async -> Data? {
-        let tempOutput = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".mp4")
-        defer { try? FileManager.default.removeItem(at: tempOutput) }
-
-        let asset = AVURLAsset(url: inputURL)
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else {
-            return nil
-        }
-
-        session.shouldOptimizeForNetworkUse = true
-
-        let progressPoller = Task {
-            while !Task.isCancelled {
-                videoProcessingProgress = Double(session.progress)
-                try? await Task.sleep(for: .milliseconds(150))
-            }
-        }
-        defer { progressPoller.cancel() }
-
-        do {
-            try await session.export(to: tempOutput, as: .mp4)
-        } catch {
-            return nil
-        }
-        videoProcessingProgress = 1
-        // The compressed file can still be tens of MB — read it off-main.
-        return await Task.detached { try? Data(contentsOf: tempOutput) }.value
-    }
-
     /// Extracts the audio track from a video into an .m4a, so an attached video
     /// can be uploaded as an audio-only track. Reuses the same export pipeline as
-    /// `compressVideo`, just with the AppleM4A (audio) preset.
+    /// the remux path, just with the AppleM4A (audio) preset.
     private func extractAudio(from data: Data) async -> Data? {
         let tempInput = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".mov")
@@ -488,7 +553,7 @@ final class UploadTrackViewModel {
                 uploadIsVideo = isVideo
             }
 
-            let durationMs = await readMediaDurationMs(data: mediaData, fileName: mediaFileName)
+            let durationMs = await Self.readMediaDurationMs(data: mediaData, fileName: mediaFileName)
 
             var assets: [SupabaseService.TrackAssetUpload] = []
             if let mp3Data, let mp3FileName {
@@ -524,6 +589,15 @@ final class UploadTrackViewModel {
                 assets: assets,
                 lookingForCollab: lookingForCollab
             )
+            // Best-effort: the track is live; a failed release add shouldn't
+            // fail the upload (it can be added from the release page).
+            for releaseId in releaseIds {
+                do {
+                    try await supabaseService.addTracksToRelease(releaseId: releaseId, trackIds: [newTrackId])
+                } catch {
+                    debugLog("[UploadTrackVM] add to release \(releaseId): \(error)")
+                }
+            }
             uploadState = .success
             NotificationCenter.default.post(name: .ownContentPosted, object: nil, userInfo: [
                 "confirmationTitle": "Track uploaded",
@@ -538,7 +612,8 @@ final class UploadTrackViewModel {
     }
 
     /// Reads the media duration by writing to a temp file and asking AVFoundation.
-    private func readMediaDurationMs(data: Data, fileName: String) async -> Int? {
+    /// Also used by the bulk release upload.
+    static func readMediaDurationMs(data: Data, fileName: String) async -> Int? {
         let ext = (fileName as NSString).pathExtension.lowercased()
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + "." + (ext.isEmpty ? "dat" : ext))
@@ -548,8 +623,12 @@ final class UploadTrackViewModel {
             return nil
         }
         defer { try? FileManager.default.removeItem(at: tempURL) }
+        return await readMediaDurationMs(fileURL: tempURL)
+    }
 
-        let asset = AVURLAsset(url: tempURL)
+    /// Duration of a media file already on disk (needs a real extension).
+    static func readMediaDurationMs(fileURL: URL) async -> Int? {
+        let asset = AVURLAsset(url: fileURL)
         guard let duration = try? await asset.load(.duration) else { return nil }
         let seconds = CMTimeGetSeconds(duration)
         guard seconds.isFinite, seconds > 0 else { return nil }

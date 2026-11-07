@@ -28,8 +28,11 @@ public enum LoadState: Equatable, Sendable {
     }
 
     /// Record a failure: surfaces the error state only when there's no content
-    /// to keep showing; otherwise the stale-but-real content stays up.
+    /// to keep showing; otherwise the stale-but-real content stays up. A
+    /// cancellation (SwiftUI dropping the `.task` / refresh) isn't a failure —
+    /// the state is left as it was for the next load to resolve.
     public mutating func fail(_ error: any Error, ifEmpty isEmpty: Bool) {
+        guard !error.isCancellation else { return }
         if isEmpty { self = .error(error.localizedDescription) }
     }
 }

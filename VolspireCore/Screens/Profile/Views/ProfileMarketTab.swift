@@ -22,10 +22,7 @@ struct ProfileMarketTab: View {
             if viewModel.listings.isEmpty && !viewModel.listingsLoaded {
                 ListingPostCardSkeleton().padding(.horizontal, -8).padding(.top, 4)
             } else if viewModel.listings.isEmpty {
-                ProfileEmptyState(
-                    icon: .megaphone,
-                    title: "No listings yet"
-                )
+                ProfileEmptyState(icon: ProfileTab.market.icon, title: "No listings yet")
             } else {
                 LazyVStack(spacing: 12) {
                     ForEach(Array(viewModel.listings.enumerated()), id: \.element.id) { i, listing in
@@ -55,12 +52,9 @@ private extension ProfileMarketTab {
                     KFImage(url).downsampled(to: 220).resizable().aspectRatio(contentMode: .fill)
                         .frame(height: 92).frame(maxWidth: .infinity).clipped()
                 } else {
-                    ZStack {
-                        LinearGradient(colors: [Color(white: 0.16), .vBase],
-                                       startPoint: .topLeading, endPoint: .bottomTrailing)
-                        LucideIcon(.library, .xl).foregroundStyle(.white.opacity(0.4))
-                    }
-                    .frame(height: 92).frame(maxWidth: .infinity)
+                    // The pack's name mesh, like its Marketplace card.
+                    PlaylistCoverFallback(name: pack.name, icon: nil)
+                        .frame(height: 92).frame(maxWidth: .infinity)
                 }
 
                 HStack(alignment: .top) {

@@ -23,6 +23,7 @@ struct CommentComposerBar: View {
 
     @State private var keyboardTopY: CGFloat = .greatestFiniteMagnitude
     @State private var barMaxY: CGFloat = 0
+    @State private var barMinY: CGFloat = 0
 
     private var currentFileId: String? { controller.currentFileId }
     private var currentTrackId: String? {
@@ -35,6 +36,11 @@ struct CommentComposerBar: View {
     }
 
     private var keyboardVisible: Bool { keyboardTopY < .greatestFiniteMagnitude }
+
+    /// The card's visible top while it rides the keyboard; none when it's down.
+    private var liftedTopY: CGFloat {
+        keyboardOverlap > 0 ? barMinY - keyboardOverlap : .greatestFiniteMagnitude
+    }
 
     /// Expands into the full card (timestamp row + send) only while focused;
     /// dismissing the keyboard collapses it back to the slim one-line pill.
@@ -58,6 +64,9 @@ struct CommentComposerBar: View {
         return "Add a comment…"
     }
 
+    /// Comment cap — the server's (track and workspace-file comments).
+    static let commentLimit = 1000
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if let err = model.sendError {
@@ -71,6 +80,13 @@ struct CommentComposerBar: View {
 
             if expanded, let replyingTo = model.replyingTo {
                 replyBanner(replyingTo)
+                    // Fades in only once the card has ridden up with the
+                    // keyboard (~0.28s) — shown at once, it travelled with the
+                    // card and read as flying in from the top. Leaves at once.
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(.easeOut(duration: 0.15).delay(0.3)),
+                        removal: .opacity.animation(.easeOut(duration: 0.08))
+                    ))
             }
 
             HStack(alignment: .center, spacing: 10) {
@@ -119,6 +135,8 @@ struct CommentComposerBar: View {
                     }
 
                     Spacer(minLength: 0)
+                    NearLimitCounter(count: model.commentText.count, limit: Self.commentLimit)
+                        .environment(\.colorScheme, .dark)
                     if model.canSend || model.isSending {
                         sendButton
                     }
@@ -149,8 +167,12 @@ struct CommentComposerBar: View {
         .background(
             GeometryReader { geo in
                 Color.clear
-                    .onAppear { barMaxY = geo.frame(in: .global).maxY }
+                    .onAppear {
+                        barMaxY = geo.frame(in: .global).maxY
+                        barMinY = geo.frame(in: .global).minY
+                    }
                     .onChange(of: geo.frame(in: .global).maxY) { _, value in barMaxY = value }
+                    .onChange(of: geo.frame(in: .global).minY) { _, value in barMinY = value }
             }
         )
         .animation(.smooth(duration: 0.28), value: expanded)
@@ -165,15 +187,23 @@ struct CommentComposerBar: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             keyboardTopY = .greatestFiniteMagnitude
         }
-        // Tapping "Reply" on a comment focuses the input.
-        .onChange(of: model.replyingTo?.commentId) { _, newValue in
-            if newValue != nil { isFocused = true }
+        // Where the lifted card's top sits (the list insets to it).
+        .onChange(of: liftedTopY) { _, y in model.composerTopY = y }
+        // Every "Reply" tap focuses the input — including again on the same
+        // comment after the keyboard was dismissed.
+        .onChange(of: model.replyRequest) { _, _ in
+            if model.replyingTo != nil { isFocused = true }
         }
         // Return posts the comment instead of inserting a newline paragraph. A
         // vertical-axis TextField turns the keyboard return into a "\n"; catch that
         // trailing newline, strip it, and send. (`.onSubmit` never fires for a
         // multi-line field, so this is the reliable way.)
         .onChange(of: model.commentText) { _, newValue in
+            // The server's comment cap (post_comment / add_file_comment).
+            if newValue.count > Self.commentLimit {
+                model.commentText = String(newValue.prefix(Self.commentLimit))
+                return
+            }
             guard newValue.hasSuffix("\n") else { return }
             model.commentText = String(newValue.dropLast())
             model.send(trackId: currentTrackId, fileId: currentFileId)
@@ -201,11 +231,16 @@ struct CommentComposerBar: View {
                 .foregroundStyle(.white.opacity(0.55))
             Spacer(minLength: 0)
             Button { model.replyingTo = nil } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.5))
+                // The Lucide ×, a size up from the old 10pt glyph, with a
+                // proper tap target.
+                LucideIcon(.x, .md)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .frame(width: 28, height: 28)
+                    .minimumHitArea(for: 28)
             }
             .buttonStyle(.plain)
+            .padding(.vertical, -8)
+            .accessibilityLabel("Cancel reply")
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
@@ -257,7 +292,7 @@ struct CommentComposerBar: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                 Text(label)
             }
             .font(.appCaptionMedium)
@@ -269,26 +304,10 @@ struct CommentComposerBar: View {
         .buttonStyle(.plain)
     }
 
-    /// Up-arrow in an accent-gradient circle — the same send button as the chat
-    /// input, scale-fading in when there's something to post.
-    @ViewBuilder
+    /// The shared send button (same as the chat input), scale-fading in when
+    /// there's something to post.
     private var sendButton: some View {
-        Group {
-            if model.isSending {
-                ProgressView()
-                    .tint(.white)
-                    .frame(width: 32, height: 32)
-            } else {
-                Button { model.send(trackId: currentTrackId, fileId: currentFileId) } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
-                        .background(LinearGradient.sendAccent, in: Circle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
+        SendButton(busy: model.isSending) { model.send(trackId: currentTrackId, fileId: currentFileId) }
         .padding(.leading, 2)
         .transition(.scale.combined(with: .opacity))
     }

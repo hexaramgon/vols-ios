@@ -47,16 +47,17 @@ public struct SecondaryButton: View {
                 if busy {
                     ProgressView().tint(Color.vControlLabel)
                 } else {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         if let icon { LucideIcon(icon, .md) }
-                        Text(title).font(size.font)
+                        Text(title).font(size.font).lineLimit(1)
                     }
+                    .modifier(CapsuleLabelFit(expands: expands))
                 }
             }
             .foregroundStyle(enabled ? Color.vControlLabel : Color.vText4)
             .frame(maxWidth: expands ? .infinity : nil)
             .frame(height: size.height)
-            .padding(.horizontal, expands ? 0 : 24)
+            .padding(.horizontal, expands ? 0 : (icon == nil ? 24 : 20))
             .background(Color.vControl, in: Capsule())
             .contentShape(Capsule())
         }

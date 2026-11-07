@@ -67,7 +67,6 @@ struct SettingsDocScreen: View {
                             .background(Color.vSurface, in: Circle())
                             .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
                             .padding(6) // pads the hit area out to 44pt
-                            .contentShape(.rect)
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, 8)

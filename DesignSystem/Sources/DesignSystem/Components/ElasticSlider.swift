@@ -162,6 +162,10 @@ private extension ElasticSlider {
             .onPreferenceChange(SizePreferenceKey.self) { [$viewSize] value in
                 $viewSize.wrappedValue = value
             }
+            // Grow the grab area (not the layout) to `touchHeight`.
+            .padding(.vertical, touchInset)
+            .contentShape(.rect)
+            .padding(.vertical, -touchInset)
             .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .updating($isActive) { _, out, _ in
@@ -191,6 +195,12 @@ private extension ElasticSlider {
                 ? config.activeHeight - abs(normalizedStretchingValue) * config.stretchNarrowing
                 : config.inactiveHeight)
         )
+    }
+
+    /// Extra touch area above / below the resting track.
+    private var touchInset: CGFloat {
+        guard let touchHeight = config.touchHeight else { return 0 }
+        return max(0, (touchHeight - config.inactiveHeight) / 2)
     }
 
     var normalizedStretchingValue: CGFloat {
@@ -265,6 +275,10 @@ public struct ElasticSliderConfig {
     public let blendMode: BlendMode
     public let syncLabelsStyle: Bool
     public let defaultSensoryFeedback: Bool
+    /// The grab area's height, centred on the track (nil = the track itself).
+    /// The thin inline scrubbers set 44 — their 7pt bar was nearly
+    /// impossible to catch with a finger.
+    public let touchHeight: CGFloat?
 
     public init(
         labelLocation: ElasticSliderConfig.LabelLocation = .side,
@@ -280,7 +294,8 @@ public struct ElasticSliderConfig {
         maximumTrackColor: Color = .init(UIColor.systemGray6),
         blendMode: BlendMode = .normal,
         syncLabelsStyle: Bool = false,
-        defaultSensoryFeedback: Bool = true
+        defaultSensoryFeedback: Bool = true,
+        touchHeight: CGFloat? = nil
     ) {
         self.labelLocation = labelLocation
         self.activeHeight = activeHeight
@@ -296,6 +311,7 @@ public struct ElasticSliderConfig {
         self.blendMode = blendMode
         self.syncLabelsStyle = syncLabelsStyle
         self.defaultSensoryFeedback = defaultSensoryFeedback
+        self.touchHeight = touchHeight
     }
 }
 
@@ -314,7 +330,8 @@ public extension ElasticSliderConfig {
             minimumTrackActiveColor: .vText,
             minimumTrackInactiveColor: .vText,
             maximumTrackColor: .ink(0.18),
-            defaultSensoryFeedback: false
+            defaultSensoryFeedback: false,
+            touchHeight: 44
         )
     }
 }

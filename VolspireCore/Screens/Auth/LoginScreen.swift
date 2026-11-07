@@ -230,10 +230,10 @@ private struct SignInForm: View {
                     .padding(.vertical, 24)
 
                 VStack(spacing: 10) {
-                    AppleAuthButton(label: "Continue with Apple") { credential in
+                    AppleAuthButton(label: "Continue with Apple") { credential, nonce in
                         Task {
                             isLoading = true
-                            await authManager.signInWithApple(credential: credential)
+                            await authManager.signInWithApple(credential: credential, nonce: nonce)
                             isLoading = false
                         }
                     } onError: { error in

@@ -31,7 +31,7 @@ struct PlayerButtons: View {
         // shuffle · skip-back · white play circle · skip-forward · repeat —
         // spread evenly across the width.
         HStack(spacing: 0) {
-            Button { model.toggleShuffle() } label: {
+            Button { Haptics.impact(); model.toggleShuffle() } label: {
                 toggleGlyph(.shuffle, on: model.isShuffleOn)
             }
 
@@ -78,11 +78,22 @@ struct PlayerButtons: View {
 
             Spacer(minLength: 0)
 
-            Button { model.toggleRepeat() } label: {
-                toggleGlyph(.`repeat`, on: model.isRepeatOn)
+            // Off → repeat all → repeat one (the ¹ glyph), like Spotify /
+            // Apple Music.
+            Button { Haptics.impact(); model.cycleRepeat() } label: {
+                toggleGlyph(model.repeatMode == .one ? .repeat1 : .`repeat`, on: model.repeatMode != .off)
             }
+            .accessibilityLabel(repeatLabel)
         }
         .buttonStyle(.plain)
+    }
+
+    private var repeatLabel: String {
+        switch model.repeatMode {
+        case .off: "Repeat off"
+        case .all: "Repeat all"
+        case .one: "Repeat one"
+        }
     }
 
     /// Shuffle / repeat: resting white at 64%, the accent at full when on.

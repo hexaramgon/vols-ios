@@ -26,6 +26,8 @@ struct ProfileTabContent: View {
                 ProfileFeaturedTab(viewModel: viewModel)
             case .market:
                 ProfileMarketTab(viewModel: viewModel)
+            case .packs:
+                ProfilePacksTab(viewModel: viewModel, isOwnProfile: isOwnProfile)
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)

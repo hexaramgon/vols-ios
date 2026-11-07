@@ -4,6 +4,7 @@
 //
 //
 
+import DesignSystem
 import Foundation
 import Observation
 import Services
@@ -17,13 +18,38 @@ import SharedUtilities
 final class ListingsStore {
     // MARK: Server state
 
-    /// The public board feed.
-    private(set) var listings: [ApiListing] = []
-    /// Defensive: flips on a confirmed response only (skeleton until then).
-    private(set) var listingsLoaded = false
+    /// One paged slice of the board (`get_listings_feed`, hottest first).
+    struct ListingsPage {
+        /// Server-side category filter; empty = every category.
+        var categories: Set<String> = []
+        var rows: [ApiListing] = []
+        /// Defensive: flips on the first confirmed response (skeleton until then).
+        var loaded = false
+        var hasMore = false
+        var isLoading = false
+        /// The last next-page fetch failed — the footer offers a retry.
+        var pageFailed = false
+        /// The first page failed with nothing on screen — the tab shows
+        /// "Couldn't load" + Try again instead of skeletons forever.
+        var failed = false
+        /// Bumped on every reset, so a reply to an older request is dropped.
+        var generation = 0
+    }
+
+    /// The unfiltered board — the Listings tab, and the Collab tab's preview.
+    private(set) var board = ListingsPage()
+    /// The Listings tab with categories picked (kept apart so a filter never
+    /// changes the Collab preview).
+    private(set) var filtered = ListingsPage()
+
+    var listings: [ApiListing] { board.rows }
+    var listingsLoaded: Bool { board.loaded }
+    static let pageSize = 20
     /// The user's saved listings (lazy — first open of the Saved toggle).
     private(set) var savedListings: [ApiListing] = []
     private(set) var savedListingsLoaded = false
+    /// The saved load failed with none on screen (offline) — Try again.
+    private(set) var savedListingsFailed = false
     /// Lowercased ids of saved listings — the viewer truth for rows
     /// (`viewerHasSaved` only comes back on the detail RPC).
     private(set) var savedListingIds: Set<String> = []
@@ -35,7 +61,6 @@ final class ListingsStore {
     // MARK: In-flight guards
 
     private var savingIds: Set<String> = []
-    private var listingsTask: Task<Void, Never>?
     private var savedTask: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
 
@@ -66,39 +91,88 @@ final class ListingsStore {
     }
 
     func resetForSignOut() {
-        listingsTask?.cancel()
         savedTask?.cancel()
-        listingsTask = nil
         savedTask = nil
         savingIds = []
-        listings = []
-        listingsLoaded = false
+        board = ListingsPage(generation: board.generation + 1)
+        filtered = ListingsPage(generation: filtered.generation + 1)
         savedListings = []
         savedListingsLoaded = false
+        savedListingsFailed = false
         savedListingIds = []
     }
 
     // MARK: - Loads (both RPCs are uncached — always fresh)
 
     func loadListingsIfNeeded() async {
-        if let listingsTask { return await listingsTask.value }
-        guard !listingsLoaded else { return }
-        let task = Task { await fetchListings() }
-        listingsTask = task
-        await task.value
-        listingsTask = nil
+        guard !board.loaded, !board.isLoading else { return }
+        await fetch(\.board, reset: true)
     }
 
+    /// A user was blocked — drop their listings from the board + saved now.
+    func removeContent(byUser userId: String) {
+        let id = key(userId)
+        mutateBoardRows { $0.removeAll { key($0.author.userId) == id } }
+        savedListings.removeAll { key($0.author.userId) == id }
+    }
+
+    /// Pull-to-refresh / new content: the first page again (and the filtered
+    /// slice's, when one is showing).
     func refreshListings() async {
-        await fetchListings()
+        await fetch(\.board, reset: true)
+        if !filtered.categories.isEmpty { await fetch(\.filtered, reset: true) }
     }
 
-    private func fetchListings() async {
+    /// The slice for a category selection (the board itself when none).
+    func page(for categories: Set<String>) -> ListingsPage {
+        if categories.isEmpty { return board }
+        return filtered.categories == categories ? filtered : ListingsPage(categories: categories)
+    }
+
+    /// The Listings tab's filter changed — fetch that selection's first page.
+    func setFilter(_ categories: Set<String>) async {
+        guard !categories.isEmpty, filtered.categories != categories else { return }
+        filtered = ListingsPage(categories: categories, generation: filtered.generation + 1)
+        await fetch(\.filtered, reset: true)
+    }
+
+    /// The next page for a selection (the list footer calls this on scroll).
+    func loadMore(categories: Set<String>) async {
+        await fetch(categories.isEmpty ? \.board : \.filtered, reset: false)
+    }
+
+    /// One fetch path for both slices. A reset reloads the first page (rows
+    /// stay up until it lands); otherwise the next page follows the last
+    /// row's cursor, deduped by id.
+    private func fetch(_ slice: ReferenceWritableKeyPath<ListingsStore, ListingsPage>, reset: Bool) async {
+        let page = self[keyPath: slice]
+        let cursor = reset ? nil : page.rows.last?.cursor
+        guard reset || (!page.isLoading && page.hasMore && cursor != nil) else { return }
+        let generation = reset ? page.generation + 1 : page.generation
+        self[keyPath: slice].generation = generation
+        self[keyPath: slice].isLoading = true
+        self[keyPath: slice].pageFailed = false
         do {
-            listings = try await service.getListings(category: nil)
-            listingsLoaded = true
+            let rows = try await service.getListingsFeed(categories: page.categories, limit: Self.pageSize, cursor: cursor)
+            guard self[keyPath: slice].generation == generation else { return }
+            var next = self[keyPath: slice]
+            if reset {
+                next.rows = rows
+            } else {
+                let shown = Set(next.rows.map { key($0.listingId) })
+                next.rows += rows.filter { !shown.contains(key($0.listingId)) }
+            }
+            next.hasMore = rows.count == Self.pageSize
+            next.loaded = true
+            next.failed = false
+            next.isLoading = false
+            self[keyPath: slice] = next
         } catch {
-            debugLog("[ListingsStore] listings load: \(error)")
+            debugLog("[ListingsStore] feed page: \(error)")
+            guard self[keyPath: slice].generation == generation else { return }
+            self[keyPath: slice].isLoading = false
+            if !reset { self[keyPath: slice].pageFailed = true }
+            else if self[keyPath: slice].rows.isEmpty { self[keyPath: slice].failed = true }
         }
     }
 
@@ -123,8 +197,10 @@ final class ListingsStore {
             for id in savingIds { ids.insert(id) } // keep optimistic saves visible
             savedListingIds = ids
             savedListingsLoaded = true
+            savedListingsFailed = false
         } catch {
             debugLog("[ListingsStore] saved load: \(error)")
+            savedListingsFailed = savedListings.isEmpty
         }
     }
 
@@ -142,6 +218,8 @@ final class ListingsStore {
         let id = key(listing.listingId)
         guard !savingIds.contains(id) else { return nil }
         savingIds.insert(id)
+        // Saving's own subtle signature (tick-tick); a faint tap to unsave.
+        if save { Haptics.save() } else { Haptics.unsave() }
         defer { savingIds.remove(id) }
 
         let removedIndex = savedListings.firstIndex { key($0.listingId) == id }
@@ -179,7 +257,7 @@ final class ListingsStore {
     /// A fresh detail fetch landed — sync its (possibly newer) status/counts
     /// into any board/saved copies of the same listing.
     func applyFresh(_ listing: ApiListing) {
-        replaceRow(listing, in: &listings)
+        mutateBoardRows { replaceRow(listing, in: &$0) }
         replaceRow(listing, in: &savedListings)
     }
 
@@ -189,7 +267,7 @@ final class ListingsStore {
 
     func listingDeleted(_ listingId: String) {
         let id = key(listingId)
-        listings.removeAll { key($0.listingId) == id }
+        mutateBoardRows { $0.removeAll { key($0.listingId) == id } }
         savedListings.removeAll { key($0.listingId) == id }
         savedListingIds.remove(id)
     }
@@ -206,8 +284,16 @@ final class ListingsStore {
 
     private func adjustRow(_ listingId: String, _ mutate: (inout ApiListing) -> Void) {
         let id = key(listingId)
-        if let i = listings.firstIndex(where: { key($0.listingId) == id }) { mutate(&listings[i]) }
+        mutateBoardRows { rows in
+            if let i = rows.firstIndex(where: { key($0.listingId) == id }) { mutate(&rows[i]) }
+        }
         if let i = savedListings.firstIndex(where: { key($0.listingId) == id }) { mutate(&savedListings[i]) }
+    }
+
+    /// Applies an edit to both board slices' rows.
+    private func mutateBoardRows(_ body: (inout [ApiListing]) -> Void) {
+        body(&board.rows)
+        body(&filtered.rows)
     }
 
     private func adjustCount(_ listingId: String, _ mutate: (inout ApiListing) -> Void) {
@@ -216,7 +302,12 @@ final class ListingsStore {
 
     private func replaceRow(_ listing: ApiListing, in rows: inout [ApiListing]) {
         guard let i = rows.firstIndex(where: { key($0.listingId) == key(listing.listingId) }) else { return }
-        rows[i] = listing
+        // A detail fetch has no feed-only fields — keep the row's paging
+        // cursor (losing it on the last row would end the scroll) and views.
+        var merged = listing
+        merged.cursor = listing.cursor ?? rows[i].cursor
+        merged.viewCount = listing.viewCount ?? rows[i].viewCount
+        rows[i] = merged
     }
 
     private func key(_ raw: String) -> String { raw.lowercased() }

@@ -4,6 +4,7 @@
 //
 //
 
+import DesignSystem
 import Foundation
 import Kingfisher
 import MediaLibrary
@@ -34,6 +35,16 @@ final class LibraryStore {
     private(set) var uploadedTracks: [ApiProfileTrack] = []
     /// The user's playlists — Library rail + playlist pickers.
     private(set) var playlists: [ApiPlaylist] = []
+    /// Grouped releases per profile (lowercased user id → newest first) — the
+    /// profile rail for any user; the signed-in user's entry also feeds the
+    /// "Add to release" pickers. Every release mutation refetches the owner's
+    /// list here, so rail, pickers and pages stay in step.
+    private(set) var releasesByUser: [String: [ApiRelease]] = [:]
+    private var releasesLoadedUsers: Set<String> = []
+    private var releaseTasks: [String: Task<Void, Never>] = [:]
+    /// The newest fetch per user — only it may write (a fetch started before a
+    /// mutation must not land after the post-mutation refresh).
+    private var releaseFetchTokens: [String: UUID] = [:]
 
     private(set) var loadState: LoadState = .idle
     private(set) var playlistsLoadState: LoadState = .idle
@@ -77,7 +88,12 @@ final class LibraryStore {
             forName: .ownContentPosted, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, case .loaded = self.loadState else { return }
+                guard let self else { return }
+                // A post can land in releases (upload-time pick / bulk release).
+                if let me = self.auth.currentUserId, self.releasesLoaded(for: me) {
+                    Task { await self.refreshMyReleases() }
+                }
+                guard case .loaded = self.loadState else { return }
                 Task { await self.refreshUploads() }
             }
         })
@@ -96,6 +112,11 @@ final class LibraryStore {
         savedTrackIds = []
         uploadedTracks = []
         playlists = []
+        releaseTasks.values.forEach { $0.cancel() }
+        releaseTasks = [:]
+        releaseFetchTokens = [:]
+        releasesByUser = [:]
+        releasesLoadedUsers = []
         loadState = .idle
         playlistsLoadState = .idle
         loadFailed = false
@@ -197,6 +218,8 @@ final class LibraryStore {
         guard inFlightSaves[id] == nil else { return nil }
         guard savedTrackIds.contains(id) != save else { return save }
         inFlightSaves[id] = save
+        // Saving's own subtle signature (tick-tick); a faint tap to unsave.
+        if save { Haptics.save() } else { Haptics.unsave() }
 
         // Optimistic: the id-set flips instantly (every bookmark glyph reads it).
         // Unsave also drops the row so the Library list reacts; save can't invent
@@ -300,18 +323,25 @@ final class LibraryStore {
             try? await service.updatePlaylist(playlistId: playlistId, coverUrl: coverUrl)
         }
         await refreshPlaylists()
+        // Every "new playlist" path (Library, the Add-to sheets) lands here.
+        Haptics.success()
         return playlistId
     }
 
+    /// Optimistic: the playlist leaves the rail / pickers now; a refusal puts
+    /// it back in place.
     func deletePlaylist(playlistId: String) async -> Bool {
+        let index = playlists.firstIndex { $0.playlistId == playlistId }
+        let removed = index.map { playlists[$0] }
+        if let index { playlists.remove(at: index) }
         do {
             try await service.deletePlaylist(playlistId: playlistId)
+            return true
         } catch {
             debugLog("[LibraryStore] deletePlaylist: \(error)")
+            if let removed { playlists.insert(removed, at: min(index ?? 0, playlists.count)) }
             return false
         }
-        playlists.removeAll { $0.playlistId == playlistId }
-        return true
     }
 
     /// Adds a track to a playlist, patching the rail/picker count in place.
@@ -340,6 +370,18 @@ final class LibraryStore {
     /// A playlist's meta (title/description/cover) changed — refetch the list
     /// (uncached, one cheap RPC) rather than hand-patching every field.
     func playlistEdited() async {
+        await refreshPlaylists()
+    }
+
+    /// Saves a playlist's name / description and (optionally) a new cover —
+    /// the Library's hold-to-edit. Uploads the cover first, then
+    /// `update_playlist`, then refreshes the shared list.
+    func editPlaylist(playlistId: String, title: String, description: String, coverData: Data?) async throws {
+        var coverUrl: String?
+        if let coverData, let me = service.currentUserId {
+            coverUrl = try await service.uploadPlaylistCover(playlistId: playlistId, userId: me, imageData: coverData)
+        }
+        try await service.updatePlaylist(playlistId: playlistId, title: title, description: description, coverUrl: coverUrl)
         await refreshPlaylists()
     }
 
@@ -394,7 +436,7 @@ final class LibraryStore {
                 artwork: coverURL(for: track),
                 title: track.title,
                 artist: track.artist?.username,
-                audioURL: storage.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) }
+                audioURL: storage.trackMediaURL(track.audioUrl)
             )
         )
     }
@@ -408,7 +450,7 @@ final class LibraryStore {
                 artwork: coverURL(forUpload: track),
                 title: track.title,
                 artist: nil,
-                audioURL: storage.resolveTrackUrl(track.audioUrl).flatMap { URL(string: $0) }
+                audioURL: storage.trackMediaURL(track.audioUrl)
             )
         )
     }
@@ -420,6 +462,122 @@ final class LibraryStore {
         let urls = savedTracks.prefix(savedLimit).compactMap { coverURL(for: $0) }
         guard !urls.isEmpty else { return }
         ImagePrefetcher(urls: Array(Set(urls))).start()
+    }
+
+    // MARK: - Releases
+
+    func releases(for userId: String) -> [ApiRelease] { releasesByUser[key(userId)] ?? [] }
+
+    /// True once `get_user_releases` has answered for this profile (gates the
+    /// rail's skeleton → content / hidden-when-empty).
+    func releasesLoaded(for userId: String) -> Bool { releasesLoadedUsers.contains(key(userId)) }
+
+    /// The signed-in user's releases (pickers, the upload flow).
+    var myReleases: [ApiRelease] { auth.currentUserId.map { releases(for: $0) } ?? [] }
+
+    func loadReleasesIfNeeded(userId: String) async {
+        guard !releasesLoaded(for: userId) else { return }
+        await loadReleases(userId: userId)
+    }
+
+    /// Fetches a profile's releases. Concurrent loads share one request,
+    /// unless `fresh` (after a mutation): that starts a new fetch, and only the
+    /// newest fetch writes. A failure keeps what's shown (skeleton until a
+    /// first answer, per the defensive-empty-state rule); the next load retries.
+    func loadReleases(userId: String, fresh: Bool = false) async {
+        let k = key(userId)
+        if !fresh, let task = releaseTasks[k] { return await task.value }
+        let token = UUID()
+        releaseFetchTokens[k] = token
+        let task = Task { [service] in
+            do {
+                let rows = try await service.getUserReleases(userId: k)
+                guard releaseFetchTokens[k] == token else { return }
+                releasesByUser[k] = rows
+                releasesLoadedUsers.insert(k)
+            } catch {
+                debugLog("[LibraryStore] releases(\(k)): \(error)")
+            }
+        }
+        releaseTasks[k] = task
+        await task.value
+        if releaseFetchTokens[k] == token { releaseTasks[k] = nil }
+    }
+
+    private func refreshMyReleases() async {
+        guard let me = auth.currentUserId else { return }
+        await loadReleases(userId: me, fresh: true)
+    }
+
+    /// Creates a release (+ optional cover, best-effort like playlists) with
+    /// the given tracks in order. Returns the new release's id.
+    @discardableResult
+    func createRelease(
+        title: String,
+        description: String?,
+        visibility: String,
+        releaseDate: String?,
+        trackIds: [String] = [],
+        coverData: Data? = nil
+    ) async throws -> String {
+        let releaseId = try await service.createRelease(
+            title: title, description: description, visibility: visibility,
+            releaseDate: releaseDate, trackIds: trackIds
+        )
+        if let data = coverData, let me = service.currentUserId,
+           let path = try? await service.uploadReleaseCover(releaseId: releaseId, userId: me, imageData: data) {
+            try? await service.updateRelease(releaseId: releaseId, coverUrl: path)
+        }
+        await refreshMyReleases()
+        return releaseId
+    }
+
+    func updateRelease(
+        releaseId: String,
+        title: String?,
+        description: String?,
+        visibility: String?,
+        releaseDate: String?,
+        clearReleaseDate: Bool,
+        coverData: Data?
+    ) async throws {
+        var coverPath: String?
+        if let data = coverData, let me = service.currentUserId {
+            coverPath = try await service.uploadReleaseCover(releaseId: releaseId, userId: me, imageData: data)
+        }
+        try await service.updateRelease(
+            releaseId: releaseId, title: title, description: description, visibility: visibility,
+            coverUrl: coverPath, releaseDate: releaseDate, clearReleaseDate: clearReleaseDate
+        )
+        await refreshMyReleases()
+    }
+
+    /// Optimistic: the release leaves the rail now; a refusal refetches it.
+    func deleteRelease(releaseId: String) async throws {
+        if let me = auth.currentUserId {
+            releasesByUser[key(me)]?.removeAll { key($0.releaseId) == key(releaseId) }
+        }
+        do {
+            try await service.deleteRelease(releaseId: releaseId)
+        } catch {
+            await refreshMyReleases()
+            throw error
+        }
+    }
+
+    func addTracks(toRelease releaseId: String, trackIds: [String]) async throws {
+        guard !trackIds.isEmpty else { return }
+        try await service.addTracksToRelease(releaseId: releaseId, trackIds: trackIds)
+        await refreshMyReleases()
+    }
+
+    func removeTrack(fromRelease releaseId: String, trackId: String) async throws {
+        try await service.removeTrackFromRelease(releaseId: releaseId, trackId: trackId)
+        await refreshMyReleases()
+    }
+
+    func reorderRelease(releaseId: String, trackIds: [String]) async throws {
+        try await service.reorderRelease(releaseId: releaseId, trackIds: trackIds)
     }
 
     private func key(_ raw: String) -> String { raw.lowercased() }

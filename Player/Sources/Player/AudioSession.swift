@@ -5,6 +5,7 @@
 //
 
 import AVFAudio
+import SharedUtilities
 
 @MainActor
 protocol AudioSessionDelegate: AnyObject {
@@ -26,7 +27,7 @@ class AudioSession {
         do {
             try AVAudioSession.sharedInstance().setActive(active)
         } catch {
-            print("AVAudioSession setActive Error: \(error.localizedDescription)")
+            debugLog("AVAudioSession setActive Error: \(error.localizedDescription)")
         }
     }
 
@@ -41,7 +42,7 @@ private extension AudioSession {
             let audioSession = AVAudioSession.sharedInstance()
             try audioSession.setCategory(.playback, mode: .default, options: [])
         } catch {
-            print("AVAudioSession configuring Error: \(error.localizedDescription)")
+            debugLog("AVAudioSession configuring Error: \(error.localizedDescription)")
         }
     }
 

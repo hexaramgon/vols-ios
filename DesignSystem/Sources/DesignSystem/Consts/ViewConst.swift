@@ -18,7 +18,10 @@ public extension ViewConst {
     static let gridPaddings: CGFloat = 8
     /// Header action-icon glyph size (bell / search / messages / "…" in header
     /// rows), used app-wide.
-    static let headerIconSize: CGFloat = 24
+    static let headerIconSize: CGFloat = 26
+    /// A header action's tap target (HeaderIconButton) — also the title row's
+    /// height, so a header with no actions is as tall as one with them.
+    static let headerButtonSize: CGFloat = 42
     /// THE "…" options-glyph size, app-wide — hero overlays, bar headers, and
     /// row accessories all draw the ellipsis at this one size (larger than
     /// `headerIconSize` so it holds its own next to the `backIconSize` chevron).
@@ -34,10 +37,15 @@ public extension ViewConst {
     /// hairline `vDivider`.
     static let headerBandHeight: CGFloat = 53
 
+    /// The window's safe-area insets, as SwiftUI measured them at the app
+    /// root (`measuresSafeArea()`). Never read from UIKit here: this is called
+    /// from view bodies, and `UIWindow.safeAreaInsets` asks the hosting
+    /// controller about the status bar, which re-enters the view graph
+    /// mid-update — an AttributeGraph cycle that froze whole overlays (intro
+    /// tips drew their dim with no content on launches from a stored session).
+    /// Observable, so bodies that read it update once it's measured.
     static var safeAreaInsets: EdgeInsets {
-        MainActor.assumeIsolated {
-            EdgeInsets(UIApplication.keyWindow?.safeAreaInsets ?? .zero)
-        }
+        MainActor.assumeIsolated { SafeAreaStore.shared.insets }
     }
 }
 
@@ -73,4 +81,28 @@ public extension EdgeInsets {
         bottom: 0,
         trailing: ViewConst.screenPaddings
     )
+}
+
+/// The measured window safe area behind `ViewConst.safeAreaInsets`.
+@MainActor @Observable
+final class SafeAreaStore {
+    static let shared = SafeAreaStore()
+    /// Zero until the root's first layout — which happens under the splash.
+    var insets = EdgeInsets()
+}
+
+public extension View {
+    /// Measures the window's safe area for `ViewConst.safeAreaInsets`. Apply
+    /// once, to the app's root view (it must not ignore the safe area).
+    func measuresSafeArea() -> some View {
+        background {
+            // Ignores only the keyboard, so a raised keyboard never reads as
+            // a taller bottom inset.
+            Color.clear
+                .ignoresSafeArea(.keyboard)
+                .onGeometryChange(for: EdgeInsets.self, of: { $0.safeAreaInsets }) { insets in
+                    if SafeAreaStore.shared.insets != insets { SafeAreaStore.shared.insets = insets }
+                }
+        }
+    }
 }

@@ -19,6 +19,7 @@ struct CollabRequestSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(Router.self) private var router
+    @Environment(InboxStore.self) private var inboxStore
 
     private var displayName: String { username.isEmpty ? "this artist" : "@\(username)" }
     private var attachmentsUsed: Int { viewModel.selectedCollabTrackIds.count }
@@ -62,10 +63,7 @@ private extension CollabRequestSheet {
 
 private extension CollabRequestSheet {
     func sectionLabel(_ title: String) -> some View {
-        HStack(spacing: 5) {
-            Text(title).font(.appLabel).foregroundStyle(Color.vText2)
-            Text("(optional)").font(.appCaption).foregroundStyle(Color.vText4)
-        }
+        SheetFieldLabel(title, optional: true)
     }
 
     var messageSection: some View {
@@ -78,7 +76,7 @@ private extension CollabRequestSheet {
                     .foregroundColor(Color.vText3),
                 axis: .vertical
             )
-            .font(.appCalloutRegular)
+            .font(.appBody)
             .foregroundStyle(Color.vText)
             .tint(Color.vText)
             .lineLimit(3 ... 6)
@@ -120,7 +118,7 @@ private extension CollabRequestSheet {
             LucideIcon(.search, .sm).foregroundStyle(Color.vText3)
             TextField("", text: $viewModel.collabTrackQuery,
                       prompt: Text("Search your tracks…").foregroundColor(Color.vText3))
-                .font(.appFootnote).foregroundStyle(Color.vText).tint(Color.vText)
+                .font(.appBody).foregroundStyle(Color.vText).tint(Color.vText)
                 .autocorrectionDisabled()
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
@@ -161,37 +159,19 @@ private extension CollabRequestSheet {
 
 private extension CollabRequestSheet {
     var footer: some View {
-        HStack(spacing: 10) {
-            Button { dismiss() } label: {
-                Text("Cancel").font(.appCallout).foregroundStyle(Color.vControlLabel)
-                    .frame(maxWidth: .infinity).padding(.vertical, 13)
-                    .background(Color.vControl, in: Capsule())
-            }
-            .buttonStyle(.plain)
-
-            // PrimaryButton metrics (.full: 52pt, appHeadline, dim-disabled) with
-            // a custom icon label — keep in step with the component.
-            Button {
-                Task { await viewModel.sendCollab(userId: userId) }
-            } label: {
-                Group {
-                    if viewModel.isSendingCollab {
-                        ProgressView().tint(Color.vOnColor)
-                    } else {
-                        HStack(spacing: 7) {
-                            LucideIcon(.send, .sm)
-                            Text("Send Request").font(.appHeadline)
-                        }
-                        .foregroundStyle(Color.vOnColor)
-                    }
+        CancelSendButtons(
+            sendTitle: "Send Request",
+            canSend: viewModel.canSendCollab,
+            isSending: viewModel.isSendingCollab,
+            onCancel: { dismiss() }
+        ) {
+            Task {
+                // The RPC may have just created the DM — refetch so the
+                // inbox shows it without a manual reload.
+                if await viewModel.sendCollab(userId: userId) {
+                    await inboxStore.refreshConversations()
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(Color.vAccent, in: Capsule())
             }
-            .buttonStyle(.plain)
-            .disabled(!viewModel.canSendCollab || viewModel.isSendingCollab)
-            .opacity(viewModel.canSendCollab || viewModel.isSendingCollab ? 1 : 0.3)
         }
         .padding(.horizontal, 18)
         .padding(.top, 12)
@@ -201,10 +181,8 @@ private extension CollabRequestSheet {
 
     var successState: some View {
         VStack(spacing: 16) {
-            ZStack {
-                Circle().fill(Color.vSuccessText.opacity(0.12)).frame(width: 60, height: 60)
-                LucideIcon(.check, .xl).foregroundStyle(Color.vSuccessText)
-            }
+            // The app's success mark (pop + drawn check, like Add to playlist).
+            SuccessMark(size: 60)
             VStack(spacing: 4) {
                 Text("Request sent!").font(.appTitle3Bold).foregroundStyle(Color.vText)
                 Text("Your collab request is in \(displayName)'s inbox.")
@@ -214,10 +192,19 @@ private extension CollabRequestSheet {
             // trailing chevron the component doesn't model.
             Button {
                 dismiss()
-                router.navigateToMessages()
+                if let convoId = viewModel.collabConvoId {
+                    router.navigateToConversation(ActiveConversation(
+                        convoId: convoId,
+                        otherUserId: userId,
+                        username: username,
+                        avatarURL: viewModel.profileImageURL?.absoluteString
+                    ))
+                } else {
+                    router.navigateToMessages()
+                }
             } label: {
                 HStack(spacing: 6) {
-                    Text("Open Messages").font(.appSubheadlineSemibold)
+                    Text(viewModel.collabConvoId == nil ? "Open Messages" : "Open Conversation").font(.appSubheadlineSemibold)
                     LucideIcon(.chevronRight, .sm)
                 }
                 .foregroundStyle(Color.vOnInverse)

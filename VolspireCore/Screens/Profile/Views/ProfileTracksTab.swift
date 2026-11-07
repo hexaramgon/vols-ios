@@ -2,7 +2,7 @@
 //  ProfileTracksTab.swift
 //  Volspire
 //
-//  The artist's tracks as one list, newest first.
+//  The artist's releases rail, then their tracks as one list, newest first.
 //
 
 import DesignSystem
@@ -13,9 +13,39 @@ struct ProfileTracksTab: View {
     let viewModel: ProfileScreenViewModel
     let isOwnProfile: Bool
 
+    @Environment(LibraryStore.self) private var libraryStore
+
+    private var hasTracks: Bool { !viewModel.tracks.isEmpty }
+    private var hasReleases: Bool {
+        viewModel.profileUserId.map { !libraryStore.releases(for: $0).isEmpty } ?? false
+    }
+    private var releasesLoaded: Bool {
+        viewModel.profileUserId.map { libraryStore.releasesLoaded(for: $0) } ?? true
+    }
+
     var body: some View {
-        if viewModel.tracks.isEmpty {
-            ProfileEmptyState(icon: .music, title: "No tracks yet")
+        VStack(spacing: 0) {
+            // Section titles only when BOTH are here — with just one, the
+            // tab already says what it is.
+            if let userId = viewModel.profileUserId {
+                ProfileReleasesRail(userId: userId, showsTitle: hasTracks)
+            }
+            if hasTracks && hasReleases {
+                ProfileSectionTitle("Tracks")
+                    .padding(.bottom, 8)
+            }
+            trackList
+        }
+    }
+
+    @ViewBuilder
+    private var trackList: some View {
+        if !hasTracks {
+            // Releases-only profiles show just the rail; the empty state is
+            // for when there's nothing at all (once releases have answered).
+            if releasesLoaded && !hasReleases {
+                ProfileEmptyState(icon: ProfileTab.tracks.icon, title: "No tracks yet")
+            }
         } else {
             LazyVStack(spacing: 4) {
                 ForEach(Array(viewModel.tracks.enumerated()), id: \.element.id) { i, track in
@@ -25,7 +55,7 @@ struct ProfileTracksTab: View {
                         title: track.title,
                         subtitle: "@\(viewModel.username)",
                         coverURL: track.coverURL,
-                        lock: isOwnProfile && track.isPrivate
+                        hidden: isOwnProfile ? track.visibility : nil
                     ) {
                         HStack(spacing: 6) {
                             streamsTrailing(track.streams)
@@ -48,7 +78,7 @@ struct ProfileTracksTab: View {
             LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                 .foregroundStyle(Color.vText3)
                 .frame(width: 32, height: 32)
-                .contentShape(.rect)
+                .minimumHitArea(for: 32)
         }
         .buttonStyle(.plain)
     }
@@ -60,7 +90,8 @@ struct ProfileTracksTab: View {
             Text(streams.compactCount)
         }
         .font(.appCaption)
-        .foregroundStyle(Color.vText3)
+        // A step up from the tertiary grey so the count reads.
+        .foregroundStyle(Color.vText2)
         .monospacedDigit()
     }
 }

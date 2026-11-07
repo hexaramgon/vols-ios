@@ -118,7 +118,9 @@ public final class MetalVisualizerView: MTKView {
 
     // MARK: Internals
 
-    private let commandQueue: MTLCommandQueue
+    /// Nil without Metal. Like a failed pipeline/buffer build, that leaves the
+    /// view inert (blank, never drawing) rather than crashing the app.
+    private let commandQueue: MTLCommandQueue?
     private var library: MTLLibrary!
     private var warpPipeline: MTLRenderPipelineState!
     private var waveAlphaPipeline: MTLRenderPipelineState!
@@ -181,21 +183,15 @@ public final class MetalVisualizerView: MTKView {
     private let silenceGrace: CFTimeInterval = 3
 
     public init(frame: CGRect = .zero) {
-        guard let device = MTLCreateSystemDefaultDevice(),
-              let queue = device.makeCommandQueue() else {
-            fatalError("Metal is unavailable on this device")
-        }
-        commandQueue = queue
+        let device = MTLCreateSystemDefaultDevice()
+        commandQueue = device?.makeCommandQueue()
         super.init(frame: frame, device: device)
         configure()
     }
 
     public required init(coder: NSCoder) {
-        guard let device = MTLCreateSystemDefaultDevice(),
-              let queue = device.makeCommandQueue() else {
-            fatalError("Metal is unavailable on this device")
-        }
-        commandQueue = queue
+        let device = MTLCreateSystemDefaultDevice()
+        commandQueue = device?.makeCommandQueue()
         super.init(coder: coder)
         self.device = device
         configure()
@@ -211,10 +207,14 @@ public final class MetalVisualizerView: MTKView {
         colorPixelFormat = .bgra8Unorm
         framebufferOnly = true
         preferredFramesPerSecond = maxFrameRate
-        delegate = self
 
-        buildPipelines()
-        buildStaticBuffers()
+        // Without a delegate `draw(in:)` never runs, so a failed setup just
+        // shows nothing.
+        guard commandQueue != nil, buildPipelines(), buildStaticBuffers() else {
+            isPaused = true
+            return
+        }
+        delegate = self
         activate(Int.random(in: 0..<max(presets.count, 1)))
 
         let nc = NotificationCenter.default
@@ -252,13 +252,13 @@ public final class MetalVisualizerView: MTKView {
     // MARK: Pipelines
 
     private func makePipeline(vertex: String, fragment: String,
-                              blend: ((MTLRenderPipelineColorAttachmentDescriptor) -> Void)? = nil) -> MTLRenderPipelineState {
+                              blend: ((MTLRenderPipelineColorAttachmentDescriptor) -> Void)? = nil) -> MTLRenderPipelineState? {
         let desc = MTLRenderPipelineDescriptor()
         desc.vertexFunction = library.makeFunction(name: vertex)
         desc.fragmentFunction = library.makeFunction(name: fragment)
         desc.colorAttachments[0].pixelFormat = .bgra8Unorm
         if let blend { blend(desc.colorAttachments[0]) }
-        return try! device!.makeRenderPipelineState(descriptor: desc)
+        return try? device?.makeRenderPipelineState(descriptor: desc)
     }
 
     private static let alphaBlend: (MTLRenderPipelineColorAttachmentDescriptor) -> Void = { att in
@@ -283,10 +283,13 @@ public final class MetalVisualizerView: MTKView {
         #endif
     }
 
-    private func buildPipelines() {
+    /// False when the shader library or any pipeline is missing (e.g.
+    /// Shaders.metal not in Compile Sources) — the view then stays inert.
+    private func buildPipelines() -> Bool {
         guard let device,
               let lib = try? device.makeDefaultLibrary(bundle: shaderBundle) else {
-            fatalError("Shaders.metal missing from the target — add it to Compile Sources")
+            assertionFailure("Shaders.metal missing from the target — add it to Compile Sources")
+            return false
         }
         library = lib
 
@@ -300,22 +303,32 @@ public final class MetalVisualizerView: MTKView {
         shapeTexturedAdditivePipeline = makePipeline(vertex: "shape_vertex", fragment: "shape_textured_fragment", blend: Self.additiveBlend)
         shapeFlatAlphaPipeline = makePipeline(vertex: "shape_vertex", fragment: "shape_flat_fragment", blend: Self.alphaBlend)
         shapeFlatAdditivePipeline = makePipeline(vertex: "shape_vertex", fragment: "shape_flat_fragment", blend: Self.additiveBlend)
+
+        let pipelines: [MTLRenderPipelineState?] = [
+            warpPipeline, compPipeline, blurHPipeline, blurVPipeline,
+            waveAlphaPipeline, waveAdditivePipeline,
+            shapeTexturedAlphaPipeline, shapeTexturedAdditivePipeline,
+            shapeFlatAlphaPipeline, shapeFlatAdditivePipeline,
+        ]
+        return pipelines.allSatisfy { $0 != nil }
     }
 
     /// Custom warp shaders pair with the mesh vertex stage; custom comps with
     /// the fullscreen stage.
     private func customPipeline(fragment: String, isWarp: Bool) -> MTLRenderPipelineState? {
         if let cached = customPipelines[fragment] { return cached }
-        guard library.makeFunction(name: fragment) != nil else { return nil }
-        let pipeline = makePipeline(vertex: isWarp ? "warp_vertex" : "comp_vertex", fragment: fragment)
+        guard library.makeFunction(name: fragment) != nil,
+              let pipeline = makePipeline(vertex: isWarp ? "warp_vertex" : "comp_vertex", fragment: fragment)
+        else { return nil }
         customPipelines[fragment] = pipeline
         return pipeline
     }
 
     // MARK: Buffers / textures
 
-    private func buildStaticBuffers() {
-        guard let device else { return }
+    /// False if any GPU buffer couldn't be allocated.
+    private func buildStaticBuffers() -> Bool {
+        guard let device else { return false }
         positionBuffer = mesh.positions.withUnsafeBufferPointer {
             device.makeBuffer(bytes: $0.baseAddress!, length: $0.count * MemoryLayout<SIMD2<Float>>.stride)
         }
@@ -327,12 +340,18 @@ public final class MetalVisualizerView: MTKView {
         let waveColorLength = totalWavePoints * MemoryLayout<SIMD4<Float>>.stride
         let shapePosLength = maxShapeVertices * MemoryLayout<SIMD2<Float>>.stride
         let shapeColorLength = maxShapeVertices * MemoryLayout<SIMD4<Float>>.stride
-        uvBuffers = (0..<3).map { _ in device.makeBuffer(length: uvLength, options: .storageModeShared)! }
-        wavePosBuffers = (0..<3).map { _ in device.makeBuffer(length: wavePosLength, options: .storageModeShared)! }
-        waveColorBuffers = (0..<3).map { _ in device.makeBuffer(length: waveColorLength, options: .storageModeShared)! }
-        shapePosBuffers = (0..<3).map { _ in device.makeBuffer(length: shapePosLength, options: .storageModeShared)! }
-        shapeUVBuffers = (0..<3).map { _ in device.makeBuffer(length: shapePosLength, options: .storageModeShared)! }
-        shapeColorBuffers = (0..<3).map { _ in device.makeBuffer(length: shapeColorLength, options: .storageModeShared)! }
+        // Triple-buffered (one per in-flight frame).
+        func ring(_ length: Int) -> [MTLBuffer] {
+            (0..<3).compactMap { _ in device.makeBuffer(length: length, options: .storageModeShared) }
+        }
+        uvBuffers = ring(uvLength)
+        wavePosBuffers = ring(wavePosLength)
+        waveColorBuffers = ring(waveColorLength)
+        shapePosBuffers = ring(shapePosLength)
+        shapeUVBuffers = ring(shapePosLength)
+        shapeColorBuffers = ring(shapeColorLength)
+        let rings = [uvBuffers, wavePosBuffers, waveColorBuffers, shapePosBuffers, shapeUVBuffers, shapeColorBuffers]
+        return positionBuffer != nil && indexBuffer != nil && rings.allSatisfy { $0.count == 3 }
     }
 
     private func rebuildTextures(drawableSize: CGSize) {
@@ -620,7 +639,7 @@ extension MetalVisualizerView: MTKViewDelegate {
             blurBias: blurPyramid.compBias,
             outputMix: SIMD4(outputBrightness, outputSaturation, 0, 0))
 
-        guard let commands = commandQueue.makeCommandBuffer() else {
+        guard let commands = commandQueue?.makeCommandBuffer() else {
             inflightSemaphore.signal()
             return
         }

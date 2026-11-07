@@ -33,12 +33,6 @@ struct HomeTrack: Identifiable, Hashable {
         if ms < 30_000 { return "Snippet" }
         return "Short Track"
     }
-
-    /// "m:ss" for the chart rows' trailing length.
-    var durationLabel: String? {
-        guard let ms = durationMs, ms > 0 else { return nil }
-        return (ms / 1000).durationLabel
-    }
 }
 
 struct ExploreArtistItem: Identifiable, Hashable {
@@ -56,11 +50,4 @@ struct LocatedArtist: Identifiable, Hashable {
     let artist: ExploreArtistItem
     let place: GeoPlace
     var id: String { artist.id }
-}
-
-/// Extra card detail for a More-artists card: city + newest public track.
-struct ArtistCardDetails: Hashable {
-    /// Curated city name when the location resolves, else the raw text.
-    let location: String?
-    let latestTrack: HomeTrack?
 }

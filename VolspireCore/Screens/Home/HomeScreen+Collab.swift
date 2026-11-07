@@ -9,6 +9,7 @@
 //
 
 import DesignSystem
+import MediaLibrary
 import Services
 import SwiftUI
 
@@ -47,11 +48,34 @@ extension HomeScreen {
     }
 
     var collabTab: some View {
-        tabScroll(.collab, horizontalPadding: 0, refresh: { await viewModel.refresh() }) {
+        tabScroll(.collab, horizontalPadding: 0, refresh: { await refreshTab(.collab) }) {
+            if collabFailed {
+                LoadErrorView(title: "Couldn't load Explore") {
+                    Task { await refreshTab(.collab) }
+                }
+                .padding(.top, 60)
+            } else {
+                collabLoaded
+            }
+        }
+        .task(id: selectedRoles) {
+            await feedStore.setArtistRoles(Array(selectedRoles))
+            await feedStore.loadArtistLocations()
+        }
+    }
+
+    /// The first load failed with nothing to show (offline): charts, artists
+    /// and the listings preview all came back empty-handed.
+    private var collabFailed: Bool {
+        guard case .error = feedStore.loadState else { return false }
+        return feedStore.popularTracks.isEmpty && !feedStore.artistsLoaded && listingsStore.listings.isEmpty
+    }
+
+    @ViewBuilder
+    private var collabLoaded: some View {
             popularPanel
                 .loadingCrossfade(feedStore.loadState == .loaded)
                 .padding(.bottom, 16)
-                .overlay(alignment: .bottom) { Rectangle().fill(Color.vDivider).frame(height: 1) }
                 .padding(.top, -16)
 
             VStack(alignment: .leading, spacing: 0) {
@@ -61,27 +85,22 @@ extension HomeScreen {
                     .animation(.smooth(duration: 0.35), value: collabPeople.map(\.id))
             }
             .padding(.horizontal, pad)
-            .padding(.top, 32)
-        }
-        .task(id: selectedRoles) {
-            await feedStore.setArtistRoles(Array(selectedRoles))
-            await feedStore.loadArtistLocations()
-        }
+            // The gap under Popular Today (no divider — the space separates).
+            .padding(.top, 20)
     }
 
     // MARK: Popular Today
 
     private var popularPanel: some View {
         let all = feedStore.popularTracks
-        let rows = popularExpanded ? all : Array(all.prefix(5))
+        let rows = Array(all.prefix(5))
         return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Popular Today").font(.appFont.sectionTitle).foregroundStyle(Color.vText)
                 Spacer()
                 if all.count > 5 {
-                    ShowAllToggle(expanded: popularExpanded) {
-                        withAnimation(.easeInOut(duration: 0.2)) { popularExpanded.toggle() }
-                    }
+                    // The whole chart as a playlist page (the Library's "See all").
+                    PillLinkButton(title: "Show all") { openPopular(all) }
                 }
             }
             .padding(.horizontal, 16)
@@ -91,17 +110,59 @@ extension HomeScreen {
             if all.isEmpty, feedStore.loadState == .loaded {
                 EmptyStateView(icon: .flame, title: "No plays yet today").padding(.vertical, 32)
             } else if all.isEmpty {
-                ChartRowsSkeleton(count: 5, classic: true)
-            } else {
-                ForEach(Array(rows.enumerated()), id: \.element.id) { i, t in
-                    // Playing a row queues the whole popular set after it.
-                    ChartRow(track: t, index: i, isActive: isActive(t), isPlaying: isPlaying, classic: true) {
-                        handleTap(t, in: all)
+                VStack(spacing: 8) {
+                    ForEach(0 ..< 5, id: \.self) { i in
+                        HStack(spacing: PopularCard.rankSpacing) {
+                            if i > 0 { Color.clear.frame(width: PopularCard.rankWidth) }
+                            RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
+                                .fill(Color.vSkeleton)
+                                .frame(height: i == 0 ? PopularCard.leadHeight : PopularCard.rowHeight)
+                        }
                     }
-                    .staggeredAppear(i, in: "explore.popular")
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+                .shimmering()
+            } else {
+                // The rank stands outside (#2–#5; #1 runs full width, its
+                // "Top today" tag says it); each track is its own card on the
+                // same neutral card fill: #1 big, #2–#5 compact. Playing any
+                // queues the whole set after it.
+                VStack(spacing: 8) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { i, t in
+                        HStack(spacing: PopularCard.rankSpacing) {
+                            if i > 0 {
+                                Text("\(i + 1)")
+                                    .font(.appHeadline)
+                                    .monospacedDigit()
+                                    .foregroundStyle(Color.vText3)
+                                    .frame(width: PopularCard.rankWidth)
+                            }
+                            PopularCard(track: t, isLead: i == 0, isActive: isActive(t), isPlaying: isPlaying) {
+                                handleTap(t, in: all)
+                            }
+                        }
+                        .staggeredAppear(i, in: "explore.popular")
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
             }
         }
+    }
+
+    /// Popular Today as a playlist-style page (@volspire header, play/shuffle).
+    private func openPopular(_ tracks: [HomeTrack]) {
+        let items = tracks.map { t in
+            Media(id: MediaID(t.id),
+                  meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL))
+        }
+        router.navigateToMedia(
+            items: items,
+            listMeta: .init(artwork: nil, title: "Popular Today", subtitle: "The most-played tracks on Volspire today."),
+            showSave: false,
+            compactHeader: true
+        )
     }
 
     // MARK: Role filter
@@ -149,8 +210,7 @@ extension HomeScreen {
                 nearby
                 listingsPreview
                 SpotlightSection(artists: featured, index: $spotlightIndex, playback: playback,
-                                 onProfile: { router.navigateToProfile(userId: $0) },
-                                 onPitch: pitch)
+                                 onProfile: { router.navigateToProfile(userId: $0) })
                     .opacity(refilterOpacity)
             }
         }
@@ -165,14 +225,13 @@ extension HomeScreen {
             selectedCity: $nearbyCity,
             showAll: $nearbyShowAll,
             onProfile: { router.navigateToProfile(userId: $0) },
-            onPitch: pitch,
             onSettings: { router.navigateToSettings() },
             dim: refilterOpacity,
             filter: roleChips
         )
     }
 
-    /// The 3 newest listings; "See more" switches to the Listings tab.
+    /// The 3 newest listings; "Go to Listings →" switches to the Listings tab.
     /// Hidden entirely when there are none.
     @ViewBuilder
     private var listingsPreview: some View {
@@ -184,7 +243,8 @@ extension HomeScreen {
             }
         } else if !rows.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                HomeSectionHeader(title: "Listings", trailingTitle: "See more") { selectTab(.listings) }
+                // Says where it goes (the Listings tab), not "more" in place.
+                HomeSectionHeader(title: "Listings", trailingTitle: "Go to Listings", trailingIcon: .arrowRight) { selectTab(.listings) }
                 VStack(spacing: 12) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { i, listing in
                         ListingPostCard(listing: listing, respondInSheet: true, horizontalInset: 14).staggeredAppear(i, in: "explore.listingsPreview")
@@ -235,7 +295,6 @@ private struct NearbySection<Filter: View>: View {
     @Binding var selectedCity: String?
     @Binding var showAll: Bool
     let onProfile: (String) -> Void
-    let onPitch: (ExploreArtistItem) -> Void
     let onSettings: () -> Void
     /// Results opacity while a role change refetches (the filter stays solid).
     let dim: Double
@@ -244,6 +303,12 @@ private struct NearbySection<Filter: View>: View {
 
     @Environment(Dependencies.self) private var dependencies
     @State private var openToCollab: Bool?
+    /// "Show more" taps so far: each reveals another `Self.page` rows; after
+    /// `Self.maxMores` the button offers "Show all".
+    @State private var mores = 0
+
+    private static var page: Int { 5 }
+    private static var maxMores: Int { 3 }
     @AppStorage(SettingsKeys.distanceUnit) private var distanceUnit: DistanceUnit = .deviceDefault
 
     private var viewer: GeoPlace? { Geo.resolve(myLocation) }
@@ -304,7 +369,8 @@ private struct NearbySection<Filter: View>: View {
 
     private var content: some View {
         let all = rows
-        let visible = showAll ? all : Array(all.prefix(5))
+        let limit = showAll ? all.count : Self.page * (mores + 1)
+        let visible = Array(all.prefix(limit))
         return VStack(alignment: .leading, spacing: 0) {
             HomeSectionHeader(title: title).padding(.bottom, 12)
             filter.padding(.bottom, 14)
@@ -315,7 +381,7 @@ private struct NearbySection<Filter: View>: View {
                 center: viewer?.coords,
                 selected: selectedCity,
                 onSelect: { city in
-                    withAnimation(.easeInOut(duration: 0.2)) { selectedCity = city; showAll = false }
+                    withAnimation(.easeInOut(duration: 0.2)) { selectedCity = city; showAll = false; mores = 0 }
                 }
             ) {
                 ZStack(alignment: .topLeading) {
@@ -362,10 +428,22 @@ private struct NearbySection<Filter: View>: View {
             .padding(.top, 8)
             .opacity(dim)
 
-            if all.count > 5 {
-                PillLinkButton(title: showAll ? "Show less" : "Show all \(all.count)",
-                               chevronRotation: showAll ? -90 : 90) {
-                    withAnimation(.easeInOut(duration: 0.2)) { showAll.toggle() }
+            // Show more ×3 (5 rows each), then Show all; once everything's
+            // out, Show less folds back to the first 5.
+            if all.count > Self.page {
+                let expanded = limit >= all.count
+                PillLinkButton(title: expanded ? "Show less" : mores < Self.maxMores ? "Show more" : "Show all \(all.count)",
+                               chevronRotation: expanded ? -90 : 90) {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if expanded {
+                            showAll = false
+                            mores = 0
+                        } else if mores < Self.maxMores {
+                            mores += 1
+                        } else {
+                            showAll = true
+                        }
+                    }
                 }
                 .padding(.top, 8)
             }
@@ -425,9 +503,9 @@ private struct NearbySection<Filter: View>: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            FollowIconButton(userId: a.artist.id, fallback: a.artist.isFollowing)
-            CircleIconButton(icon: .send) { onPitch(a.artist) }
-                .accessibilityLabel("Collab with @\(a.artist.username)")
+            // Discovery list: following is one-way here — once followed the
+            // button goes inactive (unfollow from their profile).
+            FollowIconButton(userId: a.artist.id, fallback: a.artist.isFollowing, size: .md, lockOnceFollowing: true)
         }
         .padding(.vertical, 10)
     }
@@ -437,22 +515,119 @@ private struct NearbySection<Filter: View>: View {
     }
 }
 
+// MARK: - Popular Today cards
+
+/// A Popular Today track as its own card — every card the same neutral
+/// `vCard` fill (the app's card), the rank outside it (none for #1, which
+/// runs full width), and Spotlight's play button (blue while current). #1 leads big (96pt cover, a "Top today" flame tag,
+/// two-line title, plays, a 40pt play button); #2–#5 are compact (52pt
+/// cover, title, @artist · plays, a 32pt play button). The whole card plays.
+private struct PopularCard: View {
+    let track: HomeTrack
+    let isLead: Bool
+    let isActive: Bool
+    let isPlaying: Bool
+    let onPlay: () -> Void
+
+    static let leadHeight: CGFloat = 128
+    static let rowHeight: CGFloat = 76
+    /// The rank column beside the cards (and the skeleton's matching gap).
+    static let rankWidth: CGFloat = 18
+    static let rankSpacing: CGFloat = 10
+
+    private var cover: CGFloat { isLead ? 96 : 52 }
+    private var playsText: String? {
+        guard let n = track.streams, n > 0 else { return nil }
+        return "\(n.compactCount) \(n == 1 ? "play" : "plays")"
+    }
+
+    var body: some View {
+        Button(action: onPlay) {
+            HStack(spacing: isLead ? 14 : 12) {
+                ArtworkView(track.coverURL.map { .webImage($0) } ?? .album, cornerRadius: Radius.tile)
+                    .frame(width: cover, height: cover)
+                    .playingCoverOverlay(active: isActive, playing: isPlaying, cornerRadius: Radius.tile)
+                    .coverShadow()
+
+                if isLead { leadText } else { rowText }
+
+                // Spotlight's track-tile play: ink, turning accent blue
+                // while it's the current track.
+                LucideIcon(isActive && isPlaying ? .pauseFill : .playFill, isLead ? .md : .sm)
+                    .foregroundStyle(isActive ? Color.vOnColor : Color.vOnInverse)
+                    .frame(width: isLead ? 40 : 32, height: isLead ? 40 : 32)
+                    .background(isActive ? Color.vAccent : Color.vInverse, in: Circle())
+                    .animation(.easeInOut(duration: 0.18), value: isActive)
+            }
+            .padding(.horizontal, isLead ? 16 : 12)
+            .frame(height: isLead ? Self.leadHeight : Self.rowHeight)
+            .background(Color.vCard)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: Radius.panel, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(track.title) by \(track.artist)")
+    }
+
+    private var leadText: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                LucideIcon(.flame, .xs)
+                Text("Top today")
+            }
+            .font(.appCaptionBold)
+            // The app's red (vError's light/dark pair) — a hot tag here, not an error.
+            .foregroundStyle(Color.vError)
+            .padding(.bottom, 2)
+
+            Text(track.title)
+                .font(.appHeadline)
+                .foregroundStyle(Color.vText)
+                .lineLimit(2)
+            Text("@\(track.artist)")
+                .font(.appFootnote)
+                .foregroundStyle(Color.vText2)
+                .lineLimit(1)
+            if let playsText {
+                Text(playsText)
+                    .font(.appCaption)
+                    .monospacedDigit()
+                    .foregroundStyle(Color.vText3)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var rowText: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(track.title)
+                .font(.appSubheadlineMedium)
+                .foregroundStyle(Color.vText)
+                .lineLimit(1)
+            Text(["@\(track.artist)", playsText].compactMap { $0 }.joined(separator: " · "))
+                .font(.appFootnote)
+                .foregroundStyle(Color.vText2)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 // MARK: - Spotlight
 
 /// "People you may know"-style carousel: the current card centred, its
 /// neighbours a touch smaller peeking in at the edges. Each card is a round
-/// photo, @name, a stats line and a strip of their three newest tracks;
-/// Collab / Follow sit under the carousel and act on the centred card.
+/// photo, @name, a stats line and a strip of their three newest tracks.
+/// Follow / Collab live on the artist's profile (tap the card).
 private struct SpotlightSection: View {
     let artists: [ExploreArtistItem]
     @Binding var index: Int
     let playback: HomePlayback
     let onProfile: (String) -> Void
-    let onPitch: (ExploreArtistItem) -> Void
 
     @Environment(Dependencies.self) private var dependencies
     @State private var profiles: [String: ApiUserProfile] = [:]
-    /// The card the carousel has settled on (drives the buttons).
+    /// The card the carousel has settled on.
     @State private var currentID: String?
 
     /// Card width: the centred card leaves room for the neighbours to peek
@@ -460,10 +635,6 @@ private struct SpotlightSection: View {
     private var cardWidth: CGFloat { UIScreen.size.width - 2 * Self.sideInset }
     /// Space either side of the centred card (where the neighbours show).
     private static let sideInset: CGFloat = 36
-
-    private var current: ExploreArtistItem? {
-        artists.first { $0.id == currentID } ?? artists.first
-    }
 
     var body: some View {
         if !artists.isEmpty {
@@ -494,6 +665,8 @@ private struct SpotlightSection: View {
                 .contentMargins(.horizontal, Self.sideInset, for: .scrollContent)
                 // Full-bleed: run past the page's 16pt column to the screen edges.
                 .padding(.horizontal, -ViewConst.screenPaddings)
+                // Swiping the carousel pages artists, not Explore's tabs.
+                .excludesTabSwipe()
                 .onChange(of: currentID) { _, id in
                     if let id, let n = artists.firstIndex(where: { $0.id == id }) { index = n }
                 }
@@ -501,15 +674,6 @@ private struct SpotlightSection: View {
                     if currentID == nil, artists.indices.contains(index) { currentID = artists[index].id }
                 }
 
-                // Fixed under the carousel — they follow the centred card.
-                if let a = current {
-                    HStack(spacing: 10) {
-                        SecondaryButton("Collab", icon: .send, size: .inline) { onPitch(a) }
-                        SpotlightFollowButton(artist: a).id(a.id)
-                    }
-                    .padding(.horizontal, Self.sideInset - ViewConst.screenPaddings)
-                    .padding(.top, 4)
-                }
             }
         }
     }
@@ -632,7 +796,7 @@ private struct SpotlightSection: View {
                 HomeTrack(
                     id: t.id, title: t.title, artist: artist.username,
                     coverURL: storage.resolveTrackUrl(t.coverUrl).flatMap { URL(string: $0) },
-                    audioURL: storage.resolveTrackUrl(t.audioUrl).flatMap { URL(string: $0) },
+                    audioURL: storage.trackMediaURL(t.audioUrl),
                     streams: t.streams, durationMs: nil,
                     artistId: artist.id, artistAvatarURL: artist.avatarURL,
                     hasVisual: t.hasVisual ?? false, createdAt: t.createdAt
@@ -641,41 +805,3 @@ private struct SpotlightSection: View {
     }
 }
 
-/// Spotlight's full-width Follow: ink "Follow" (UserPlus) → accent
-/// "Following" (UserCheck) with the pop.
-private struct SpotlightFollowButton: View {
-    let artist: ExploreArtistItem
-    @Environment(SocialStore.self) private var social
-    @State private var inFlight = false
-    @State private var pop = 0
-
-    var body: some View {
-        let following = social.isFollowing(artist.id, fallback: artist.isFollowing)
-        Button {
-            guard !inFlight else { return }
-            inFlight = true
-            Haptics.impact(.soft)
-            if !following { pop += 1 }
-            Task {
-                await social.toggleFollow(userId: artist.id, currentlyFollowing: following)
-                inFlight = false
-            }
-        } label: {
-            HStack(spacing: 8) {
-                LucideIcon(following ? .userCheck : .userPlus, .md)
-                Text(following ? "Following" : "Follow").font(.appSubheadlineSemibold)
-            }
-            .foregroundStyle(following ? Color.vOnColor : Color.vOnInverse)
-            .frame(maxWidth: .infinity)
-            .frame(height: 42)
-            .background(following ? Color.vAccent : Color.vInverse, in: Capsule())
-            .contentShape(Capsule())
-            .keyframeAnimator(initialValue: 1.0, trigger: pop) { v, s in v.scaleEffect(s) } keyframes: { _ in
-                SpringKeyframe(1.12, duration: 0.14)
-                SpringKeyframe(1.0, duration: 0.18)
-            }
-        }
-        .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.18), value: following)
-    }
-}

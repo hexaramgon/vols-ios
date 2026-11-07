@@ -3,38 +3,68 @@
 //  Services
 //
 //  APNs registration + token sync. `enable()` (called when a session becomes
-//  active) asks for permission and registers with Apple; the AppDelegate
-//  forwards the resulting device token to `didRegister`, which upserts it into
+//  active) registers with Apple only if permission was already granted; the
+//  system prompt comes from `requestPermission()`, which the app calls after
+//  its own explanation (the push primer) or from Settings. The AppDelegate
+//  forwards the device token to `didRegister`, which upserts it into
 //  `user_push_tokens` via the `register_push_token` RPC. Sign-out deactivates
 //  the token server-side (best-effort) before the session is dropped.
 //
 
+import Observation
 import SharedUtilities
 import Supabase
 import UIKit
 import UserNotifications
 
-@MainActor
+@MainActor @Observable
 public final class PushNotificationManager {
     public static let shared = PushNotificationManager()
 
-    private let client: SupabaseClient
+    @ObservationIgnored private let client: SupabaseClient
     /// The APNs device token (hex) Apple last handed us — kept so sign-out can
     /// deactivate it server-side.
-    private(set) var currentToken: String?
+    @ObservationIgnored private(set) var currentToken: String?
+
+    /// The system notification permission, as of the last `refreshStatus()`.
+    public private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
+
+    /// The conversation currently on screen. Its message pushes aren't shown
+    /// as banners while the app is open (see the AppDelegate's `willPresent`).
+    @ObservationIgnored public var visibleConversationId: String?
 
     public init(client: SupabaseClient = supabaseClient) {
         self.client = client
     }
 
-    /// Ask for notification permission (the system prompt appears only the
-    /// first time) and register with APNs. Call whenever a session becomes
-    /// active — later calls are silent and just refresh the token.
+    /// Registers with APNs if permission is already granted. Never shows the
+    /// system prompt. Call whenever a session becomes active — it just
+    /// refreshes the token.
     public func enable() async {
+        await refreshStatus()
+        if canNotify { UIApplication.shared.registerForRemoteNotifications() }
+    }
+
+    /// Shows the system permission prompt (iOS only shows it while the status
+    /// is `.notDetermined`) and registers with APNs if granted.
+    @discardableResult
+    public func requestPermission() async -> Bool {
         let center = UNUserNotificationCenter.current()
         let granted = (try? await center.requestAuthorization(options: [.alert, .badge, .sound])) ?? false
-        guard granted else { return }
-        UIApplication.shared.registerForRemoteNotifications()
+        await refreshStatus()
+        if granted { UIApplication.shared.registerForRemoteNotifications() }
+        return granted
+    }
+
+    public func refreshStatus() async {
+        authorizationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+
+    private var canNotify: Bool {
+        switch authorizationStatus {
+        case .authorized, .provisional, .ephemeral: true
+        default: false
+        }
     }
 
     /// APNs token from the AppDelegate callback — uploads it for the current

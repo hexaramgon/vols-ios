@@ -17,7 +17,7 @@ import SwiftUI
 
 extension HomeScreen {
     var networkTab: some View {
-        tabScroll(.network, horizontalPadding: 0, refresh: { await viewModel.refreshFollowing() }) {
+        tabScroll(.network, horizontalPadding: 0, refresh: { await refreshTab(.network) }) {
             networkContent
                 .loadingCrossfade(feedStore.followingLoaded)
         }
@@ -93,7 +93,8 @@ extension HomeScreen {
 // MARK: - Latest drop
 
 /// The newest release as one compact card (Workspace activity-card
-/// language): cover, "Track · @artist", title, then Play + the quiet actions.
+/// language): cover; @artist, title, type (+ collab badge); a round Play in
+/// the top-right corner with "…" under it.
 private struct LatestDropCard: View {
     let track: HomeTrack
     let feed: [HomeTrack]
@@ -111,19 +112,15 @@ private struct LatestDropCard: View {
             }
             .buttonStyle(.plain)
 
+            // Who + what (+ the collab badge) on the left; Play top-right with
+            // "…" beneath it — the card is just the cover's height.
             VStack(alignment: .leading, spacing: 0) {
                 Button { onProfile(track) } label: {
-                    HStack(spacing: 6) {
-                        AvatarView(url: track.artistAvatarURL, name: track.artist, size: 20)
-                        Text("@\(track.artist)")
-                            .font(.appCaptionMedium)
-                            .foregroundStyle(Color.vText2)
-                            .lineLimit(1)
-                        Text("· \(track.typeLabel)")
-                            .font(.appCaption)
-                            .foregroundStyle(Color.vText3)
-                            .fixedSize()
-                    }
+                    Text("@\(track.artist)")
+                        .font(.appCaptionMedium)
+                        .foregroundStyle(Color.vText2)
+                        .lineLimit(1)
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
 
@@ -134,32 +131,44 @@ private struct LatestDropCard: View {
                     .multilineTextAlignment(.leading)
                     .padding(.top, 8)
 
-                Spacer(minLength: 10)
-
-                HStack(spacing: 8) {
-                    Button { playback.toggle(track, feed) } label: {
-                        HStack(spacing: 6) {
-                            LucideIcon(playing ? .pauseFill : .playFill, .sm)
-                            Text(playing ? "Pause" : "Play").font(.appSubheadlineSemibold)
-                        }
-                        .foregroundStyle(Color.vOnInverse)
-                        .padding(.horizontal, 16)
-                        .frame(height: 32)
-                        .background(Color.vInverse, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
+                HStack(spacing: 6) {
+                    Text(track.typeLabel)
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
                     if track.lookingForCollab { CollabBadge() }
-                    Spacer(minLength: 0)
-                    ReleaseMenu(track: track, feed: feed, onProfile: onProfile)
                 }
+                .padding(.top, 4)
             }
-            .frame(minHeight: 96)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(spacing: 0) {
+                playButton(playing: playing)
+                Spacer(minLength: 4)
+                ReleaseMenu(track: track, feed: feed, onProfile: onProfile)
+            }
+            .frame(height: 96)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         .contentShape(.rect(cornerRadius: Radius.card))
         .onTapGesture(perform: onSelect)
+    }
+
+    /// Collab's Popular Today play: a round ink button, accent blue while
+    /// it's the loaded track.
+    private func playButton(playing: Bool) -> some View {
+        let active = playback.isActive(track)
+        return Button { playback.toggle(track, feed) } label: {
+            LucideIcon(playing ? .pauseFill : .playFill, .md)
+                .foregroundStyle(active ? Color.vOnColor : Color.vOnInverse)
+                .frame(width: 40, height: 40)
+                .background(active ? Color.vAccent : Color.vInverse, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.18), value: active)
+        .accessibilityLabel(playing ? "Pause" : "Play")
     }
 }
 
@@ -180,13 +189,14 @@ private struct ReleaseRow: View {
             Button { playback.toggle(track, feed) } label: {
                 ArtworkView(track.coverURL.map { .webImage($0) } ?? .album, cornerRadius: 8)
                     .frame(width: 44, height: 44)
+                    .playingCoverOverlay(active: active, playing: playback.isPlaying, cornerRadius: 8)
                     .coverShadow()
             }
             .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
-                    .font(.appSubheadlineMedium)
+                    .font(.appFont.trackTitle)
                     .foregroundStyle(active ? Color.vText : Color.vTextRow)
                     .lineLimit(1)
                 HStack(spacing: 4) {
@@ -198,16 +208,10 @@ private struct ReleaseRow: View {
                             .accessibilityLabel("Open to collab")
                     }
                 }
-                .font(.appCaption)
+                .font(.appFont.trackSubtitle)
                 .foregroundStyle(Color.vText3)
             }
             Spacer(minLength: 8)
-            if active {
-                // Loops only while playing; `.id` tears the repeatForever down
-                // on pause (repeatForever identity rule).
-                EqualizerBars(heights: [7, 10, 13], barWidth: 2, spacing: 2, isAnimating: playback.isPlaying)
-                    .id(playback.isPlaying)
-            }
             ReleaseMenu(track: track, feed: feed, onProfile: onProfile)
         }
         .padding(.leading, 6)
@@ -241,7 +245,7 @@ private struct ReleaseMenu: View {
             LucideIcon(.ellipsis, size: ViewConst.heroOverlayIconSize)
                 .foregroundStyle(Color.vText2)
                 .frame(width: 32, height: 32)
-                .contentShape(.rect)
+                .minimumHitArea(for: 32)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("More options")
@@ -250,7 +254,10 @@ private struct ReleaseMenu: View {
                 artwork: .placeholder(track.coverURL, name: track.title),
                 title: track.title,
                 artist: "@\(track.artist)",
-                actions: actions
+                actions: actions,
+                queueMedia: Media(id: MediaID(track.id), meta: MediaMeta(
+                    artwork: track.coverURL, title: track.title, artist: track.artist, audioURL: track.audioURL
+                ))
             )
             .sheetBackground()
         }
@@ -266,7 +273,7 @@ private struct ReleaseMenu: View {
                 _ = await library.toggleSave(trackId: track.id)
             },
             .init(icon: .messageCircle, title: "Comments") { openComments() },
-            .init(icon: .listMusic, title: "Add to playlist") { showAddToPlaylist = true },
+            .init(icon: .listPlus, title: "Add to playlist") { showAddToPlaylist = true },
             .init(icon: .share2, title: "Share") {
                 ShareActions.shareTrack(title: track.title, trackId: track.id)
             },

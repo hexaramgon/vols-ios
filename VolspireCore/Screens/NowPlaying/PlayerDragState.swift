@@ -28,6 +28,10 @@ final class PlayerDragState {
         if commentsScrollLocked != locked { commentsScrollLocked = locked }
     }
 
+    /// The keyboard (the comment composer's) is up — tracked from keyboard
+    /// notifications by ExpandableNowPlaying.
+    @ObservationIgnored var keyboardUp = false
+
     // Per-gesture bookkeeping — read only by the gesture handlers.
     @ObservationIgnored var axis: Axis?
     /// Translation already accumulated when the axis locked, so the card
@@ -38,12 +42,19 @@ final class PlayerDragState {
     /// Full-screen mode: this drag began at the top edge, so it dismisses
     /// instead of paging tracks.
     @ObservationIgnored var dismissFromTop = false
+    /// The keyboard has already been put away during this drag.
+    @ObservationIgnored var keyboardPutAway = false
+    /// This drag began while typing a comment: it only puts the keyboard
+    /// away, never dismisses the player too.
+    @ObservationIgnored var startedTyping = false
 
     func resetGesture() {
+        startedTyping = false
         axis = nil
         baselineY = 0
         dismissArmed = false
         dismissFromTop = false
+        keyboardPutAway = false
     }
 }
 
@@ -140,7 +151,11 @@ private struct ProgressTracker: View, @preconcurrency Animatable {
 
 struct NowPlayingExpandProgressPreferenceKey: PreferenceKey {
     static let defaultValue: CGFloat = .zero
+    /// Max, not last-wins: only `ExpandProgressTracker` sets it, and every
+    /// other subtree reports the default 0 — with last-wins, any view added
+    /// after the tracker (the tap-hint overlay) reset it to 0, so the player
+    /// never squared its corners.
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
+        value = max(value, nextValue())
     }
 }

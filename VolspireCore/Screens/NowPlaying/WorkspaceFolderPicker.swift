@@ -9,7 +9,10 @@
 //   • attachment copy: one-shot download + re-upload of a chat attachment into
 //     a writable (owner/editor) folder, closing after the copy — mirrors the
 //    web's AddToFolderModal flow in messages.
-//  Styled like the rest of the player: frosted panel, Geist type, soft cards.
+//   • pack link: one-shot `add_pack_to_folder` into a writable folder (a
+//     reference to the pack, not a copy of its files).
+//  Themed with the app; pinned dark only for the player's track mode (it
+//  opens over the always-dark Now Playing).
 //
 
 import DesignSystem
@@ -39,6 +42,15 @@ struct AttachmentFolderPicker: View {
     }
 }
 
+/// Link a marketplace pack into a workspace folder (pack page "…" menu).
+struct PackFolderPicker: View {
+    let packId: String
+
+    var body: some View {
+        FolderPickerSheet(mode: .packLink(packId: packId))
+    }
+}
+
 // MARK: - The shared sheet
 
 private struct FolderPickerSheet: View {
@@ -48,6 +60,8 @@ private struct FolderPickerSheet: View {
         /// One-shot copy: added rows disable, and the sheet closes after the
         /// check has been visible for a beat. Only writable folders are listed.
         case attachmentCopy(url: URL, fileName: String?, fileType: String?)
+        /// One-shot pack link, same behaviour as the attachment copy.
+        case packLink(packId: String)
     }
 
     let mode: Mode
@@ -67,6 +81,10 @@ private struct FolderPickerSheet: View {
         if case .trackMembership = mode { return true } else { return false }
     }
 
+    /// Only the player's picker sits over the always-dark Now Playing; the
+    /// pack page and messages open it in the app's own theme.
+    private var alwaysDark: Bool { isToggle }
+
     /// The rows: every folder in track mode; writable folders only when copying
     /// a file in (viewers can't add files — same filter as the web modal).
     private var folders: [ApiUserFolder] {
@@ -75,12 +93,20 @@ private struct FolderPickerSheet: View {
             : workspaceStore.folders.filter { ["owner", "editor"].contains($0.role.lowercased()) }
     }
 
+    private var subtitle: String {
+        switch mode {
+        case .trackMembership: "Pick a folder for this track"
+        case .attachmentCopy: "Pick a folder for this file"
+        case .packLink: "Pick a folder for this pack"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(
                 icon: isToggle ? .folder : .folderPlus,
                 title: "Add to Workspace",
-                subtitle: isToggle ? "Pick a folder for this track" : "Pick a folder for this file",
+                subtitle: subtitle,
                 divider: false
             ) { dismiss() }
             content
@@ -91,9 +117,8 @@ private struct FolderPickerSheet: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .foregroundStyle(.white)
-        // Darker frosted panel to match the web's modal background.
-        .sheetBackground(alwaysDark: true)
+        .foregroundStyle(Color.vText)
+        .sheetBackground(alwaysDark: alwaysDark)
         .presentationDetents([.medium, .large])
         .task { await load() }
     }
@@ -102,7 +127,7 @@ private struct FolderPickerSheet: View {
     private var content: some View {
         if isLoading {
             ProgressView()
-                .tint(.white.opacity(0.5))
+                .tint(Color.vText3)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
@@ -118,16 +143,21 @@ private struct FolderPickerSheet: View {
                 .padding(.top, 12)
                 .padding(.bottom, 20)
 
-                if folders.isEmpty {
+                if folders.isEmpty && workspaceStore.foldersFailed {
+                    LoadErrorView(icon: .folder, title: "Couldn't load your folders") {
+                        Task { await workspaceStore.refreshFolders() }
+                    }
+                    .padding(.top, 24)
+                } else if folders.isEmpty {
                     VStack(spacing: 10) {
                         LucideIcon(.folder, .xxl)
-                            .foregroundStyle(.white.opacity(0.25))
+                            .foregroundStyle(Color.vText3)
                         Text(isToggle ? "No folders yet" : "No editable folders")
                             .font(.appCallout)
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(Color.vText2)
                         Text("Create one right here to get started.")
                             .font(.appFootnote)
-                            .foregroundStyle(.white.opacity(0.4))
+                            .foregroundStyle(Color.vText3)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 36)
@@ -146,14 +176,15 @@ private struct FolderPickerSheet: View {
                     .frame(width: 48, height: 48)
 
                 VStack(alignment: .leading, spacing: 2) {
+                    // The Add-to-playlist rows' type (the shared row pair).
                     Text(folder.name)
-                        .font(.appCalloutSemibold)
-                        .foregroundStyle(.white)
+                        .font(.appFont.trackTitle)
+                        .foregroundStyle(Color.vText)
                         .lineLimit(1)
                     if let desc = folder.description, !desc.isEmpty {
                         Text(desc)
-                            .font(.appCaption)
-                            .foregroundStyle(.white.opacity(0.5))
+                            .font(.appFont.trackSubtitle)
+                            .foregroundStyle(Color.vText3)
                             .lineLimit(1)
                     }
                 }
@@ -162,7 +193,7 @@ private struct FolderPickerSheet: View {
 
                 if !isToggle, busyFolderId == folder.folderId {
                     // Copying a file in is a real upload — show it working.
-                    ProgressView().tint(.white).controlSize(.small)
+                    ProgressView().tint(Color.vText).controlSize(.small)
                 } else {
                     // Same animated check as Add to playlist.
                     AddedCheck(isOn: added)
@@ -195,7 +226,7 @@ private struct FolderPickerSheet: View {
             async let memberResult = service.getFoldersForTrack(trackId: trackId)
             _ = await foldersLoad
             addedFolderIds = Set((try? await memberResult) ?? [])
-        case .attachmentCopy:
+        case .attachmentCopy, .packLink:
             await workspaceStore.loadFoldersIfNeeded()
         }
     }
@@ -253,7 +284,7 @@ private struct FolderPickerSheet: View {
             let folderId = try await workspaceStore.createFolder(name: name, description: nil)
             try await add(into: folderId)
             withAnimation(.smooth(duration: 0.2)) { _ = addedFolderIds.insert(folderId) }
-            Haptics.impact(.soft)
+            // The store's create already buzzed (success).
             if !isToggle {
                 try? await Task.sleep(for: .milliseconds(600))
                 dismiss()
@@ -281,6 +312,8 @@ private struct FolderPickerSheet: View {
             )
             // An open folder screen shows the copied file without a revisit.
             await workspaceStore.fileUploaded(folderId: folderId)
+        case let .packLink(packId):
+            try await workspaceStore.addPack(packId: packId, folderId: folderId)
         }
     }
 
@@ -299,7 +332,7 @@ private struct FolderPickerSheet: View {
                 return "Only the folder owner or whoever added this track can remove it."
             }
             return "Couldn't update the folder. Please try again."
-        case .attachmentCopy:
+        case .attachmentCopy, .packLink:
             return "Couldn't add to workspace. Please try again."
         }
     }

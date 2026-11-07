@@ -20,6 +20,7 @@ public enum ReportTargetType: String, Sendable {
     case listing
     case user
     case pack
+    case review
 }
 
 /// Why something is being reported. Raw values match the DB `content_reports.reason`

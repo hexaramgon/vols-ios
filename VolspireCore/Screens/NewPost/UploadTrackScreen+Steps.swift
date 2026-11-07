@@ -15,7 +15,16 @@ extension UploadTrackScreen {
     // MARK: - Header + step machinery
 
     var header: some View {
-        UploadFlowHeader(icon: .music, title: "Upload Track") { dismiss() }
+        UploadFlowHeader(icon: .music, title: "Upload Track", subtitle: stepSubtitle) { dismiss() }
+    }
+
+    /// What this step is for, under the title (like the listing's header).
+    var stepSubtitle: String {
+        switch step {
+        case 0: "Pick a video or a file"
+        case 1: "Cover, title, and story"
+        default: "Credits, visibility, and publish"
+        }
     }
 
     func goTo(_ newStep: Int) {
@@ -51,9 +60,11 @@ extension UploadTrackScreen {
     /// Whether the current step's requirements are met (gates Continue/Publish).
     var stepComplete: Bool {
         switch step {
-        case 0: viewModel.mediaAttached && !viewModel.isProcessingVideo
+        // A video still preparing counts — it finishes in the background
+        // while you fill in the details; only Publish waits for it.
+        case 0: (viewModel.mediaAttached || viewModel.isProcessingVideo) && pickOnThisSide
         case 1: detailsComplete
-        default: viewModel.canUpload
+        default: viewModel.canUpload && !viewModel.isProcessingVideo
         }
     }
 
@@ -65,9 +76,15 @@ extension UploadTrackScreen {
 
     var stepHint: String? {
         switch step {
-        case 0: viewModel.mediaAttached ? nil : "Add an audio or video file to continue"
-        case 1: detailsComplete ? nil : "Add a cover, title, and genre to continue"
-        default: viewModel.tierValidation
+        case 0: return (viewModel.mediaAttached || viewModel.isProcessingVideo) && pickOnThisSide
+            ? nil : "Pick a video or a file to continue"
+        case 1: return detailsComplete ? nil : "Add a cover, title, and genre to continue"
+        default:
+            if viewModel.isProcessingVideo {
+                let pct = Int(viewModel.videoProcessingProgress * 100)
+                return pct > 0 ? "Preparing your video… \(pct)%" : "Preparing your video…"
+            }
+            return viewModel.tierValidation
         }
     }
 
@@ -126,8 +143,7 @@ extension UploadTrackScreen {
     }
 
     /// Disabled reads the same on every step (AuthCTA's dim treatment);
-    /// enabled is the ink primary on every step, Publish included (accent is
-    /// reserved for send actions).
+    /// enabled is the ink primary on every step, Publish included.
     private var ctaForeground: Color {
         if !stepComplete, !isUploading { return Color.vText3 }
         return Color.vOnInverse

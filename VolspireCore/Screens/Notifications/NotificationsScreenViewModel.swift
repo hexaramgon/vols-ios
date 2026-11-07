@@ -6,6 +6,7 @@
 //  them read on view, mirroring the web app's `useNotifications` hook.
 //
 
+import DesignSystem
 import Foundation
 import Observation
 import Services
@@ -117,13 +118,28 @@ final class NotificationsScreenViewModel {
         }
     }
 
-    /// A collab request still awaiting an answer from this row.
-    func isPendingCollabRequest(_ n: ApiNotification) -> Bool {
+    /// A collab request still awaiting an answer. `sessionAnswer` is this
+    /// session's answer to the request given elsewhere (the DM's request
+    /// strip) — `SocialStore.collabAnswer(from:after:)`.
+    func isPendingCollabRequest(_ n: ApiNotification, sessionAnswer: Bool?) -> Bool {
         n.action == "requested collaboration" && n.contextType == "collaborator"
-            && n.contextId != nil && collabResults[n.id] == nil
+            && n.contextId != nil && collabResult(n, sessionAnswer: sessionAnswer) == nil
     }
 
-    func collabResult(_ n: ApiNotification) -> String? { collabResults[n.id] }
+    /// "accepted" / "declined" / "answered", from this row's own answer, an
+    /// answer given elsewhere this session, or the feed's server status — nil
+    /// while pending.
+    func collabResult(_ n: ApiNotification, sessionAnswer: Bool?) -> String? {
+        if let local = collabResults[n.id] { return local }
+        guard n.action == "requested collaboration" else { return nil }
+        if let sessionAnswer { return sessionAnswer ? "accepted" : "declined" }
+        // Server status: a declined request's relationship is deleted (null).
+        switch n.contextStatus {
+        case "pending": return nil
+        case "accepted": return "accepted"
+        default: return "answered"
+        }
+    }
     func isResponding(_ n: ApiNotification) -> Bool { respondingIds.contains(n.id) }
 
     /// Accepts / declines a collab request inline (`respond_to_collaborator`).
@@ -136,6 +152,7 @@ final class NotificationsScreenViewModel {
         do {
             try await supabaseService.respondToCollaborator(relationshipId: relationshipId, accept: accept)
             collabResults[n.id] = accept ? "accepted" : "declined"
+            if accept { Haptics.success() }
             return true
         } catch {
             debugLog("[NotificationsVM] respond: \(error)")
@@ -160,7 +177,7 @@ final class NotificationsScreenViewModel {
             await markAllRead()
         } catch {
             debugLog("[NotificationsVM] load: \(error)")
-            if notifications.isEmpty { loadingState = .error(error.localizedDescription) }
+            loadingState.fail(error, ifEmpty: notifications.isEmpty)
         }
     }
 

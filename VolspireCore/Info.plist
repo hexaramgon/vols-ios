@@ -25,6 +25,8 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Volspire shows your videos so you can pick one to post as a track.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Volspire saves photos from your messages to your library when you tap Save.</string>
 	<key>GIDClientID</key>

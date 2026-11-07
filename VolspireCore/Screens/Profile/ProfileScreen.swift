@@ -31,16 +31,21 @@ struct ProfileScreen: View {
 
     @State private var viewModel = ProfileScreenViewModel()
     @State private var selectedTab: ProfileTab = .tracks
+    /// Own track whose "Add to Release" picker is open.
+    @State private var releasePickerTrack: ProfileTrack?
     @State private var showEditProfile = false
     @State private var showShareSheet = false
+    @State private var isRefreshing = false
     /// Report / Block affordances — shown only when viewing someone else's profile.
     @State private var showReportUser = false
-    @State private var showBlockConfirm = false
     @State private var showUserOptions = false
     @State private var pendingReport = false
-    @State private var pendingBlock = false
-    @State private var pendingRemoveCollab = false
-    @State private var showRemoveCollabConfirm = false
+    /// Measured hero / tab bar heights — size the tab content to the rest
+    /// of the screen (see `tabContentMinHeight`).
+    @State private var heroHeight: CGFloat = 0
+    @State private var tabBarHeight: CGFloat = 0
+    /// Share picked in the "…" sheet — the share sheet opens once it's gone.
+    @State private var pendingShare = false
     /// In-flight guard for the unavailable state's Unblock button.
     @State private var isUnblocking = false
     /// Guards the initial load: `.task` re-fires on every pop-return (a push
@@ -61,7 +66,7 @@ struct ProfileScreen: View {
         // Crossfade the skeleton out as the real profile fades in.
         ZStack {
             if isInitialLoading {
-                ScrollView { ProfileSkeleton() }
+                ScrollView { ProfileSkeleton(isOwnProfile: isOwnProfile) }
                     .scrollDisabled(true)
                     .transition(.opacity)
             } else if isError {
@@ -84,18 +89,14 @@ struct ProfileScreen: View {
         // The Settings-style bar: nothing over the hero at rest; the bar and
         // the centred @username fade in together once you scroll. A back
         // chevron only when this profile was pushed (the Profile tab is a
-        // main screen); "…" (report / block) only on other people's.
+        // main screen). Report / block live on the action bar's "…".
         .appNavBar(
             title: viewModel.username,
             collapsing: true,
             fadeTitle: true,
             overlaysContent: true,
             onBack: userId != nil ? { dismiss() } : nil
-        ) {
-            if !isOwnProfile {
-                HeaderIconButton(icon: .ellipsis, size: ViewConst.heroOverlayIconSize) { showUserOptions = true }
-            }
-        }
+        )
         .navigationDestination(isPresented: $showEditProfile) {
             EditProfileScreen(viewModel: viewModel, userId: resolvedUserId)
         }
@@ -112,31 +113,23 @@ struct ProfileScreen: View {
         }
         .sheet(isPresented: $showUserOptions, onDismiss: {
             if pendingReport { pendingReport = false; showReportUser = true }
-            if pendingBlock { pendingBlock = false; showBlockConfirm = true }
-            if pendingRemoveCollab { pendingRemoveCollab = false; showRemoveCollabConfirm = true }
+            if pendingShare { pendingShare = false; showShareSheet = true }
         }) {
             UserOptionsSheet(
                 username: viewModel.username,
                 onRemoveCollaborator: viewModel.collaboratorStatus == "accepted"
-                    ? { pendingRemoveCollab = true; showUserOptions = false }
+                    ? { dependencies.contentActions.removeCollaborator(userId: resolvedUserId, username: viewModel.username) }
                     : nil,
+                onShare: { pendingShare = true; showUserOptions = false },
                 onReport: { pendingReport = true; showUserOptions = false },
-                onBlock: { pendingBlock = true; showUserOptions = false }
+                onBlock: {
+                    dependencies.contentActions.block(userId: resolvedUserId, username: viewModel.username)
+                    dismiss()
+                }
             )
-        }
-        .destructiveConfirm(
-            "Remove @\(viewModel.username) as a collaborator?",
-            isPresented: $showRemoveCollabConfirm,
-            actionLabel: "Remove",
-            message: "You'll no longer be collaborators, and your conversation moves to your inbox's Archived section. You can send a new collab request anytime."
-        ) {
-            Task { await viewModel.removeCollaborator(userId: resolvedUserId) }
         }
         .sheet(isPresented: $showReportUser) {
             ReportSheet(targetType: .user, targetId: resolvedUserId, subject: "@\(viewModel.username)")
-        }
-        .blockUserDialog(username: viewModel.username, isPresented: $showBlockConfirm) {
-            blockUser()
         }
         .sheet(isPresented: $viewModel.showCollabSheet) {
             CollabRequestSheet(
@@ -151,11 +144,15 @@ struct ProfileScreen: View {
                 artwork: .placeholder(track.coverURL, name: track.title),
                 title: track.title,
                 artist: "@\(viewModel.username)",
-                meta: track.isPrivate ? "Private" : "Public",
-                actions: trackOptionsActions(for: track)
+                meta: track.visibility.label,
+                actions: trackOptionsActions(for: track),
+                queueMedia: viewModel.mediaFor(track)
             )
             // Detents come from TrackOptionsSheet itself (sized to its rows).
             .sheetBackground()
+        }
+        .sheet(item: $releasePickerTrack) { track in
+            AddToReleaseSheet(trackId: track.id, trackTitle: track.title)
         }
         .fullScreenCover(item: $viewModel.editingTrackDetail) { detail in
             EditTrackScreen(
@@ -174,29 +171,6 @@ struct ProfileScreen: View {
                 } }
             )
         }
-        .destructiveConfirm(
-            "Delete this track?",
-            isPresented: $viewModel.showDeleteTrackConfirm,
-            message: "This removes the track from your profile and library. This can't be undone."
-        ) {
-            Task {
-                if let id = viewModel.pendingDeleteTrackId {
-                    if await viewModel.deleteTrack(trackId: id) {
-                        // Strip the dead track everywhere it could still render
-                        // or play: home rails/feeds, saved library + uploads,
-                        // the media registry, and the player if it's current.
-                        feedStore.removeTrack(id)
-                        libraryStore.trackDeleted(id)
-                        await dependencies.mediaState.removeTrack(MediaID(id))
-                        if dependencies.playerController.state.currentMediaID?.value
-                            .caseInsensitiveCompare(id) == .orderedSame {
-                            dependencies.mediaPlayer.reset()
-                        }
-                    }
-                }
-                viewModel.pendingDeleteTrackId = nil
-            }
-        }
         .task {
             viewModel.player = dependencies.mediaPlayer
             viewModel.social = socialStore
@@ -212,6 +186,11 @@ struct ProfileScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .ownProfileUpdated)) { _ in
             guard isOwnProfile, didLoad else { return }
             Task { await viewModel.refreshProfile(userId: resolvedUserId) }
+        }
+        // A pack was created / edited — the Marketplace tab shows it.
+        .onReceive(NotificationCenter.default.publisher(for: .packsChanged)) { _ in
+            guard isOwnProfile, didLoad else { return }
+            Task { await viewModel.loadPacks(userId: resolvedUserId) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .ownContentPosted)) { _ in
             guard isOwnProfile, didLoad else { return }
@@ -235,6 +214,7 @@ struct ProfileScreen: View {
                     userId: resolvedUserId,
                     onEditProfile: { showEditProfile = true },
                     onShareProfile: { showShareSheet = true },
+                    onMoreOptions: { showUserOptions = true },
                     avatarHidden: avatarPreview.mounted,
                     onAvatarTap: { frame in
                         if let url = viewModel.profileImageURL {
@@ -242,15 +222,36 @@ struct ProfileScreen: View {
                         }
                     }
                 )
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heroHeight = $0 }
                 ProfileTabBar(tabs: visibleTabs, selected: selectedTab, onSelect: select)
+                    // Sizes (not positions) — they change on layout only,
+                    // never per scroll frame.
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { tabBarHeight = $0 }
                 ProfileTabContent(
                     viewModel: viewModel,
                     selected: selectedTab,
                     isOwnProfile: isOwnProfile
                 )
+                // Fills the rest of the screen under the tab bar, hit-testable
+                // edge to edge — so a swipe ANYWHERE under the tab bar (blank
+                // space under a short / empty tab, gaps between rows) changes
+                // tab, not just one that starts on a row.
+                .frame(minHeight: tabContentMinHeight, alignment: .top)
+                .contentShape(.rect)
+                // Swipe left / right across the tab content to change tab
+                // (same crossfade as tapping — Explore's swipe).
+                .tabSwipe { forward in
+                    let tabs = visibleTabs
+                    guard let i = tabs.firstIndex(of: selectedTab),
+                          tabs.indices.contains(forward ? i + 1 : i - 1) else { return }
+                    select(tabs[forward ? i + 1 : i - 1])
+                }
             }
         }
         .scrollIndicators(.hidden)
+        .refreshable { await runRefresh($isRefreshing) { await refreshEverything() } }
+        // The hero runs under the nav bar, hiding the system spinner.
+        .refreshChip(isRefreshing, topInset: ViewConst.safeAreaInsets.top + 52)
     }
 }
 
@@ -282,6 +283,9 @@ private extension ProfileScreen {
             .init(icon: .squarePen, title: "Edit Track") {
                 await viewModel.startEditingTrack(track.id)
             },
+            .init(icon: .layers, title: "Add to Release") {
+                releasePickerTrack = track
+            },
             .init(
                 icon: track.isPrivate ? .eye : .eyeOff,
                 title: track.isPrivate ? "Unhide Track" : "Hide Track",
@@ -296,10 +300,20 @@ private extension ProfileScreen {
                     _ = await (feedDone, libraryDone)
                 }
             },
-            .init(icon: .trash2, title: "Delete Track", isDestructive: true) {
-                viewModel.pendingDeleteTrackId = track.id
-                viewModel.showDeleteTrackConfirm = true
-            },
+            .init(
+                icon: .trash2, title: "Delete Track", isDestructive: true,
+                confirm: DestructiveConfirm(
+                    title: "Delete this track?",
+                    message: "It's removed from your profile and everyone's library. This can't be undone."
+                ) {
+                    // Gone from this list now; ContentActions strips every other
+                    // copy, runs the RPC and toasts. A refusal reloads the profile.
+                    viewModel.removeTrackLocally(track.id)
+                    dependencies.contentActions.deleteTrack(id: track.id) {
+                        Task { await loadEverything() }
+                    }
+                }
+            ),
         ]
     }
 
@@ -323,6 +337,18 @@ private extension ProfileScreen {
         guard !(viewModel.isUnavailable && !isOwnProfile) else { return }
         // Warm the cover cache for every tab so switching shows cached images.
         viewModel.prefetchTabCovers()
+    }
+
+    /// Pull-to-refresh: past the response cache (profile, credited tracks,
+    /// packs, listings), then every section — hero, tabs and releases.
+    func refreshEverything() async {
+        await dependencies.supabaseService.invalidateProfile(userId: resolvedUserId)
+        async let profile: Void = viewModel.refreshProfile(userId: resolvedUserId)
+        async let credited: Void = viewModel.loadCreditedTracks(userId: resolvedUserId)
+        async let packs: Void = viewModel.loadPacks(userId: resolvedUserId)
+        async let listings: Void = viewModel.loadUserListings(userId: resolvedUserId)
+        async let releases: Void = libraryStore.loadReleases(userId: resolvedUserId, fresh: true)
+        _ = await (profile, credited, packs, listings, releases)
     }
 
     /// Offline / load-failure state with a retry.
@@ -354,14 +380,23 @@ private extension ProfileScreen {
     /// the server returns the full content again once the block is gone.
     func unblockUser() async {
         isUnblocking = true
-        if (try? await dependencies.supabaseService.unblockUser(resolvedUserId)) != nil {
+        if await dependencies.contentActions.unblock(userId: resolvedUserId, username: viewModel.username) {
             await loadEverything()
         }
         isUnblocking = false
     }
 
+    /// Just the screen left under the hero + tab bar at rest — enough for a
+    /// swipe anywhere below the bar to land on the tab content, without
+    /// padding a short tab into extra scroll.
+    private var tabContentMinHeight: CGFloat {
+        max(0, UIScreen.size.height - heroHeight - tabBarHeight)
+    }
+
     var visibleTabs: [ProfileTab] {
-        [.tracks, .featuredOn, .market]
+        // Marketplace only once the artist has packs to show.
+        let hasPacks = FeatureFlags.freePacks && !viewModel.marketplacePacks(isOwnProfile: isOwnProfile).isEmpty
+        return hasPacks ? [.tracks, .featuredOn, .market, .packs] : [.tracks, .featuredOn, .market]
     }
 
     func select(_ tab: ProfileTab) {
@@ -370,13 +405,6 @@ private extension ProfileScreen {
         withAnimation(.smooth(duration: 0.3)) { selectedTab = tab }
     }
 
-    /// Blocks this profile's user, then pops back — their content is now hidden.
-    func blockUser() {
-        Task {
-            try? await dependencies.supabaseService.blockUser(resolvedUserId)
-            dismiss()
-        }
-    }
 }
 
 #Preview {

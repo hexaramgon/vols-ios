@@ -21,6 +21,22 @@ struct NewServiceScreen: View {
     @State private var pickingPortfolioID: UUID?
     @State private var selectedPhoto: PhotosPickerItem?
     @FocusState private var numberFieldFocused: Bool
+    /// The open picker sheet (currency / a package's tier or revisions).
+    @State private var picker: Picker?
+
+    enum Picker: Identifiable {
+        case currency
+        case tier(UUID)
+        case revisions(UUID)
+
+        var id: String {
+            switch self {
+            case .currency: "currency"
+            case let .tier(id): "tier-\(id)"
+            case let .revisions(id): "revisions-\(id)"
+            }
+        }
+    }
 
     private let tagSuggestions = [
         "mixing", "mastering", "trap", "r&b", "stems",
@@ -70,6 +86,7 @@ struct NewServiceScreen: View {
         }
         .gradientBackground()
         .photosPicker(isPresented: $showCoverPicker, selection: $selectedPhoto, matching: .images)
+        .sheet(item: $picker) { pickerSheet($0) }
         .fileImporter(
             isPresented: $showPortfolioPicker,
             allowedContentTypes: [.audio, .mp3, .mpeg4Audio, .wav],
@@ -204,13 +221,7 @@ struct NewServiceScreen: View {
 
             HStack(spacing: 12) {
                 UploadFieldLabel("Currency")
-                Menu {
-                    ForEach(serviceCurrencies, id: \.self) { currency in
-                        Button(currency) {
-                            viewModel.currency = currency
-                        }
-                    }
-                } label: {
+                Button { picker = .currency } label: {
                     HStack(spacing: 4) {
                         Text(viewModel.currency)
                             .font(.appFootnote)
@@ -222,6 +233,7 @@ struct NewServiceScreen: View {
                     .background(Color.vControl, in: Capsule())
                     .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
                 Spacer()
             }
 
@@ -235,17 +247,44 @@ struct NewServiceScreen: View {
         }
     }
 
+    @ViewBuilder
+    private func pickerSheet(_ picker: Picker) -> some View {
+        switch picker {
+        case .currency:
+            ChoiceSheet(title: "Currency", subtitle: "For every package", icon: .tag,
+                        choices: serviceCurrencies.map { currency in
+                            SheetChoice(title: currency, selected: viewModel.currency == currency) {
+                                viewModel.currency = currency
+                            }
+                        })
+        case let .tier(id):
+            let current = viewModel.packages.first { $0.id == id }?.name
+            ChoiceSheet(title: "Package name", icon: .layers,
+                        choices: servicePackageTiers.map { tier in
+                            SheetChoice(title: tier, selected: current == tier) {
+                                if let i = viewModel.packages.firstIndex(where: { $0.id == id }) {
+                                    viewModel.packages[i].name = tier
+                                }
+                            }
+                        })
+        case let .revisions(id):
+            let current = viewModel.packages.first { $0.id == id }?.revisions
+            ChoiceSheet(title: "Revisions", subtitle: "Rounds included", icon: .refreshCw,
+                        choices: serviceRevisionsOptions.map { option in
+                            SheetChoice(title: option.label, selected: current == option.value) {
+                                if let i = viewModel.packages.firstIndex(where: { $0.id == id }) {
+                                    viewModel.packages[i].revisions = option.value
+                                }
+                            }
+                        })
+        }
+    }
+
     private func packageCard(_ pkg: Binding<NewServiceViewModel.PackageDraft>) -> some View {
         let row = pkg.wrappedValue
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Menu {
-                    ForEach(servicePackageTiers, id: \.self) { tier in
-                        Button(tier) {
-                            pkg.wrappedValue.name = tier
-                        }
-                    }
-                } label: {
+                Button { picker = .tier(row.id) } label: {
                     HStack(spacing: 4) {
                         Text(row.name)
                             .font(.appBodyMedium)
@@ -255,16 +294,17 @@ struct NewServiceScreen: View {
                     }
                     .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
 
                 Spacer()
 
                 Button {
                     viewModel.packages.removeAll { $0.id == row.id }
                 } label: {
-                    LucideIcon(.x, .sm)
+                    LucideIcon(.x, .md)
                         .foregroundStyle(Color.vText3)
                         .frame(width: 36, height: 36)
-                        .contentShape(.rect)
+                        .minimumHitArea(for: 36)
                 }
                 .buttonStyle(.plain)
                 .disabled(viewModel.packages.count == 1)
@@ -308,13 +348,7 @@ struct NewServiceScreen: View {
                 .padding(.vertical, 11)
                 .uploadFieldShell()
 
-                Menu {
-                    ForEach(serviceRevisionsOptions, id: \.value) { option in
-                        Button(option.label) {
-                            pkg.wrappedValue.revisions = option.value
-                        }
-                    }
-                } label: {
+                Button { picker = .revisions(row.id) } label: {
                     HStack(spacing: 4) {
                         Text(row.revisions == "999" ? "∞" : row.revisions)
                             .font(.appBody)
@@ -327,6 +361,7 @@ struct NewServiceScreen: View {
                     .uploadFieldShell()
                     .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
             }
 
             Text("Price · delivery days · revision rounds")
