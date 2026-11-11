@@ -27,9 +27,9 @@ enum Route: Hashable, Equatable {
     case marketplacePack(ApiMarketplacePack)
     case marketplaceService(ApiMarketplaceService)
     /// The owner's Pack Analytics page (from the card on their pack).
-    case packAnalytics(packId: String, packName: String)
+    case packAnalytics(packId: String, packName: String, coverURL: String?)
     /// The author's Listing Analytics page (from the card on their listing).
-    case listingAnalytics(listingId: String, title: String)
+    case listingAnalytics(listingId: String, title: String, category: String)
     case collabListing(ApiListing)
     case conversation(ActiveConversation)
     case messageCategory(title: String, bucket: MessageBucket)
@@ -44,7 +44,17 @@ enum Route: Hashable, Equatable {
 class Router {
     /// The tab's back-stack. A typed array (not `NavigationPath`) so the
     /// router can see what's already open — see `push(_:)`.
-    var path: [Route] = []
+    ///
+    /// Any change — push, back button, swipe-back, pop-to-root — drops the
+    /// keyboard: a keyboard never follows you to another page. (A chat's
+    /// focus used to survive opening a profile and coming back, leaving the
+    /// keyboard up over the screen behind it with the input bar gone.)
+    var path: [Route] = [] {
+        didSet {
+            guard path.count != oldValue.count else { return }
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
+    }
 
     /// Opens `route` — unless that same screen (same listing, chat, profile,
     /// folder…) is already in the back-stack, in which case it goes BACK to
@@ -112,12 +122,12 @@ class Router {
         push(Route.analytics)
     }
 
-    func navigateToPackAnalytics(packId: String, packName: String) {
-        push(Route.packAnalytics(packId: packId, packName: packName))
+    func navigateToPackAnalytics(packId: String, packName: String, coverURL: String?) {
+        push(Route.packAnalytics(packId: packId, packName: packName, coverURL: coverURL))
     }
 
-    func navigateToListingAnalytics(listingId: String, title: String) {
-        push(Route.listingAnalytics(listingId: listingId, title: title))
+    func navigateToListingAnalytics(_ listing: ApiListing) {
+        push(Route.listingAnalytics(listingId: listing.listingId, title: listing.title, category: listing.category))
     }
 
     func navigateToNetwork() {
@@ -217,8 +227,8 @@ extension Route {
         case let .conversation(convo): "conversation:\(convo.convoId.lowercased())"
         case let .marketplacePack(pack): "pack:\(pack.packId.lowercased())"
         case let .marketplaceService(service): "service:\(service.serviceId.lowercased())"
-        case let .packAnalytics(packId, _): "pack-analytics:\(packId.lowercased())"
-        case let .listingAnalytics(listingId, _): "listing-analytics:\(listingId.lowercased())"
+        case let .packAnalytics(packId, _, _): "pack-analytics:\(packId.lowercased())"
+        case let .listingAnalytics(listingId, _, _): "listing-analytics:\(listingId.lowercased())"
         case let .messageCategory(_, bucket): "messages:\(bucket)"
         case .notifications: "notifications"
         case .messages: "messages"
@@ -269,8 +279,8 @@ extension Route {
         case let .collabListing(listing): listing.listingId
         // The pack owner's Performance views count these (get_pack_stats).
         case let .marketplacePack(pack): pack.packId
-        case let .packAnalytics(packId, _): packId
-        case let .listingAnalytics(listingId, _): listingId
+        case let .packAnalytics(packId, _, _): packId
+        case let .listingAnalytics(listingId, _, _): listingId
         default: nil
         }
     }

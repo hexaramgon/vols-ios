@@ -10,7 +10,6 @@ import SwiftUI
 
 struct AppView: View {
     @Environment(Dependencies.self) var dependencies
-    @Environment(\.scenePhase) private var scenePhase
 
     /// Minimum time the splash holds before its exit, so the logo is seen.
     @State private var minSplashElapsed = false
@@ -78,14 +77,6 @@ struct AppView: View {
             // or Settings → Notifications, never straight from sign-in.
             if case .authenticated = new {
                 Task { await PushNotificationManager.shared.enable() }
-            }
-        }
-        // Foregrounding refreshes the unread dots AND the icon badge from the
-        // single InboxStore pipeline, so the badge stays accurate as
-        // conversations are read.
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                Task { await dependencies.inboxStore.refreshUnread() }
             }
         }
         .task {

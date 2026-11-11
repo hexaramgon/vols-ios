@@ -19,6 +19,9 @@ struct UserOptionsSheet: View {
     /// Present only while the viewer has an ACCEPTED collaboration with this
     /// user — ends it (and archives their DM) after the caller's confirmation.
     var onRemoveCollaborator: (() -> Void)? = nil
+    /// Present only while the viewer's own collab request to this user is
+    /// still pending — takes it back after the caller's confirmation.
+    var onWithdrawRequest: (() -> Void)? = nil
     /// Share their profile link (the profile's "…"; absent in a conversation).
     var onShare: (() -> Void)? = nil
     let onReport: () -> Void
@@ -43,6 +46,16 @@ struct UserOptionsSheet: View {
                             message: "You'll no longer be collaborators, and your conversation moves to your inbox's Archived section. You can send a new collab request anytime.",
                             actionLabel: "Remove"
                         ) { onRemoveCollaborator() }
+                    }
+                }
+                if let onWithdrawRequest {
+                    OptionSheetRow(icon: .circleMinus, title: "Withdraw Collab Request") {
+                        pendingConfirm = DestructiveConfirm(
+                            icon: .circleMinus,
+                            title: "Withdraw your collab request?",
+                            message: "@\(username) won't be able to accept it anymore, and your conversation moves to Archived. You can send a new request a week after the original.",
+                            actionLabel: "Withdraw"
+                        ) { onWithdrawRequest() }
                     }
                 }
                 OptionSheetRow(icon: .flag, title: "Report", action: onReport)

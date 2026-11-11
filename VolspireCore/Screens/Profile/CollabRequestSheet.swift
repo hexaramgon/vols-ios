@@ -37,9 +37,16 @@ struct CollabRequestSheet: View {
                     VStack(alignment: .leading, spacing: 22) {
                         messageSection
                         tracksSection
-                        if let err = viewModel.collabError { ErrorBanner(err) }
                     }
                     .padding(20)
+                }
+                // Pinned above Send (not at the end of the scroll, where a long
+                // track list pushed it off screen — a failed send looked silent).
+                if let err = viewModel.collabError {
+                    ErrorBanner(err)
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 10)
+                        .transition(.opacity)
                 }
                 footer
             }

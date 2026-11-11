@@ -35,6 +35,20 @@ struct NowPlayingCommentsPanel: View {
     @State private var optionsComment: ApiTrackComment?
     /// The list's bottom edge on screen (changes only with layout).
     @State private var listMaxY: CGFloat = .greatestFiniteMagnitude
+    /// The list's UIScrollView — the reply glide measures its real visible
+    /// area (it stretches into the keyboard's area while typing).
+    @State private var listScroll = EnclosingScrollView.Box()
+    /// Screen bottom of the comment being replied to (nil otherwise).
+    @State private var replyRowMaxY: CGFloat?
+    /// The end-of-list room while typing, and — for a beat after typing ends —
+    /// held so the list can glide to its new end instead of snapping there.
+    @State private var typingRoom: CGFloat = 0
+    /// False from the moment typing starts until the list has glided to its
+    /// post-keyboard end — the typing room stays in the content till then.
+    @State private var roomReleased = true
+    /// The list's bottom edge while nobody is typing — once the keyboard is up
+    /// the scroll view stretches down into the keyboard's area.
+    @State private var restListMaxY: CGFloat = .greatestFiniteMagnitude
     /// Staged when "Report" is tapped; presented once the options sheet has
     /// dismissed (avoids a sheet-over-sheet transition).
     @State private var pendingReportComment: ApiTrackComment?
@@ -129,10 +143,64 @@ struct NowPlayingCommentsPanel: View {
         return listMaxY - model.composerTopY + 8
     }
 
+    /// Glides the replied-to comment so its bottom sits 8pt above the lifted
+    /// composer — by exactly the measured distance, on the UIScrollView (which
+    /// stretches into the keyboard's area while typing, so SwiftUI anchors on
+    /// the list's frame landed it behind the composer).
+    private func landReplyAboveComposer() {
+        guard let sv = listScroll.scrollView, let rowMaxY = replyRowMaxY,
+              model.composerTopY < .greatestFiniteMagnitude else { return }
+        let delta = rowMaxY - (model.composerTopY - 8)
+        let insets = sv.adjustedContentInset
+        let maxY = max(-insets.top, sv.contentSize.height + insets.bottom - sv.bounds.height)
+        let target = min(maxY, max(-insets.top, sv.contentOffset.y + delta))
+        guard abs(target - sv.contentOffset.y) > 1 else { return }
+        sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: target), animated: true)
+    }
+
+    private func settleAfterTyping() {
+        if let sv = listScroll.scrollView, restListMaxY < .greatestFiniteMagnitude {
+            let restHeight = restListMaxY - sv.convert(sv.bounds, to: nil).minY
+            let endOffset = max(0, sv.contentSize.height - typingRoom - restHeight)
+            if sv.contentOffset.y > endOffset + 1 {
+                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: endOffset), animated: true)
+            }
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            if !model.composerFocused { roomReleased = true }
+        }
+    }
+
+    /// Room at the end of the list. While the composer is focused it's at
+    /// least how far the list stretches when the keyboard comes up: reserved
+    /// from the moment focus lands (before the keyboard), the content is
+    /// already tall enough when the list grows, so UIKit never has to pull
+    /// the scroll offset back (that snap flung the top comments down on Reply).
+    ///
+    /// Once the composer has lifted, the scroll view reaches the screen's
+    /// bottom (it stretches into the keyboard's area), so the room runs from
+    /// there up to the composer's top — enough for the last comment to scroll
+    /// clear above it.
+    private var bottomRoom: CGFloat {
+        if !model.composerFocused, !roomReleased { return typingRoom }
+        guard model.composerFocused, restListMaxY < .greatestFiniteMagnitude else { return composerOverlap }
+        let reserve = UIScreen.size.height - restListMaxY + 8
+        guard model.composerTopY < .greatestFiniteMagnitude else { return max(composerOverlap, reserve) }
+        let lifted = UIScreen.size.height - ViewConst.safeAreaInsets.bottom - model.composerTopY + 8
+        return max(composerOverlap, reserve, lifted)
+    }
+
     private var commentsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                VStack(spacing: 0) {
+                // Eager, not lazy: `get_track_comments` returns a page of 20,
+                // so every row is built up front. A LazyVStack built rows on
+                // demand — the list stretching under the rising keyboard made
+                // rows below the fold "visible" mid-animation, and a row built
+                // then slid in from the top of the list (seen on Reply).
+                VStack(alignment: .leading, spacing: 16) {
                     Color.clear.frame(height: 1).id(topAnchor)
 
                     if model.comments.isEmpty && !model.isLoading {
@@ -144,7 +212,15 @@ struct NowPlayingCommentsPanel: View {
                     }
 
                     ForEach(model.comments) { comment in
-                        commentRow(comment).id(comment.id)
+                        let isReplyTarget = model.replyingTo?.id == comment.id
+                        commentRow(comment)
+                            .id(comment.id)
+                            // The reply glide lands this row's bottom edge.
+                            .onGeometryChange(for: CGFloat?.self) {
+                                isReplyTarget ? $0.frame(in: .global).maxY : nil
+                            } action: { y in
+                                if let y { replyRowMaxY = y } else if isReplyTarget { replyRowMaxY = nil }
+                            }
                         if let replies = comment.replies, !replies.isEmpty {
                             ForEach(replies) { reply in
                                 commentRow(reply, isReply: true).padding(.leading, 36)
@@ -152,6 +228,7 @@ struct NowPlayingCommentsPanel: View {
                         }
                     }
                 }
+                .background(EnclosingScrollView(box: listScroll))
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 // Extra room so the last comment can scroll clear of the fade.
@@ -162,14 +239,31 @@ struct NowPlayingCommentsPanel: View {
                 // still animates (it's the scroll view's offset, not the rows),
                 // and the rows' own `.animation(_:value:)` washes still run.
                 .transaction { $0.animation = nil }
+
+                // While typing, the lifted composer + keyboard cover the list's
+                // bottom: this much room at the END OF THE CONTENT lets the last
+                // comments scroll clear of it. Content, not a safe-area inset —
+                // an inset (or the keyboard's own safe area) changing as the
+                // keyboard hid made UIKit re-adjust the scroll offset, which
+                // threw the list ~280pt on tap-out. A shrinking content size
+                // leaves the offset alone.
+                Color.clear.frame(height: bottomRoom)
+                    .onChange(of: bottomRoom, initial: true) { _, room in
+                        if model.composerFocused { typingRoom = room }
+                    }
+                }
             }
+            // The list doesn't take the keyboard as an inset (that inset
+            // vanishing on dismiss is what made UIKit re-adjust the offset).
+            .ignoresSafeArea(.keyboard)
             .scrollDismissesKeyboard(.interactively)
             .scrollDisabled(scrollLocked)
-            // While typing, the lifted composer + keyboard cover the list's
-            // bottom: inset by that much so the last comments scroll clear of
-            // it and a reply's "just above the composer" is the real edge.
-            .safeAreaPadding(.bottom, composerOverlap)
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { listMaxY = $0 }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                listMaxY = $0.maxY
+                if !model.composerFocused, model.composerTopY == .greatestFiniteMagnitude {
+                    restListMaxY = $0.maxY
+                }
+            }
             // Soft bottom edge: comments dissolve out over the last ~32pt
             // instead of hard-clipping at the card's bottom.
             .mask(
@@ -201,13 +295,20 @@ struct NowPlayingCommentsPanel: View {
             .onChange(of: model.comments.first?.id) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(topAnchor, anchor: .top) }
             }
+            // Typing ended: the list is about to lose its keyboard room. Glide
+            // to where its end will be, THEN drop the room — otherwise UIKit
+            // snaps the offset there in one frame.
+            .onChange(of: model.composerFocused) { wasFocused, focused in
+                if focused { roomReleased = false; return }
+                if wasFocused { settleAfterTyping() }
+            }
             // Replying (Instagram-style, like the listing page): once the
             // composer is up, glide the comment to sit just above it.
             .onChange(of: model.replyRequest) { _, _ in
-                guard let id = model.replyingTo?.id else { return }
+                guard model.replyingTo != nil else { return }
                 Task {
                     try? await Task.sleep(for: .milliseconds(350))
-                    withAnimation(.smooth(duration: 0.45)) { proxy.scrollTo(id, anchor: .bottom) }
+                    landReplyAboveComposer()
                 }
             }
             // Opened from the live comment toast: bring that comment into view,

@@ -58,6 +58,9 @@ struct ListingDetailScreen: View {
     /// return is that restore, and is undone.
     @State private var hasAppeared = false
     @State private var reappearedAt: Date?
+    /// How far the docked keyboard reaches above the home-indicator inset
+    /// (0 = down) — from KeyboardHeightReader.
+    @State private var keyboardHeight: CGFloat = 0
 
     enum Field: Hashable { case comment }
 
@@ -202,6 +205,16 @@ struct ListingDetailScreen: View {
                 commentDock
             } else {
                 Color.clear.frame(height: dockBottomPadding)
+            }
+        }
+        // The dock is placed on the keyboard by hand (dockBottomPadding) as ONE
+        // value, moved on the keyboard's own spring. SwiftUI's lift + a padding
+        // animated separately were two motions — it overshot and settled back.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .background {
+            KeyboardHeightReader { height in
+                guard height != keyboardHeight else { return }
+                withAnimation(.keyboard) { keyboardHeight = height }
             }
         }
         // While typing, the tab bar + mini-player slide away (like a DM).
@@ -407,7 +420,7 @@ private extension ListingDetailScreen {
             // Author only: Listing Analytics, like Profile's Artist Dashboard.
             if viewModel.isAuthor {
                 DashboardLinkCard(title: "Listing Analytics", subtitle: analyticsSubtitle, accentTile: true) {
-                    router.navigateToListingAnalytics(listingId: listing.listingId, title: listing.title)
+                    router.navigateToListingAnalytics(listing)
                 }
                 .padding(.top, 20)
             }
@@ -586,7 +599,6 @@ private extension ListingDetailScreen {
     func threadTabButton(_ tab: ThreadTab, _ title: String, count: Int) -> some View {
         let active = threadTab == tab
         return Button {
-            Haptics.selection()
             withAnimation(.smooth(duration: 0.25)) { threadTab = tab }
         } label: {
             HStack(spacing: 6) {
@@ -650,7 +662,13 @@ private extension ListingDetailScreen {
     var commentsSection: some View {
         VStack(alignment: .leading, spacing: 20) {
             // No heading — the thread follows the post's hairline directly.
-            if !viewModel.commentsLoaded {
+            if viewModel.commentsFailed {
+                // Couldn't reach the server — never claim "No comments yet".
+                LoadErrorView(icon: .messageCircle, title: "Couldn't load comments") {
+                    Task { await viewModel.retryComments() }
+                }
+                .padding(.vertical, 12)
+            } else if !viewModel.commentsLoaded {
                 SkeletonRows(count: 3, thumb: .circle(size: 32), horizontalPadding: 0)
             } else if viewModel.comments.isEmpty {
                 Text(viewModel.currentUserId != nil ? "No comments yet. Be the first." : "No comments yet.")
@@ -658,22 +676,33 @@ private extension ListingDetailScreen {
                     .frame(maxWidth: .infinity, alignment: .center)
             } else {
                 VStack(alignment: .leading, spacing: 20) {
-                    ForEach(viewModel.comments) { commentRow($0) }
+                    // The app's loading entrance: each comment fades up a beat
+                    // after the one above (a newly posted one fades in too).
+                    ForEach(Array(viewModel.comments.enumerated()), id: \.element.id) { i, comment in
+                        commentRow(comment)
+                            .staggeredAppear(i, in: "listing.comments.\(viewModel.listing.listingId)")
+                    }
                 }
             }
         }
         .padding(.top, 20)
+        // Skeleton → comments crossfades and the section's height glides.
+        .loadingCrossfade(viewModel.commentsLoaded)
         .animation(.easeOut(duration: 0.18), value: viewModel.replyingTo?.id)
         .animation(.easeOut(duration: 0.18), value: viewModel.commentError)
+        .animation(.easeOut(duration: 0.2), value: viewModel.commentsFailed)
     }
 
-    /// Above the tab bar + mini-player at rest; just over the keyboard while
-    /// typing (both slide away then). Keyed on `composerActive` — the SAME
-    /// flag (and timing, below) that hides the tab bar — so the dock and the
-    /// bar move together instead of the dock dropping behind the still-visible
-    /// bar for a few frames.
+    /// Space under the dock: above the tab bar + mini-player at rest, 8pt over
+    /// the keyboard while it's up — whichever is higher. One value that only
+    /// moves toward its target, so the dock can't overshoot.
+    ///
+    /// Never built from `ViewConst.safeAreaInsets.bottom`: that measured inset
+    /// grows to include the keyboard while it's up, which cancelled the
+    /// keyboard out (the dock stayed behind it).
     var dockBottomPadding: CGFloat {
-        conversationState.composerActive ? 8 : playerController.contentBottomInset - ViewConst.safeAreaInsets.bottom + 8
+        let rest = playerController.tabBarHeight + playerController.miniPlayerAllowance + 8
+        return max(rest, keyboardHeight + 8)
     }
 
     /// The tab bar's hide/show animation (RootTabView) — the dock rides it.
@@ -770,12 +799,14 @@ private extension ListingDetailScreen {
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
-        .padding(.bottom, dockBottomPadding)
-        .animation(Self.dockMotion, value: conversationState.composerActive)
         .animation(.smooth(duration: 0.22), value: focused)
         .animation(.easeOut(duration: 0.15), value: canSend)
         .animation(.easeOut(duration: 0.18), value: replying?.commentId)
         .animation(.easeOut(duration: 0.18), value: viewModel.commentError)
+        // OUTSIDE the animations above: focus flips as the keyboard starts, and
+        // the focus ease must not animate this padding — only the keyboard's
+        // spring (KeyboardHeightReader) moves it.
+        .padding(.bottom, dockBottomPadding)
     }
 
     /// `AnyView`: the row nests its replies by calling itself, which an opaque
@@ -1097,3 +1128,67 @@ private struct ListingStatusSheet: View {
         }
     }
 }
+
+// MARK: - Keyboard tracking
+
+extension Animation {
+    /// The system keyboard's own show/hide spring — content riding the keyboard
+    /// with this moves exactly with it (no lead, lag or overshoot).
+    static let keyboard = Animation.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)
+}
+
+/// Reports how much of the screen the docked keyboard covers (0 when it's
+/// down), via UIKit's `keyboardLayoutGuide` — the system's own keyboard
+/// tracking, so it holds for every keyboard style and device, unlike frame
+/// math on keyboard notifications.
+struct KeyboardHeightReader: UIViewRepresentable {
+    let onChange: (CGFloat) -> Void
+
+    func makeUIView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.isUserInteractionEnabled = false
+        view.onChange = onChange
+        return view
+    }
+
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        uiView.onChange = onChange
+    }
+
+    final class ProbeView: UIView {
+        var onChange: ((CGFloat) -> Void)?
+        private let tracker = UIView()
+        private var reported: CGFloat = -1
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            tracker.isUserInteractionEnabled = false
+            tracker.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(tracker)
+            keyboardLayoutGuide.usesBottomSafeArea = false
+            NSLayoutConstraint.activate([
+                tracker.leadingAnchor.constraint(equalTo: leadingAnchor),
+                tracker.widthAnchor.constraint(equalToConstant: 1),
+                tracker.topAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor),
+                tracker.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.bottomAnchor),
+            ])
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            // Keyboard top vs. the window's home-indicator inset (UIKit's
+            // window inset never includes the keyboard).
+            guard let window else { return }
+            let keyboardTop = tracker.convert(tracker.bounds, to: window).minY
+            let restLine = window.bounds.height - window.safeAreaInsets.bottom
+            let height = max(0, (restLine - keyboardTop).rounded())
+            guard height != reported else { return }
+            reported = height
+            // Out of the layout pass before touching SwiftUI state.
+            DispatchQueue.main.async { [weak self] in self?.onChange?(height) }
+        }
+    }
+}
+

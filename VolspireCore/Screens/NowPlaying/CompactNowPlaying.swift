@@ -112,6 +112,24 @@ private extension CompactNowPlaying {
                     .disabled(!model.commandProfile.isSwitchTrackEnabled)
                 }
             }
+            // Centre play/pause's tap area on its icon: iOS stretches it into
+            // the empty space on its left, but forward's frame cuts it off
+            // right at the icon's edge — measured, it reached ~37pt left of
+            // the icon's centre but only ~22pt right. This strip hands the
+            // first 10pt of forward's frame (empty — forward's glyph starts
+            // ~8pt in) to play/pause.
+            .overlay(alignment: .leading) {
+                if !inlinedBottomAccessory {
+                    Color.clear
+                        .frame(width: 10)
+                        .contentShape(.rect)
+                        .onTapGesture {
+                            guard !model.isLoadingTrack else { return }
+                            model.onPlayPause()
+                        }
+                        .offset(x: 44) // the play/pause button's width (miniPlayer config)
+                }
+            }
             .playerButtonStyle(.miniPlayer)
         }
         .padding(.leading, 16)

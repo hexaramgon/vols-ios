@@ -38,6 +38,9 @@ struct ConversationItem: Identifiable, Hashable {
     private var isCollabRequest: Bool { lastMessageType == "collab_request" }
     /// A collab request the other side declined.
     var isDeclinedRequest: Bool { isCollabRequest && requestStatus == "rejected" && !isOrder }
+    /// A collab request its sender withdrew — still the latest message (once
+    /// either of you writes again it's a normal conversation).
+    var isWithdrawnRequest: Bool { isCollabRequest && requestStatus == "withdrawn" && !isOrder }
     /// A collab request still awaiting accept/decline. Surfaces under Requests
     /// whether the request is the latest message *or* got buried under later
     /// replies — an unanswered request shouldn't get lost in the main list just
@@ -45,12 +48,13 @@ struct ConversationItem: Identifiable, Hashable {
     var isPendingRequest: Bool {
         guard !isOrder, !isInquiry, !isListing else { return false }
         // Latest message is the request itself, still unresolved…
-        if isCollabRequest && requestStatus != "accepted" && requestStatus != "rejected" { return true }
+        if isCollabRequest && !["accepted", "rejected", "withdrawn"].contains(requestStatus ?? "pending") { return true }
         // …or the request is still pending, just no longer the last message.
         return requestStatus == "pending"
     }
-    /// Declined requests + manually archived threads collapse into Archived.
-    var isArchivedRow: Bool { isDeclinedRequest || archived }
+    /// Declined / withdrawn requests + manually archived threads collapse into
+    /// Archived — a dead request never sits in the main list.
+    var isArchivedRow: Bool { isDeclinedRequest || isWithdrawnRequest || archived }
 }
 
 /// The inbox's folder buckets. Routes carry the KEY (not a row snapshot), so
@@ -102,9 +106,13 @@ final class InboxStore {
     /// Unread counts from `get_unread_counts` — the only fetch path for them.
     private(set) var unreadMessages = 0
     private(set) var unreadNotifications = 0
+    /// The realtime listener (foreground only) and its open subscription.
+    private var liveTask: Task<Void, Never>?
+    private var liveSubscription: LiveEventsSubscription?
 
-    /// The Inbox tab hosts BOTH the DM list and the notifications bell, so its
-    /// tab-bar dot lights for either kind of unread.
+    /// The Explore tab's header hosts BOTH the Messages and bell buttons, so
+    /// its tab-bar dot lights for either kind of unread (each header button
+    /// shows only its own kind).
     var inboxHasUnread: Bool { unreadMessages > 0 || unreadNotifications > 0 }
 
     // MARK: Dependencies
@@ -112,9 +120,40 @@ final class InboxStore {
     private let service: SupabaseService
 
     private var conversationsTask: Task<Void, Never>?
+    private var observers: [NSObjectProtocol] = []
 
     init(service: SupabaseService) {
         self.service = service
+
+        // A push landed while the app is open → the counts (and, for a
+        // message, the conversation rows) are stale. Without this the banner
+        // showed but no dot appeared until a tab switch or relaunch.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .pushReceived, object: nil, queue: .main
+        ) { [weak self] note in
+            let isMessage = note.userInfo?["convo_id"] != nil
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.syncAfterServerChange(includeConversations: isMessage) }
+            }
+        })
+    }
+
+    /// Foregrounding — anything may have arrived while backgrounded (pushes
+    /// delivered to the lock screen never reach the app).
+    func appBecameActive() async {
+        await syncAfterServerChange(includeConversations: true)
+    }
+
+    /// Forced unread counts (a coalesced count from before the change would
+    /// strand the dot) + the conversation list if it's already been loaded —
+    /// so the row behind the Messages dot actually shows its unread state.
+    private func syncAfterServerChange(includeConversations: Bool) async {
+        async let unread: Void = refreshUnread(force: true)
+        if includeConversations, loadState != .idle, conversationsTask == nil {
+            await refreshConversations()
+        }
+        await unread
     }
 
     func resetForSignOut() {
@@ -125,6 +164,7 @@ final class InboxStore {
         hasMoreConversations = false
         unreadMessages = 0
         unreadNotifications = 0
+        stopLiveUpdates()
         draftsByConvo = [:]
     }
 
@@ -144,6 +184,17 @@ final class InboxStore {
     func removeConversations(with userId: String) {
         let id = key(userId)
         conversations.removeAll { $0.otherUserId.map(key) == id }
+    }
+
+    /// Opening Messages: first load, or — if loaded earlier this session —
+    /// revalidate in place (rows stay on screen) so the list is never older
+    /// than the dot that led here.
+    func loadOrRevalidateConversations() async {
+        if conversationsTask != nil || loadState == .idle {
+            await loadConversationsIfNeeded()
+        } else {
+            await refreshConversations()
+        }
     }
 
     /// Always refetches (the RPC is uncached) — pull-to-refresh + foreground.
@@ -223,6 +274,117 @@ final class InboxStore {
         unreadMessages = counts.messages
         unreadNotifications = counts.notifications
         PushNotificationManager.shared.setBadge(counts.notifications + counts.messages)
+    }
+
+    // MARK: - Live in-app alerts
+
+    /// While the app is open: listens on the user's private Supabase
+    /// Realtime topic (`user:<uid>`, see LiveEvents.swift). A DB trigger
+    /// broadcasts an ids-only event per new DM / activity row; we refetch via
+    /// the normal RPCs, update the dots/list and show the in-app banner. No
+    /// polling, and no dependence on APNs (an install without push permission
+    /// still gets in-app alerts). A push that also arrives is deduped by
+    /// `PushBannerCenter`. Design + rollback: docs/realtime-in-app-notifications.md.
+    func startLiveUpdates() {
+        guard liveTask == nil else { return }
+        liveTask = Task { [weak self] in await self?.runLiveEvents() }
+    }
+
+    /// Backgrounding / sign-out: leave the channel (the socket closes with it).
+    func stopLiveUpdates() {
+        liveTask?.cancel()
+        liveTask = nil
+        if let subscription = liveSubscription {
+            liveSubscription = nil
+            Task { await subscription.close() }
+        }
+    }
+
+    /// Joins the topic (retrying with backoff if the join fails) and handles
+    /// events until cancelled. The SDK re-joins by itself after a dropped
+    /// socket; anything missed meanwhile is caught by `appBecameActive`.
+    private func runLiveEvents() async {
+        var backoff: Double = 2
+        while !Task.isCancelled {
+            do {
+                guard let subscription = try await service.openLiveEvents() else { return }
+                guard !Task.isCancelled else { await subscription.close(); return }
+                liveSubscription = subscription
+                backoff = 2
+                for await event in subscription.events {
+                    await handle(event)
+                }
+            } catch {
+                debugLog("[InboxStore] live events join failed: \(error)")
+            }
+            if let subscription = liveSubscription {
+                liveSubscription = nil
+                await subscription.close()
+            }
+            guard !Task.isCancelled else { return }
+            try? await Task.sleep(for: .seconds(backoff))
+            backoff = min(backoff * 2, 60)
+        }
+    }
+
+    private func handle(_ event: LiveEvent) async {
+        switch event {
+        case .message(let convoId, _):
+            async let unread: Void = refreshUnread(force: true)
+            await refreshConversations()
+            await unread
+            announceMessage(convoId: convoId)
+        case .activity:
+            await refreshUnread(force: true)
+            await announceNewActivity()
+        }
+    }
+
+    /// Banners the conversation that just got a message — unless it's the
+    /// one on screen, or it's already read / mine (e.g. sent from my other
+    /// device).
+    private func announceMessage(convoId: String) {
+        let visible = PushNotificationManager.shared.visibleConversationId.map(key)
+        guard key(convoId) != visible,
+              let row = conversations.first(where: { key($0.id) == key(convoId) }),
+              row.hasUnread, !row.lastMessageFromMe, !row.archived else { return }
+        var info = ["type": "message", "convo_id": row.id, "title": row.username, "body": row.preview]
+        info["sender_id"] = row.otherUserId
+        PushBannerCenter.shared.show(info)
+    }
+
+    /// Banners the newest unread activity row, and lets an open
+    /// Notifications page reload (same signal as an in-app push).
+    private func announceNewActivity() async {
+        guard let items = try? await service.getUserNotifications(force: true),
+              let item = items.first(where: { !($0.isRead ?? false) }) else { return }
+        var info = [
+            "type": "activity",
+            "title": item.actor?.username ?? "Notifications",
+            "body": Self.activityText(item),
+        ]
+        info["object_type"] = item.objectType
+        info["object_id"] = item.objectId
+        PushBannerCenter.shared.show(info)
+        NotificationCenter.default.post(name: .pushReceived, object: nil, userInfo: info)
+    }
+
+    /// Short banner copy — matches the push wording ("liked your track").
+    private static func activityText(_ item: ApiNotification) -> String {
+        let noun = switch item.objectType {
+        case "listing", "pack", "service", "folder": item.objectType ?? "track"
+        default: "track"
+        }
+        let action = item.action ?? ""
+        switch action {
+        case "liked", "saved", "shared": return "\(action) your \(noun)"
+        case "commented": return "commented on your \(noun)"
+        case "followed": return "started following you"
+        default:
+            let text = action.replacingOccurrences(of: "_", with: " ")
+            if let title = item.objectTitle, !title.isEmpty { return "\(text) · \(title)" }
+            return text.isEmpty ? "New activity" : text
+        }
     }
 
     /// Optimistic zero when the notifications screen opens (the server marks

@@ -40,12 +40,15 @@ struct OverlaidRootView: View {
         conversationState.activeConversation != nil
     }
 
-    /// Slide the mini player away for a full-screen conversation, while a
-    /// bottom composer's keyboard is up — same reason as the tab bar: it must
-    /// not float wedged above the keyboard — or under Explore's search.
+    /// Slide the mini player away for a full-screen conversation or under
+    /// Explore's search.
     private var hideBottomChrome: Bool {
-        isConversationActive || conversationState.composerActive || conversationState.searchOpen
+        isConversationActive || conversationState.searchOpen
     }
+
+    // A bottom composer's keyboard (listing comments) changes NOTHING here: the
+    // mini player doesn't slide, fade or hide — it stays exactly where it is,
+    // fully visible, and the keyboard simply rises over it (Hector, 2026-11-07).
 
     private var collapsedFrame: CGRect {
         // Position the collapsed mini-player above the tab bar (measured —
@@ -79,18 +82,13 @@ struct OverlaidRootView: View {
                             expanded: $expandSheet,
                             collapsedFrame: collapsedFrame
                         )
-                        // Clear the mini-player inside a conversation (or while a
-                        // bottom composer is up) — that chrome must not float above
-                        // the keyboard; the composer/input bar owns the bottom.
+                        // Clear the mini-player inside a conversation (its input bar
+                        // owns the bottom) or under search.
                         .offset(y: hideBottomChrome ? 140 : 0)
                         .opacity(hideBottomChrome ? 0 : 1)
                         .allowsHitTesting(!hideBottomChrome)
-                        // Conversation hide keeps its tuned spring; the composer
-                        // hide uses a plain scoped ease matching the tab bar in
-                        // RootTabView — decoupled from the keyboard's system
-                        // animation so it can't merge and overshoot.
+                        // Conversation hide keeps its tuned spring.
                         .animation(.smooth(duration: 0.35), value: isConversationActive)
-                        .animation(.easeInOut(duration: 0.25), value: conversationState.composerActive)
                         .animation(.easeInOut(duration: 0.25), value: conversationState.searchOpen)
                         // Slide up + fade in when a track starts (reverse on clear)
                         // instead of popping in/out.
@@ -120,6 +118,9 @@ struct OverlaidRootView: View {
                 ToastHost()
                     .padding(.bottom, playerController.tabBarHeight + playerController.miniPlayerAllowance + 10)
             }
+            // Pushes that arrive while the app is open — the app's own banner
+            // (top, inside the safe area), not the system's.
+            .overlay(alignment: .top) { PushBannerHost() }
             // First-visit section explainers (IntroModal.swift), over everything.
             .overlay { IntroModalHost() }
             .environment(conversationState)
@@ -250,7 +251,7 @@ private extension OverlaidRootView {
     }
 
     /// Message photos, Photos-app style: always on black (light mode too),
-    /// with floating glass Close / Share. The photo grows out of its bubble
+    /// with floating glass Close / Save. The photo grows out of its bubble
     /// (rounded corners easing square) to fit the screen, then hands over to
     /// the pinch / double-tap zoom viewer; tap or swipe down to dismiss, and it
     /// shrinks back into the bubble. The bubble's decoded thumbnail stands in
@@ -260,7 +261,11 @@ private extension OverlaidRootView {
         let thumb = Self.cachedThumbnail(forKey: thumbKey)
         let shown = attachmentImage ?? thumb
         let screen = UIScreen.size
-        let fitted = Self.fittedRect(for: shown?.size, in: screen, fallback: avatarPreview.sourceFrame.size)
+        // No pixels yet → the photo's remembered aspect (the bubble's frame is
+        // clamped/cropped, so growing to it would snap when the image lands).
+        let fallback = ChatImageAspects.get(thumbKey).map { CGSize(width: $0, height: 1) }
+            ?? avatarPreview.sourceFrame.size
+        let fitted = Self.fittedRect(for: shown?.size, in: screen, fallback: fallback)
         let dragFade = min(abs(avatarPreview.dragY) / 420, 0.7)
 
         return ZStack {
@@ -281,8 +286,8 @@ private extension OverlaidRootView {
                         }
                     }
                 )
-                // Rebuild when the full image replaces the thumbnail.
-                .id(ObjectIdentifier(shown))
+                // The full image swaps into this same viewer in place (no
+                // rebuild — rebuilding flashed / reset the zoom on first open).
                 .offset(y: avatarPreview.dragY)
                 .ignoresSafeArea()
             } else {
@@ -322,7 +327,7 @@ private extension OverlaidRootView {
         .onTapGesture { avatarPreview.dismiss() }
     }
 
-    /// Floating glass Close (top-left), Save + Share (top-right), always
+    /// Floating glass Close (top-left), Save (top-right), always
     /// light-on-dark. Save appears once the full-quality image is in.
     private func attachmentControls(_ image: UIImage?) -> some View {
         VStack {
@@ -336,14 +341,16 @@ private extension OverlaidRootView {
                     ) {
                         guard attachmentSaved != true else { return }
                         Task {
-                            let ok = await AttachmentDownloads.saveToPhotos(full)
-                            if ok { Haptics.success() }
+                            let ok = await AttachmentDownloads.saveToPhotos(full, name: avatarPreview.name)
+                            if ok {
+                                Haptics.success()
+                                ToastCenter.shared.show("Saved to Photos")
+                            } else {
+                                ToastCenter.shared.show("Couldn't save the photo. Check Volspire's Photos access in Settings.", style: .error)
+                            }
                             withAnimation(.smooth(duration: 0.2)) { attachmentSaved = ok }
                         }
                     }
-                }
-                if let image {
-                    glassButton(.share2, label: "Share") { UIApplication.presentActivitySheet([image]) }
                 }
             }
             .padding(.horizontal, 16)
@@ -468,6 +475,7 @@ private struct ZoomableAttachmentViewer: UIViewRepresentable {
     }
 
     func updateUIView(_ scrollView: ZoomScrollView, context: Context) {
+        context.coordinator.swapImage(image, in: scrollView)
         context.coordinator.fitIfNeeded(scrollView)
     }
 
@@ -502,6 +510,20 @@ private struct ZoomableAttachmentViewer: UIViewRepresentable {
             scrollView.zoomScale = fit
             scrollView.contentOffset = .zero
             centerImage(scrollView)
+        }
+
+        /// Thumbnail → full image: same photo, so keep the image view's frame
+        /// and zoom and just swap the pixels (a sharpness upgrade, no motion).
+        /// Only re-fit if the aspect genuinely differs.
+        func swapImage(_ image: UIImage, in scrollView: UIScrollView) {
+            guard let imageView, imageView.image !== image else { return }
+            let old = imageView.image?.size ?? .zero
+            imageView.image = image
+            let new = image.size
+            guard old.height > 0, new.height > 0,
+                  abs(old.width / old.height - new.width / new.height) > 0.01 else { return }
+            fittedBounds = .zero
+            fitIfNeeded(scrollView)
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
@@ -584,6 +606,11 @@ extension Notification.Name {
     /// Posted by AppDelegate when a push notification is tapped — RootTabView
     /// drains `PushInbox.pending` and deep-links to the referenced entity.
     static let openPushNotification = Notification.Name("openPushNotification")
+    /// Posted by AppDelegate when a push ARRIVES while the app is in the
+    /// foreground (userInfo: the payload's string fields — "convo_id" for a
+    /// message). InboxStore refreshes the dots/list; an open Notifications
+    /// screen reloads.
+    static let pushReceived = Notification.Name("pushReceived")
 }
 
 /// A tapped push notification's data, buffered until the tab UI is ready to route

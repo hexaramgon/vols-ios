@@ -261,7 +261,8 @@ struct HelpCenterScreen: View {
     }
 }
 
-// MARK: - Help content (copied from volspire.com/support)
+// MARK: - Help content (based on volspire.com/support; app-specific answers
+// updated 2026-11 — the web support page should be brought in line)
 
 enum HelpContent {
     struct FAQ {
@@ -279,18 +280,93 @@ enum HelpContent {
     private static let allFaqs: [FAQ] = [
         FAQ(
             question: "How do I upload my first track?",
-            answer: "Hit the “+” button and choose “Track”. Drop in your audio file (or video for visual tracks), add a cover, set visibility, pick a genre, and publish. You can edit details any time from the track detail page.",
+            answer: "Tap the “+” button and choose “Track”. Pick a video straight from your camera roll (Library), or an audio or video file from Files. Videos can be trimmed, or uploaded as audio only. Then add a cover, title, genre and visibility, credit any collaborators, and publish. To change details later, tap “…” on the track in your profile and choose Edit Track.",
             category: "Uploads & Tracks"
         ),
         FAQ(
             question: "What’s the difference between Tracks, Short Tracks and Snippets?",
-            answer: "Volspire splits the catalog by length so listeners always know what they’re hearing. Tracks are longer than 2:00, Short Tracks run 0:30 to 2:00, and Snippets are under 0:30. The home page surfaces a shelf for each.",
+            answer: "Volspire sorts the catalog by length so listeners know what they’re getting. Tracks are 3:00 or longer, Short Tracks run 0:30 to 3:00, and Snippets are under 0:30. Each has its own shelf in your Library under “Suggested for you”.",
             category: "Uploads & Tracks"
         ),
         FAQ(
-            question: "What audio formats are supported?",
-            answer: "MP3, WAV and M4A for audio. For tracks marked as visual, MP4 video files are accepted — the audio is decoded for playback while the video frames render in the player.",
+            question: "What file types can I upload, and how big can they be?",
+            answer: "Audio: MP3, WAV, FLAC, AIFF and M4A. Video: most phone and camera formats (MOV, MP4) — Volspire compresses video on your device to a high-quality MP4 before uploading, so you don’t have to. Track files can be up to 200 MB.",
             category: "Uploads & Tracks"
+        ),
+        FAQ(
+            question: "Can I trim a video before posting it?",
+            answer: "Yes. After you pick a video, tap “Trim” above the preview, drag the handles to the part you want to keep, and tap Save. You can reopen Trim to change it, or reset to the full clip, any time before you publish.",
+            category: "Uploads & Tracks"
+        ),
+        FAQ(
+            question: "What do Public, Unlisted and Private mean?",
+            answer: "Public tracks show on your profile and around Volspire. Unlisted tracks don’t show up in feeds or search, but anyone with the link can listen. Private tracks are only visible to you. You can change a track’s visibility any time from its “…” menu.",
+            category: "Uploads & Tracks"
+        ),
+        FAQ(
+            question: "How do releases work?",
+            answer: "A release groups several of your tracks into one project, like an EP or album. Tap “+” and choose “Release”, give it a title and cover, add tracks from your uploads, and drag them into order. Releases show on your profile, and a track can be part of more than one release.",
+            category: "Uploads & Tracks"
+        ),
+        FAQ(
+            question: "How do I add a track to my queue?",
+            answer: "Tap “…” on any track and choose “Play next” or “Add to queue”. To see what’s coming up, open the player and tap the queue button in the bottom-left corner. From there you can drag tracks to reorder them, remove them, or clear everything after the current track.",
+            category: "Listening"
+        ),
+        FAQ(
+            question: "How do timed comments work?",
+            answer: "When you comment on a track, you can pin your comment to the moment that’s playing. Timed comments show as small dots on the progress bar and pop up over the cover as the track reaches them, so feedback lands exactly where it’s about.",
+            category: "Listening"
+        ),
+        FAQ(
+            question: "How do I start a collab with another artist?",
+            answer: "Open their profile and tap “Collab”, then write a short message and attach tracks if you want. You can send one collab request to the same artist per week. If they accept, you become collaborators and your conversation opens in Messages. You can see and manage everyone you collaborate with from your Artist Dashboard → Followers & collaborators.",
+            category: "Collaboration"
+        ),
+        FAQ(
+            question: "What’s the collab board?",
+            answer: "The collab board (Listings, on the Explore tab) is where artists post what they’re looking for — a vocalist, a mix, a beat to write over. Tap “+” and choose “Listing” to post your own. To answer one, open it and tap “Respond”; your reply starts a conversation with the poster. You can close your listing once you’ve found someone.",
+            category: "Collaboration"
+        ),
+        FAQ(
+            question: "How do I share a folder with collaborators?",
+            answer: "Open the folder and tap “Invite”, then search your collaborators and add them. New members join as Editors (they can add and edit files); you can switch anyone to Viewer (read-only) or remove them any time. Members see the folder in their own Workspace.",
+            category: "Workspace & Collaboration"
+        ),
+        FAQ(
+            question: "Can I share a folder with someone who isn’t on Volspire?",
+            answer: "Yes, with a public link. In the folder, tap “…” and choose “Share public link”. Anyone with the link can view and play the folder on the web, without an account. Private tracks stay hidden. You choose whether downloads are allowed and when the link expires, and you can make a new link (which turns off the old one) or turn the link off any time.",
+            category: "Workspace & Collaboration"
+        ),
+        FAQ(
+            question: "How do sample packs work?",
+            answer: "Tap “+” and choose “Pack” to share samples, loops or presets — pick several files at once and they’re zipped for you. Anyone can download a free pack from its page or link it into a Workspace folder. You can leave a review 3 days after downloading a pack, once you’ve had time to use it.",
+            category: "Sample Packs"
+        ),
+        FAQ(
+            question: "Where can I see how my music is doing?",
+            answer: "Open your profile and tap “Artist Dashboard” to see plays, listeners, average listen time and where people found each track. Your packs and listings have their own “Pack Analytics” and “Listing Analytics” cards on their pages.",
+            category: "Sample Packs"
+        ),
+        FAQ(
+            question: "I forgot my password — how do I reset it?",
+            answer: "Tap “Forgot password?” on the sign-in screen and we’ll email a reset link to the address on your account. If it doesn’t arrive within a couple of minutes, check your spam folder or email us.",
+            category: "Account & Login"
+        ),
+        FAQ(
+            question: "How do I switch between light and dark mode?",
+            answer: "Go to Settings → About → Theme and pick System, Light or Dark. System follows your device setting.",
+            category: "Account & Login"
+        ),
+        FAQ(
+            question: "How do I delete my account?",
+            answer: "Go to Settings → Security → Delete account. You’ll confirm with your password, or by typing DELETE if you signed in with Apple or Google. Your personal account information is permanently removed or anonymized. Some content, like messages or shared work, may stay so it keeps working for other people; email privacy@volspire.com and we’ll remove your uploads too.",
+            category: "Account & Login"
+        ),
+        FAQ(
+            question: "How do I control who can find me on the collab map?",
+            answer: "Go to Settings → Privacy and turn “Open to collaboration” on or off. When it’s on, artists nearby can see your city and your music; your exact location is never shared. You can also manage blocked accounts there.",
+            category: "Privacy & Safety"
         ),
         FAQ(
             question: "How do I get paid for sales?",
@@ -301,21 +377,6 @@ enum HelpContent {
             question: "How do refunds work?",
             answer: "For digital goods we generally don’t offer refunds, but if there’s a problem with a download or a service wasn’t delivered, contact us using the email below and we’ll review the order.",
             category: "Marketplace & Payouts"
-        ),
-        FAQ(
-            question: "How do I share a folder with collaborators?",
-            answer: "Open the folder, tap “Share”, search for the user by username, choose Editor (can upload + delete) or Viewer (read-only), and send the invite. They’ll see the folder under their workspace.",
-            category: "Workspace & Collaboration"
-        ),
-        FAQ(
-            question: "I forgot my password — how do I reset it?",
-            answer: "Use the “Forgot password” link on the login screen. We’ll email a reset link to the address on file. If you don’t receive it within a couple of minutes, check spam, or reach out below.",
-            category: "Account & Login"
-        ),
-        FAQ(
-            question: "How do I delete my account?",
-            answer: "Go to Settings → Manage account → Delete account — you'll confirm with your password (or by typing DELETE for social logins). Your personal account information is permanently removed or anonymized. Some content — like messages or collaborative content — may remain to preserve functionality for other users; email privacy@volspire.com and we'll remove your uploads too.",
-            category: "Account & Login"
         ),
         FAQ(
             question: "Someone uploaded my track — how do I get it removed?",

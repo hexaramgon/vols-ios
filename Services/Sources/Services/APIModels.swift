@@ -105,7 +105,7 @@ public struct ApiConvoMessage: Codable, Sendable, Identifiable {
     public let requestMetadata: RequestMetadata?
     /// Collab-request lifecycle — drives the inline Accept/Decline UI.
     public let requestId: String?
-    public let requestStatus: String?     // "pending" | "accepted" | "rejected"
+    public let requestStatus: String?     // "pending" | "accepted" | "rejected" | "withdrawn"
     public let requestFromUserId: String?
 
     public struct RequestMetadata: Codable, Sendable {

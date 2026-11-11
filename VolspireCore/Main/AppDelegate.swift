@@ -46,19 +46,32 @@ class AppDelegate: NSObject, UIApplicationDelegate {
 // (SIGABRT in `_updateStateRestorationArchiveForBackgroundEvent`, ~200ms
 // after launch). Don't convert these back to `async`.
 extension AppDelegate: UNUserNotificationCenterDelegate {
-    /// Show pushes as banners while the app is open too (no sound in-app) —
-    /// except messages for the conversation already on screen.
+    /// While the app is open, pushes show as the app's OWN banner
+    /// (PushBannerHost) — not the system's, which iOS hides under a Focus /
+    /// banner-style setting — and still land in Notification Center. Except
+    /// messages for the conversation already on screen: nothing at all.
     nonisolated func userNotificationCenter(
         _: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping @Sendable (UNNotificationPresentationOptions) -> Void
     ) {
-        let convoId = notification.request.content.userInfo["convo_id"] as? String
+        let content = notification.request.content
+        let userInfo = content.userInfo
+        let convoId = userInfo["convo_id"] as? String
+        var info: [String: String] = ["title": content.title, "body": content.body]
+        for (key, value) in userInfo {
+            if let k = key as? String, let v = value as? String { info[k] = v }
+        }
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
+                // Something new happened server-side — the in-app dots, the
+                // inbox rows and an open Notifications page catch up now
+                // instead of at the next tab switch / foreground.
+                NotificationCenter.default.post(name: .pushReceived, object: nil, userInfo: info)
                 let visible = PushNotificationManager.shared.visibleConversationId
                 let isOnScreen = convoId != nil && convoId?.caseInsensitiveCompare(visible ?? "") == .orderedSame
-                completionHandler(isOnScreen ? [] : [.banner, .badge])
+                if !isOnScreen { PushBannerCenter.shared.show(info) }
+                completionHandler(isOnScreen ? [] : [.list, .badge])
             }
         }
     }

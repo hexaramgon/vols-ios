@@ -493,6 +493,19 @@ private struct FeedCoverPager: View {
         case cover(loading: Bool)
         case video
         case fullBleed   // portrait video / visualizer, drawn behind the player
+
+        /// What the page's view IDENTITY follows: the kind of content, not
+        /// the cover's loading flag. Keying on the flag made a track becoming
+        /// current (cover → cover-loading) crossfade the cover with an
+        /// identical copy of itself — both half-transparent mid-fade, the
+        /// visible dim "flash" at every track switch.
+        var kind: Int {
+            switch self {
+            case .cover: 0
+            case .video: 1
+            case .fullBleed: 2
+            }
+        }
     }
 
     private func content(for id: MediaID) -> Content {
@@ -503,7 +516,12 @@ private struct FeedCoverPager: View {
             return model.isPortraitVideo ? .fullBleed : .video
         }
         if !model.display.isVideoTrack, model.showVisualizer, model.visualizerAvailable { return .fullBleed }
-        return .cover(loading: model.display.isVideoTrack)
+        // Spinner only while the video is actually on its way (playing, not
+        // ready yet). A STOPPED video track — a one-track release that ended
+        // (stop() tears its player down) — also has no video player, and
+        // showed an endless spinner that read as stuck loading, worst in
+        // full screen where the play button is hidden.
+        return .cover(loading: model.display.isVideoTrack && model.state.isPlaying)
     }
 
     private func boxHeight(_ anchor: MediaID?) -> CGFloat {
@@ -518,7 +536,7 @@ private struct FeedCoverPager: View {
         let content = content(for: id)
         return ZStack(alignment: .top) {
             pageContent(id, content)
-                .id(content)
+                .id(content.kind)
                 .transition(.opacity)
         }
         .animation(.easeInOut(duration: 0.35), value: content)

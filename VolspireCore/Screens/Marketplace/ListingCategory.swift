@@ -12,16 +12,21 @@
 import DesignSystem
 import Services
 
-extension ApiListing {
-    /// Human label for `category` ("mixing_mastering" → "Mixing / Mastering").
+enum ListingCategory {
+    /// Human label for a category id ("mixing_mastering" → "Mixing / Mastering").
     /// Unknown ids fall back to a de-underscored, capitalized raw id.
-    var categoryLabel: String {
-        listingCategories.first { $0.id == category }?.label
-            ?? category.replacingOccurrences(of: "_", with: " ").capitalized
+    static func label(_ id: String) -> String {
+        listingCategories.first { $0.id == id }?.label
+            ?? id.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
-    /// Lucide icon for `category` (unknown ids fall back to the music note).
-    var categoryIcon: LucideIcon.Name {
-        listingCategories.first { $0.id == category }?.icon ?? .music
+    /// Lucide icon for a category id (unknown ids fall back to the music note).
+    static func icon(_ id: String) -> LucideIcon.Name {
+        listingCategories.first { $0.id == id }?.icon ?? .music
     }
+}
+
+extension ApiListing {
+    var categoryLabel: String { ListingCategory.label(category) }
+    var categoryIcon: LucideIcon.Name { ListingCategory.icon(category) }
 }

@@ -2,10 +2,12 @@
 //  SettingsScreen.swift
 //  Volspire
 //
-//  Settings, mirroring the web's settings view: one grouped card of sections
-//  (Profile / Security / Notifications / Privacy / About — Account & billing
-//  stays gated behind FeatureFlags.marketplace), then Sign out and the version
-//  footer. Each section is a pushed page of grouped cards (SettingsComponents).
+//  Settings root, in the app's own list style: your account card on top
+//  (avatar, @name → Profile), then section-titled flat rows — Account
+//  (Security / Notifications / Privacy) and Support (About) — a red Sign out
+//  row, and the version footer. (Account & billing stays gated behind
+//  FeatureFlags.marketplace.) Each row pushes a page of grouped cards
+//  (SettingsComponents).
 //  No external web links — Help/Terms/Privacy render natively
 //  (SettingsInfoScreens.swift) and account matters go through email.
 //
@@ -18,6 +20,7 @@ struct SettingsScreen: View {
     @Environment(Dependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
     @Environment(PlayerController.self) private var playerController
+    @Environment(SocialStore.self) private var socialStore
     /// Sign-out drops the session — confirm before doing it.
     @State private var showLogoutConfirm = false
 
@@ -28,36 +31,30 @@ struct SettingsScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(spacing: 0) {
-                    link(.user, "Profile", "Edit your public info and photos") {
-                        SettingsProfileScreen()
-                    }
-                    SettingsDivider()
-                    // "Account" (plan, billing, account type) only exists with the
-                    // marketplace; there is nothing to show while it's gated off.
-                    link(.lock, "Security", "Password and account access") {
-                        SecuritySettingsScreen()
-                    }
-                    SettingsDivider()
-                    link(.bell, "Notifications", "Choose what you hear about") {
-                        NotificationSettingsScreen()
-                    }
-                    SettingsDivider()
-                    link(.userX, "Privacy", "Collab map and blocked accounts") {
-                        BlockedAccountsScreen()
-                    }
-                    SettingsDivider()
-                    link(.info, "About", "App preferences, support and legal") {
-                        AboutSettingsScreen()
-                    }
+                accountCard
+                    .padding(.horizontal, ViewConst.screenPaddings)
+                    .padding(.top, 16)
+
+                // "Account" billing/plan only exists with the marketplace;
+                // nothing to show while it's gated off.
+                sectionHeader("Account")
+                link(.lock, "Security", "Password and account access") {
+                    SecuritySettingsScreen()
                 }
-                .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-                .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .padding(.top, 16)
-                .padding(.bottom, 12)
+                link(.bell, "Notifications", "Choose what you hear about") {
+                    NotificationSettingsScreen()
+                }
+                link(.userX, "Privacy", "Collab map and blocked accounts") {
+                    BlockedAccountsScreen()
+                }
+
+                sectionHeader("Support")
+                link(.info, "About", "App preferences, help and legal") {
+                    AboutSettingsScreen()
+                }
 
                 logoutRow
+                    .padding(.top, 20)
                 footer
             }
             .padding(.bottom, bottomInset)
@@ -86,25 +83,58 @@ private extension SettingsScreen {
         .buttonStyle(.plain)
     }
 
+    /// You, first: avatar + @username over "Edit profile", in the app's card
+    /// fill (the Explore cards' surface) — opens the Profile page.
+    var accountCard: some View {
+        let profile = socialStore.myProfile
+        let name = profile?.username
+        return NavigationLink {
+            SettingsProfileScreen()
+        } label: {
+            HStack(spacing: 14) {
+                AvatarView(urlString: profile?.profileImageUrl, name: name, size: 56)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(name.map { "@\($0)" } ?? "Your profile")
+                        .font(.appHeadline)
+                        .foregroundStyle(Color.vText)
+                        .lineLimit(1)
+                    Text("Edit profile, photos and bio")
+                        .font(.appFont.trackSubtitle)
+                        .foregroundStyle(Color.vText3)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                LucideIcon(.chevronRight, .md).foregroundStyle(Color.vText4)
+            }
+            .padding(16)
+            .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .contentShape(.rect)
+        }
+        .buttonStyle(CardPress())
+    }
+
+    /// A section heading in the app's section-title type (Library's "Your
+    /// playlists").
+    func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.appFont.sectionTitle)
+            .foregroundStyle(Color.vText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, ViewConst.screenPaddings)
+            .padding(.top, 28)
+            .padding(.bottom, 4)
+            .accessibilityAddTraits(.isHeader)
+    }
+
+    /// Sign out as one of the rows, in the destructive red (tile + label) —
+    /// the app's destructive-row treatment, not a separate pill.
     var logoutRow: some View {
         Button {
             showLogoutConfirm = true
         } label: {
-            // A full-width capsule button in the error tint (a soft red fill,
-            // red label) — reads as an action, not one more settings row.
-            HStack(spacing: 8) {
-                LucideIcon(.logOut, .md)
-                Text("Sign out").font(.appSubheadlineSemibold)
-            }
-            .foregroundStyle(Color.vError)
-            .frame(maxWidth: .infinity)
-            .frame(height: 48)
-            .background(Color.vDangerSoft, in: Capsule())
-            .contentShape(Capsule())
+            SettingsNavRow(icon: .logOut, title: "Sign out", destructive: true)
         }
-        .buttonStyle(CardPress())
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.vertical, 8)
+        .buttonStyle(.plain)
         // A plain centred alert — a confirmation dialog on iOS 26 renders
         // as a popover with an arrow pointing at the row.
         .alert("Sign out of Volspire?", isPresented: $showLogoutConfirm) {
@@ -117,18 +147,17 @@ private extension SettingsScreen {
 
     var footer: some View {
         Text(appVersion)
-            .font(.appCaption)
+            .font(.appSubheadline)
             .foregroundStyle(Color.vText3)
             .frame(maxWidth: .infinity)
             .padding(.top, 28)
             .padding(.bottom, 44)
     }
 
+    /// "Volspire version 1.1.0" — the marketing version only (no build number).
     var appVersion: String {
-        let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "1.0"
-        let build = info?["CFBundleVersion"] as? String ?? "1"
-        return "Volspire version \(version) (\(build))"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        return "Volspire version \(version)"
     }
 }
 
@@ -645,4 +674,5 @@ private struct DeleteAccountSheet: View {
     SettingsScreen()
         .environment(dependencies)
         .environment(playerController)
+        .environment(dependencies.socialStore)
 }

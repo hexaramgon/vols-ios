@@ -8,10 +8,10 @@ import DesignSystem
 import SwiftUI
 
 enum TabBarItem: Hashable, CaseIterable {
-    case home       // "Explore"
+    case home       // "Explore"; Messages + Notifications open from its header
     case library    // "Library" — playlists, saved tracks, music lists
     case newPost
-    case workspace  // Workspace folders; Messages opens from its header
+    case workspace  // Workspace folders
     case profile
 }
 

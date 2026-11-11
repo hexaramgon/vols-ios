@@ -136,6 +136,18 @@ struct ConversationScreen: View {
                         leaveThread()
                     }
                     : nil,
+                onWithdrawRequest: awaitingCollabRequest.map { request in
+                    {
+                        Task {
+                            if await viewModel?.withdrawRequest(request) == true {
+                                Haptics.success()
+                                ToastCenter.shared.show("Collab request withdrawn")
+                            } else {
+                                ToastCenter.shared.show("Couldn't withdraw the request. Try again.", style: .error)
+                            }
+                        }
+                    }
+                },
                 onReport: { pendingReport = true; showUserOptions = false },
                 onBlock: {
                     if let otherId = conversation.otherUserId {

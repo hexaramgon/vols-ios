@@ -97,12 +97,16 @@ public extension View {
     func measuresSafeArea() -> some View {
         background {
             // Ignores only the keyboard, so a raised keyboard never reads as
-            // a taller bottom inset.
+            // a taller bottom inset. The measurement must sit INSIDE the
+            // ignore (it sees the safe area with the keyboard consumed);
+            // measured outside it, the keyboard still counted — everything
+            // placed from this inset (the mini player, docked composers)
+            // rode up with the keyboard.
             Color.clear
-                .ignoresSafeArea(.keyboard)
                 .onGeometryChange(for: EdgeInsets.self, of: { $0.safeAreaInsets }) { insets in
                     if SafeAreaStore.shared.insets != insets { SafeAreaStore.shared.insets = insets }
                 }
+                .ignoresSafeArea(.keyboard)
         }
     }
 }

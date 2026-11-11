@@ -16,6 +16,7 @@ import SwiftUI
 struct PackAnalyticsScreen: View {
     let packId: String
     let packName: String
+    let coverURL: String?
 
     @Environment(\.dismiss) private var dismiss
     @Environment(Dependencies.self) private var dependencies
@@ -33,12 +34,30 @@ struct PackAnalyticsScreen: View {
         }
         .scrollIndicators(.hidden)
         .refreshable { await load() }
-        .appNavBar(title: "Pack Analytics", subtitle: packName) { dismiss() }
+        .appNavBar(title: "Pack Analytics") { dismiss() }
         .task { await load() }
     }
 
-    @ViewBuilder
+    // The pack itself opens the page (like Track Analytics) — not the nav bar.
     private var content: some View {
+        VStack(alignment: .leading, spacing: 32) {
+            AnalyticsSubjectHeader(title: packName, caption: "Sample pack") {
+                // The pack page's own art: its cover, else its name mesh.
+                Group {
+                    if let url = coverURL.flatMap(URL.init(string:)) {
+                        ArtworkView(.webImage(url), cornerRadius: 0)
+                    } else {
+                        PlaylistCoverFallback(name: packName, icon: nil)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
+            }
+            statsContent
+        }
+    }
+
+    @ViewBuilder
+    private var statsContent: some View {
         if failed && stats == nil {
             LoadErrorView(title: "Couldn't load analytics") { Task { await load() } }
                 .frame(maxWidth: .infinity, minHeight: UIScreen.size.height * 0.5)
@@ -69,18 +88,18 @@ struct PackAnalyticsScreen: View {
     private func tiles(_ s: ApiPackStats) -> some View {
         Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
-                AnalyticsStatTile(icon: .eye, label: "Views",
+                AnalyticsStatTile(label: "Views",
                                   value: s.viewsLast30Days.compactCount,
                                   sub: "Last 30 days · \(s.viewersLast30Days.compactCount) \(s.viewersLast30Days == 1 ? "person" : "people")")
-                AnalyticsStatTile(icon: .download, label: "Downloads",
+                AnalyticsStatTile(label: "Downloads",
                                   value: s.downloadsTotal.compactCount,
                                   sub: "\(s.downloaders.compactCount) \(s.downloaders == 1 ? "person" : "people") since Nov 5")
             }
             GridRow {
-                AnalyticsStatTile(icon: .bookmark, label: "Saves",
+                AnalyticsStatTile(label: "Saves",
                                   value: s.savesTotal.compactCount,
                                   sub: "+\(s.savesLast30Days.compactCount) in the last 30 days")
-                AnalyticsStatTile(icon: .star, label: "Rating",
+                AnalyticsStatTile(label: "Rating",
                                   value: s.reviewCount > 0 ? String(format: "%.1f", s.avgRating) : "–",
                                   sub: s.reviewCount == 0 ? "No reviews yet"
                                       : "\(s.reviewCount.compactCount) \(s.reviewCount == 1 ? "review" : "reviews")")
@@ -105,24 +124,11 @@ struct PackAnalyticsScreen: View {
 
     private func allTime(_ s: ApiPackStats) -> some View {
         AnalyticsBlock(title: "All time") {
-            VStack(spacing: 0) {
-                allTimeRow(.eye, "Views", s.viewsTotal)
-                SettingsDivider()
-                allTimeRow(.heart, "Likes", s.likesTotal)
-            }
-            .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            AnalyticsTotals(items: [
+                .init(label: "Views", value: s.viewsTotal.compactCount),
+                .init(label: "Likes", value: s.likesTotal.compactCount),
+            ])
         }
-    }
-
-    private func allTimeRow(_ icon: LucideIcon.Name, _ label: String, _ value: Int) -> some View {
-        HStack(spacing: 12) {
-            LucideIcon(icon, .md).foregroundStyle(Color.vText3)
-            Text(label).font(.appSubheadline).foregroundStyle(Color.vText)
-            Spacer(minLength: 0)
-            Text(value.compactCount).font(.appSubheadlineSemibold).foregroundStyle(Color.vText).monospacedDigit()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
     }
 
     private static let placeholder = ApiPackStats(

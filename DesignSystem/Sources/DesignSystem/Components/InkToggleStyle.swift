@@ -14,18 +14,22 @@
 import SwiftUI
 
 public struct InkToggleStyle: ToggleStyle {
-    public init() {}
+    /// 1 = the web's 44×24 switch; larger for a roomier row.
+    let scale: CGFloat
+
+    public init(scale: CGFloat = 1) { self.scale = scale }
 
     public func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 12) {
             configuration.label
-            InkSwitch(isOn: configuration.$isOn)
+            InkSwitch(isOn: configuration.$isOn, scale: scale)
         }
     }
 }
 
 private struct InkSwitch: View {
     @Binding var isOn: Bool
+    let scale: CGFloat
     @Environment(\.isEnabled) private var isEnabled
 
     /// neutral-700 → neutral-300 pair, inverted in light mode (web scale).
@@ -41,13 +45,13 @@ private struct InkSwitch: View {
     var body: some View {
         Capsule()
             .fill(isOn ? Color.vInverse : Self.offTrack)
-            .frame(width: 44, height: 24)
+            .frame(width: 44 * scale, height: 24 * scale)
             .overlay(alignment: isOn ? .trailing : .leading) {
                 Circle()
                     .fill(isOn ? Color.vOnInverse : Self.offKnob)
-                    .frame(width: 16, height: 16)
+                    .frame(width: 16 * scale, height: 16 * scale)
                     .shadow(color: .black.opacity(0.15), radius: 1, y: 1)
-                    .padding(4)
+                    .padding(4 * scale)
             }
             .opacity(isEnabled ? 1 : 0.3)
             .contentShape(.capsule)
@@ -64,4 +68,7 @@ private struct InkSwitch: View {
 public extension ToggleStyle where Self == InkToggleStyle {
     /// The ink switch — see `InkToggleStyle`.
     static var ink: InkToggleStyle { InkToggleStyle() }
+
+    /// The ink switch at `scale` × its 44×24 size.
+    static func ink(scale: CGFloat) -> InkToggleStyle { InkToggleStyle(scale: scale) }
 }

@@ -24,14 +24,12 @@ struct HomePlayback {
     func showsPause(_ t: HomeTrack) -> Bool { isActive(t) && isPlaying }
 }
 
-/// Role vocabulary (web ROLE_TAGS): the common four inline, the rest in More.
+/// Role vocabulary: the common four inline, the rest in More — derived from
+/// the profile role list (`ProfileRoles.all`) so the filter offers exactly the
+/// roles people can pick.
 enum CollabRoles {
     static let inline = ["Artist", "Producer", "Engineer", "Songwriter"]
-    static let overflow = [
-        "DJ", "Vocalist", "Beatmaker", "Mixer", "Mastering Engineer", "Composer", "Arranger", "Lyricist",
-        "Session Musician", "Sound Designer", "Music Director", "Manager", "A&R", "Rapper", "Singer",
-        "Guitarist", "Drummer", "Bassist", "Keyboardist",
-    ]
+    static let overflow = ProfileRoles.all.filter { !inline.contains($0) }
 }
 
 extension HomeScreen {

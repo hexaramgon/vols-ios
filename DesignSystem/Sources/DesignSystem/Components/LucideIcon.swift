@@ -79,6 +79,8 @@ public struct LucideIcon: View {
         case listPlus = "lucide-list-plus"
         case listStart = "lucide-list-start"
         case listEnd = "lucide-list-end"
+        case scissors = "lucide-scissors"
+        case arrowLeftRight = "lucide-arrow-left-right"
         case upload = "lucide-upload"
         case chevronDown = "lucide-chevron-down"
         case zap = "lucide-zap"

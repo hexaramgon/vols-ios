@@ -232,23 +232,16 @@ struct ProfileScreen: View {
                     selected: selectedTab,
                     isOwnProfile: isOwnProfile
                 )
-                // Fills the rest of the screen under the tab bar, hit-testable
-                // edge to edge — so a swipe ANYWHERE under the tab bar (blank
-                // space under a short / empty tab, gaps between rows) changes
-                // tab, not just one that starts on a row.
+                // Fills the rest of the screen under the tab bar. (No sideways
+                // swipe between tabs here — tabs change from the tab bar only.)
                 .frame(minHeight: tabContentMinHeight, alignment: .top)
-                .contentShape(.rect)
-                // Swipe left / right across the tab content to change tab
-                // (same crossfade as tapping — Explore's swipe).
-                .tabSwipe { forward in
-                    let tabs = visibleTabs
-                    guard let i = tabs.firstIndex(of: selectedTab),
-                          tabs.indices.contains(forward ? i + 1 : i - 1) else { return }
-                    select(tabs[forward ? i + 1 : i - 1])
-                }
             }
         }
         .scrollIndicators(.hidden)
+        // No iOS 26 top scroll edge effect: the profile draws its own bar,
+        // and the system's shading flashed as a band under the status bar
+        // as a refresh started (white in light mode).
+        .scrollEdgeEffectHidden(true, for: .top)
         .refreshable { await runRefresh($isRefreshing) { await refreshEverything() } }
         // The hero runs under the nav bar, hiding the system spinner.
         .refreshChip(isRefreshing, topInset: ViewConst.safeAreaInsets.top + 52)

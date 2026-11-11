@@ -167,10 +167,16 @@ private extension FolderContentsScreen {
                         .padding(.top, 8)
                 }
                 metaRow.padding(.top, 12)
-                if let link = viewModel.shareLink, !link.expired {
-                    publicLinkPill.padding(.top, 12)
-                }
+                // Its own line under the meta row. The line's space is ALWAYS
+                // kept, so the hero is laid out the same with or without a
+                // link (none / expired): the pill just fades in or out in it.
+                publicLinkPill
+                    .padding(.top, 12)
+                    .opacity(hasLiveShareLink ? 1 : 0)
+                    .allowsHitTesting(hasLiveShareLink)
+                    .accessibilityHidden(!hasLiveShareLink)
             }
+            .animation(.smooth(duration: 0.25), value: hasLiveShareLink)
 
         }
         .padding(.horizontal, 20)
@@ -191,8 +197,9 @@ private extension FolderContentsScreen {
         }
     }
 
-    /// "Public link" — shown while the folder has a live share link, so it's
-    /// never shared silently; opens the link's sheet.
+    /// "Public link" — visible while the folder has a live share link, so it's
+    /// never shared silently; opens the link's sheet. Its line's space is kept
+    /// either way (see `hero`).
     var publicLinkPill: some View {
         Button { viewModel.showShareLink = true } label: {
             HStack(spacing: 5) {
@@ -201,7 +208,7 @@ private extension FolderContentsScreen {
             }
             .foregroundStyle(Color.vText2)
             .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .frame(height: 26)
             .background(Color.vControl, in: Capsule())
         }
         .buttonStyle(.plain)
@@ -238,6 +245,12 @@ private extension FolderContentsScreen {
         .font(.appCaption)
         .foregroundStyle(Color.vText2)
         .lineLimit(1)
+    }
+
+    /// Whether the hero shows the "Public link" line (a live link).
+    var hasLiveShareLink: Bool {
+        guard let link = viewModel.shareLink else { return false }
+        return !link.expired
     }
 
     func coverRow(_ size: FolderArt.Size) -> some View {
@@ -862,12 +875,6 @@ private extension FolderContentsScreen {
                 || viewModel.editDescription.trimmingCharacters(in: .whitespacesAndNewlines)
                 != viewModel.folderDescription.trimmingCharacters(in: .whitespacesAndNewlines),
             busy: viewModel.isSaving,
-            // Confirmed inside the edit page; the page leaves as it closes.
-            delete: .init(title: "Delete Folder", confirm: DestructiveConfirm(
-                title: "Delete this folder?",
-                message: "Every file in it is deleted for everyone it's shared with. This can't be undone.",
-                actionLabel: "Delete folder"
-            ) { deleteFolder() }),
             onSave: { await viewModel.saveEdit() }
         )
     }
@@ -990,15 +997,12 @@ struct ManageMembersSheet: View {
         .animation(.smooth(duration: 0.28), value: memberKeys)
     }
 
-    /// The sheet's shape while loading: the invite heading + a still search
-    /// field + rows (owner), then "In this folder" + rows.
+    /// The sheet's shape while loading: a still search field + rows (owner),
+    /// then "In this folder" + rows.
     private var skeleton: some View {
         VStack(alignment: .leading, spacing: 22) {
             if viewModel.isOwner {
                 VStack(alignment: .leading, spacing: 8) {
-                    SheetFieldLabel("Invite collaborators")
-                    Text("New members join as editors. Change it anytime below.")
-                        .font(.appCaption).foregroundStyle(Color.vText3)
                     HStack(spacing: 8) {
                         LucideIcon(.search, .sm).foregroundStyle(Color.vText3)
                         Text("Search your collaborators…").font(.appBody).foregroundStyle(Color.vText3)
@@ -1034,9 +1038,7 @@ struct ManageMembersSheet: View {
 
     private var inviteSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SheetFieldLabel("Invite collaborators")
-            Text("New members join as editors. Change it anytime below.")
-                .font(.appCaption).foregroundStyle(Color.vText3)
+            // The search field IS the top of the sheet's body — no heading.
             searchField
 
             if viewModel.searchResults.isEmpty {

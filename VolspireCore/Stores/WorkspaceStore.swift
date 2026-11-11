@@ -40,6 +40,10 @@ final class WorkspaceStore {
     /// Collaborators' actions across shared folders in the past month
     /// (Workspace tab rail), newest first.
     private(set) var workspaceActivity: [ApiWorkspaceActivity] = []
+    /// Flips on a confirmed activity response only. It loads alongside the
+    /// folders but can land after them; until then the rail shows its own
+    /// skeleton in place (like Profile's secondary tabs), never "Nothing yet".
+    private(set) var activityLoaded = false
     /// Signed-URL-resolved file rows per folder id — populated as folder
     /// screens load, patched by every file mutation.
     private var filesByFolder: [String: [ApiFolderFile]] = [:]
@@ -91,6 +95,7 @@ final class WorkspaceStore {
         foldersLoaded = false
         foldersFailed = false
         workspaceActivity = []
+        activityLoaded = false
         filesByFolder = [:]
         fileLoadStates = [:]
     }
@@ -125,7 +130,12 @@ final class WorkspaceStore {
             debugLog("[WorkspaceStore] folders load failed: \(error)")
             foldersFailed = folders.isEmpty
         }
-        workspaceActivity = (try? await activity) ?? workspaceActivity
+        do {
+            workspaceActivity = try await activity
+            activityLoaded = true
+        } catch {
+            debugLog("[WorkspaceStore] activity load failed: \(error)")
+        }
     }
 
     /// Creates a folder and refetches the list in place (the RPC already

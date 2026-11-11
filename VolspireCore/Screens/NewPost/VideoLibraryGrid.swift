@@ -117,19 +117,13 @@ struct VideoLibraryGrid: View {
                     .font(.appHeadline)
                     .foregroundStyle(Color.vText)
                 Spacer()
+                // The same secondary capsule as the video's Trim button.
                 Button(action: onBrowse) {
-                    HStack(spacing: 6) {
-                        LucideIcon(.images, .sm)
-                        Text("Browse").font(.appSubheadlineSemibold)
-                    }
-                    .foregroundStyle(Color.vText)
-                    .padding(.horizontal, 12)
-                    .frame(height: 32)
-                    .background(Color.vControl, in: Capsule())
-                    .contentShape(Capsule())
+                    CapsuleButtonLabel(icon: .images, title: "Browse", style: .secondary,
+                                       font: .appSubheadlineMedium)
                 }
                 .buttonStyle(.plain)
-                .minimumHitArea(for: 32)
+                .minimumHitArea(for: CapsuleButtonLabel.height)
             }
             .padding(.horizontal, 20)
 

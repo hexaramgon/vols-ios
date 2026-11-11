@@ -62,10 +62,10 @@ struct RoutedView: View {
             MarketplaceDetailScreen(pack: pack)
         case let .marketplaceService(service):
             MarketplaceDetailScreen(service: service)
-        case let .packAnalytics(packId, packName):
-            PackAnalyticsScreen(packId: packId, packName: packName)
-        case let .listingAnalytics(listingId, title):
-            ListingAnalyticsScreen(listingId: listingId, listingTitle: title)
+        case let .packAnalytics(packId, packName, coverURL):
+            PackAnalyticsScreen(packId: packId, packName: packName, coverURL: coverURL)
+        case let .listingAnalytics(listingId, title, category):
+            ListingAnalyticsScreen(listingId: listingId, listingTitle: title, category: category)
         case let .collabListing(listing):
             ListingDetailScreen(listing: listing)
         case let .conversation(convo):

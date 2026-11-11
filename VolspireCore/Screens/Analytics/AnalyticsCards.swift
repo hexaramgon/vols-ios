@@ -4,9 +4,9 @@
 //
 //  Building blocks of the track analytics page, matching the web's
 //  `track-analytics-view.tsx`: titled blocks, stat tiles, the labelled source
-//  bars, and the single-series line chart. Charts are drawn in the app's ink
-//  (theme-aware), never an accent colour; no border rings — surfaces separate
-//  by fill.
+//  bars, and the single-series line chart. The data (line, area, dots, bars)
+//  is drawn in the app's primary blue (`vAccent`); grid and guides stay
+//  neutral ink. No border rings — surfaces separate by fill.
 //
 
 import DesignSystem
@@ -30,6 +30,31 @@ enum AnalyticsDates {
     }()
 }
 
+// MARK: - Subject header
+
+/// What the analytics page is about, as the first thing in its content (the
+/// nav bar just says "… Analytics"): 64pt art, the name, a caption line.
+/// Track, Pack and Listing Analytics all open with it.
+struct AnalyticsSubjectHeader<Art: View>: View {
+    let title: String
+    let caption: String
+    @ViewBuilder var art: Art
+
+    var body: some View {
+        HStack(spacing: 16) {
+            art.frame(width: 64, height: 64)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.appTitle3).foregroundStyle(Color.vText).lineLimit(1)
+                if !caption.isEmpty {
+                    Text(caption)
+                        .font(.appCaption).foregroundStyle(Color.vText3).lineLimit(1)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Block
 
 /// A titled block of the detail pane (14 semibold heading, not a section
@@ -45,7 +70,7 @@ struct AnalyticsBlock<Content: View>: View {
                 Text(title).font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
                 Spacer(minLength: 0)
                 if let aside {
-                    Text(aside).font(.appCaptionCompact).foregroundStyle(Color.vText3).monospacedDigit()
+                    Text(aside).font(.appCaption).foregroundStyle(Color.vText3).monospacedDigit()
                 }
             }
             content
@@ -75,18 +100,15 @@ struct AnalyticsEmptyNote: View {
 /// Icon + label, a big tabular value, and a caption — the web's neutral
 /// `StatTile`.
 struct AnalyticsStatTile: View {
-    let icon: LucideIcon.Name
     let label: String
     let value: String
     let sub: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                LucideIcon(icon, .sm).foregroundStyle(Color.vText3)
-                Text(label).font(.appLabelCompact).foregroundStyle(Color.vText3).lineLimit(1)
-            }
-            .padding(.bottom, 10)
+            // Label only — no icon (the number carries the tile).
+            Text(label).font(.appLabel).foregroundStyle(Color.vText3).lineLimit(1)
+                .padding(.bottom, 10)
             Text(value)
                 .font(.appLargeTitle)
                 .foregroundStyle(Color.vText)
@@ -94,7 +116,7 @@ struct AnalyticsStatTile: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
             Text(sub)
-                .font(.appCaptionCompact)
+                .font(.appCaption)
                 .foregroundStyle(Color.vText3)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -103,6 +125,52 @@ struct AnalyticsStatTile: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(16)
         .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+    }
+}
+
+// MARK: - All-time totals
+
+/// The "All time" numbers as one scoreboard card: equal columns split by
+/// hairlines, each a grey label over a big bold number — the
+/// stat tiles' anatomy in a strip, so the totals read as numbers, not as
+/// settings rows. (Pack and Listing analytics.)
+struct AnalyticsTotals: View {
+    struct Item: Identifiable {
+        let label: String
+        let value: String
+        var id: String { label }
+    }
+
+    let items: [Item]
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 {
+                    Rectangle().fill(Color.vDivider).frame(width: 1)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(item.label)
+                        .font(.appLabel)
+                        .foregroundStyle(Color.vText3)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(item.value)
+                        .font(.appTitle)
+                        .foregroundStyle(Color.vText)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.vertical, 16)
+        .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(items.map { "\($0.label) \($0.value)" }.joined(separator: ", "))
     }
 }
 
@@ -130,7 +198,7 @@ struct AnalyticsSourceBars: View {
                         ZStack(alignment: .leading) {
                             Capsule().fill(Color.ink(0.06))
                             Capsule()
-                                .fill(index == 0 ? Color.vText : Color.ink(0.42))
+                                .fill(index == 0 ? Color.vAccent : Color.vAccent.opacity(0.45))
                                 .frame(width: geo.size.width * max(pct, 2) / 100)
                         }
                     }
@@ -159,7 +227,7 @@ struct AnalyticsLineChart: View {
     var body: some View {
         VStack(spacing: 8) {
             Text(maxValue.compactCountLabel)
-                .font(.appCaptionCompact).foregroundStyle(Color.vText3).monospacedDigit()
+                .font(.appCaption).foregroundStyle(Color.vText3).monospacedDigit()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, -4)
             GeometryReader { geo in
@@ -173,7 +241,7 @@ struct AnalyticsLineChart: View {
                 Spacer()
                 Text(xLabels.2)
             }
-            .font(.appCaptionCompact)
+            .font(.appCaption)
             .foregroundStyle(Color.vText3)
             .monospacedDigit()
         }
@@ -230,13 +298,14 @@ struct AnalyticsLineChart: View {
                     p.addLine(to: CGPoint(x: point(0, in: size).x, y: size.height))
                     p.closeSubpath()
                 }
-                .fill(LinearGradient(colors: [Color.ink(0.14), Color.ink(0)], startPoint: .top, endPoint: .bottom))
-                line.stroke(Color.ink(0.72), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                .fill(LinearGradient(colors: [Color.vAccent.opacity(0.22), Color.vAccent.opacity(0)],
+                                     startPoint: .top, endPoint: .bottom))
+                line.stroke(Color.vAccent, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
 
-                // Peak: a 10pt ink dot with a 2pt canvas ring.
+                // Peak: a 10pt blue dot with a 2pt canvas ring.
                 if let peak = values.indices.max(by: { values[$0] < values[$1] }), values[peak] > 0 {
                     Circle()
-                        .fill(Color.vText)
+                        .fill(Color.vAccent)
                         .frame(width: 10, height: 10)
                         .background(Circle().fill(Color.vBase).padding(-2))
                         .position(point(peak, in: size))
@@ -276,9 +345,9 @@ struct AnalyticsLineChart: View {
                 path.addLine(to: CGPoint(x: p.x, y: size.height))
             }
             .stroke(Color.ink(0.25), lineWidth: 1)
-            Circle().fill(Color.vText).frame(width: 10, height: 10).position(p)
+            Circle().fill(Color.vAccent).frame(width: 10, height: 10).position(p)
             VStack(alignment: .leading, spacing: 1) {
-                Text(info.label).font(.appCaptionCompact).foregroundStyle(Color.vText3)
+                Text(info.label).font(.appCaption).foregroundStyle(Color.vText3)
                 Text(info.value).font(.appSubheadlineSemibold).foregroundStyle(Color.vText).monospacedDigit()
             }
             .fixedSize()

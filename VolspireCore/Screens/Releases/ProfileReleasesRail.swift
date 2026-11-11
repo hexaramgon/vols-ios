@@ -71,23 +71,33 @@ struct ProfileReleasesRail: View {
         .padding(.bottom, 20)
     }
 
+    /// Three covers + gaps + margins (~444pt) are wider than any phone. As a
+    /// plain row that width stretched the whole profile page off both edges
+    /// until the real (scrolling) rail landed — so the bones ride in an
+    /// overlay of a screen-wide, fixed-height slot and just run off the
+    /// trailing edge (`.frame(maxWidth:).clipped()` doesn't stop the stretch).
     private var skeleton: some View {
-        HStack(alignment: .top, spacing: 14) {
-            ForEach(0 ..< 3, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 8) {
-                    RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
-                        .fill(Color.vSkeleton)
-                        .frame(width: Self.coverSide, height: Self.coverSide)
-                    RoundedRectangle(cornerRadius: 4).fill(Color.vSkeleton).frame(width: 96, height: 12)
-                    RoundedRectangle(cornerRadius: 4).fill(Color.vSkeleton).frame(width: 60, height: 10)
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: Self.coverSide + 8 + 12 + 8 + 10)
+            .overlay(alignment: .topLeading) {
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(0 ..< 3, id: \.self) { _ in
+                        VStack(alignment: .leading, spacing: 8) {
+                            RoundedRectangle(cornerRadius: Radius.tile, style: .continuous)
+                                .fill(Color.vSkeleton)
+                                .frame(width: Self.coverSide, height: Self.coverSide)
+                            RoundedRectangle(cornerRadius: 4).fill(Color.vSkeleton).frame(width: 96, height: 12)
+                            RoundedRectangle(cornerRadius: 4).fill(Color.vSkeleton).frame(width: 60, height: 10)
+                        }
+                    }
                 }
+                .fixedSize()
+                .padding(.horizontal, ViewConst.screenPaddings)
+                .shimmering()
             }
-        }
-        .shimmering()
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, ViewConst.screenPaddings)
-        .padding(.bottom, 20)
-        .clipped()
+            .padding(.bottom, 20)
+            .clipped()
     }
 }
 

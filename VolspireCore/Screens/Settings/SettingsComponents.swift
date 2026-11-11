@@ -2,10 +2,11 @@
 //  SettingsComponents.swift
 //  Volspire
 //
-//  The settings building blocks, mirroring the web's `settings-ui.tsx`:
-//  every section page is a stack of `SettingsGroup`s — a section title, an
-//  optional caption, then a raised `vCardSolid` card of `SettingsRow`s split
-//  by hairlines (or "bare" for forms, which sit straight on the canvas).
+//  The settings building blocks: every section page is a stack of
+//  `SettingsGroup`s — a section title, an optional caption, then its rows
+//  straight on the page (no card, no hairlines), in the root list's anatomy:
+//  round icon tile, 15m title over a 14 caption, the control on the right.
+//  "bare" groups are forms (fields on the canvas).
 //
 
 import DesignSystem
@@ -42,6 +43,13 @@ struct SettingsSectionPage<Content: View>: View {
 
 // MARK: - Group
 
+extension EnvironmentValues {
+    /// Inside a (non-bare) `SettingsGroup`: its rows sit straight on the page,
+    /// so `SettingsDivider`s between them draw nothing. Off everywhere else —
+    /// cards that reuse the divider (pack composer, share sheet) keep theirs.
+    @Entry var settingsFlatRows = false
+}
+
 struct SettingsGroup<Content: View>: View {
     let title: String
     var caption: String? = nil
@@ -52,32 +60,41 @@ struct SettingsGroup<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .font(.appTitle3)
+                .font(.appFont.sectionTitle)
                 .foregroundStyle(Color.vText)
-                .padding(.bottom, caption == nil ? 12 : 4)
+                .padding(.bottom, bare ? 12 : 4)
+                .accessibilityAddTraits(.isHeader)
             if let caption {
                 Text(caption)
-                    .font(.appCaption)
+                    .font(.appSubheadline)
                     .foregroundStyle(Color.vText3)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, bare ? 12 : 6)
             }
             if bare {
                 content
             } else {
+                // Rows keep their own 16pt inset (other screens rely on it);
+                // pulled out here so their text lines up with the title on
+                // the page column.
                 VStack(spacing: 0) { content }
-                    .background(Color.vCardSolid, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-                    .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+                    .padding(.horizontal, -16)
+                    .environment(\.settingsFlatRows, true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// The hairline between rows inside a group card.
+/// The hairline between rows inside a card. Draws nothing between a
+/// settings group's flat rows (`settingsFlatRows`).
 struct SettingsDivider: View {
+    @Environment(\.settingsFlatRows) private var flat
+
     var body: some View {
-        Rectangle().fill(Color.vDivider).frame(height: 1)
+        if !flat {
+            Rectangle().fill(Color.vDivider).frame(height: 1)
+        }
     }
 }
 
@@ -96,27 +113,31 @@ enum SettingsTone {
     }
 }
 
-/// A flat row inside a group card: optional plain 20pt glyph (tinted by tone),
-/// title over caption, and a trailing control or value.
+/// A settings row, in the root list's anatomy: an optional round 40pt icon
+/// tile (glyph tinted by tone; a soft red tile for danger), the shared row
+/// pair (15m title / 14 caption), and a trailing control or value.
 struct SettingsRow<Trailing: View>: View {
     var icon: LucideIcon.Name? = nil
     var tone: SettingsTone = .neutral
     let title: String
     var caption: String? = nil
     /// Larger type where the row stands alone (e.g. the speed sheet).
-    var titleFont: Font = .appSubheadlineMedium
-    var captionFont: Font = .appCaption
+    var titleFont: Font = .appFont.trackTitle
+    var captionFont: Font = .appFont.trackSubtitle
     @ViewBuilder var trailing: Trailing
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             if let icon {
-                LucideIcon(icon, .lg).foregroundStyle(tone.color)
+                LucideIcon(icon, .md)
+                    .foregroundStyle(tone == .neutral ? Color.vText : tone.color)
+                    .frame(width: 40, height: 40)
+                    .background(tone == .danger ? Color.vDangerSoft : Color.vControl, in: Circle())
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(titleFont)
-                    .foregroundStyle(Color.vText)
+                    .foregroundStyle(tone == .danger ? Color.vError : Color.vText)
                     .lineLimit(1)
                 if let caption {
                     Text(caption)
@@ -129,7 +150,8 @@ struct SettingsRow<Trailing: View>: View {
             trailing
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        // 60pt rows with a tile (the root list's), a touch more air without.
+        .padding(.vertical, icon == nil ? 12 : 10)
         .contentShape(.rect)
     }
 }
@@ -146,7 +168,7 @@ struct SettingsRowValue: View {
 
     var body: some View {
         Text(text)
-            .font(.appSubheadline)
+            .font(.appCalloutRegular)
             .foregroundStyle(Color.vText2)
             .lineLimit(1)
             .truncationMode(.middle)
@@ -162,33 +184,50 @@ struct SettingsExternalGlyph: View {
 
 // MARK: - Root list row
 
-/// One entry in the Settings root list: plain glyph, name over caption,
-/// chevron — one row of the root's grouped card (SettingsScreen).
+/// One entry in the Settings root list, laid out like the app's other flat
+/// lists (Library, Workspace): a round icon tile (the sheet headers' tile),
+/// the shared row pair (`AppFont.trackTitle` / `trackSubtitle`, 15m / 14),
+/// and a chevron — straight on the page, no card. `destructive` turns the
+/// tile + title red and drops the chevron (Sign out).
 struct SettingsNavRow: View {
     let icon: LucideIcon.Name
     let title: String
-    let caption: String
+    var caption: String? = nil
+    var destructive = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            LucideIcon(icon, .lg).foregroundStyle(Color.vTextRow)
+        HStack(spacing: 14) {
+            LucideIcon(icon, .md)
+                .foregroundStyle(destructive ? Color.vError : Color.vText)
+                .frame(width: 40, height: 40)
+                .background(destructive ? Color.vDangerSoft : Color.vControl, in: Circle())
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.appSubheadlineMedium).foregroundStyle(Color.vTextRow)
-                Text(caption).font(.appCaption).foregroundStyle(Color.vText3).lineLimit(1)
+                Text(title)
+                    .font(.appFont.trackTitle)
+                    .foregroundStyle(destructive ? Color.vError : Color.vTextRow)
+                    .lineLimit(1)
+                if let caption {
+                    Text(caption)
+                        .font(.appFont.trackSubtitle)
+                        .foregroundStyle(Color.vText3)
+                        .lineLimit(1)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            LucideIcon(.chevronRight, .md).foregroundStyle(Color.vText4)
+            if !destructive {
+                LucideIcon(.chevronRight, .md).foregroundStyle(Color.vText4)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
+        .padding(.horizontal, ViewConst.screenPaddings)
+        .padding(.vertical, 10)
         .contentShape(.rect)
     }
 }
 
 // MARK: - Form fields
 
-/// A labelled form field (web `Field`): 12pt semibold label, the control, then
-/// an optional hint.
+/// A labelled form field (web `Field`): 14pt semibold label, the control, then
+/// an optional 14pt hint.
 struct SettingsField<Content: View>: View {
     let label: String
     var hint: String? = nil
@@ -197,12 +236,12 @@ struct SettingsField<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(label)
-                .font(.appLabel)
+                .font(.appSubheadlineSemibold)
                 .foregroundStyle(Color.vText2)
             content
             if let hint {
                 Text(hint)
-                    .font(.appCaption)
+                    .font(.appSubheadline)
                     .foregroundStyle(Color.vText3)
                     .fixedSize(horizontal: false, vertical: true)
             }

@@ -63,9 +63,9 @@ struct ChatMessage: Identifiable, Equatable {
     var isImageAttachment: Bool { isAttachment && (attachmentType?.hasPrefix("image") ?? false) }
     var isAudioAttachment: Bool { isAttachment && (attachmentType?.hasPrefix("audio") ?? false) }
     var isCollabRequest: Bool { type == "collab_request" }
-    /// A collab request still awaiting a decision.
+    /// A collab request still awaiting a decision (not answered or withdrawn).
     var isPendingRequest: Bool {
-        isCollabRequest && requestStatus != "accepted" && requestStatus != "rejected"
+        isCollabRequest && !["accepted", "rejected", "withdrawn"].contains(requestStatus ?? "pending")
     }
 }
 
@@ -94,6 +94,14 @@ enum CollabRequestGate: Equatable {
 }
 
 extension ConversationViewModel {
+    /// The thread is known well enough to pick the composer: messages are on
+    /// screen, or the first load came back. Until then the collab gate can't
+    /// be computed (no messages = it reads as OPEN), so the screen shows no
+    /// composer — a pending request's thread briefly offered a working input.
+    var composerReady: Bool {
+        !messages.isEmpty || loadingState == .loaded
+    }
+
     /// True when a collab request in this thread was accepted — the other
     /// participant is a collaborator (drives the "Remove Collaborator" option).
     var hasAcceptedCollabRequest: Bool {
@@ -131,7 +139,7 @@ final class ConversationViewModel {
     var isSending = false
     var attachmentError: String?
     /// The server has messages older than the oldest one loaded (the last page
-    /// came back full) — the thread offers "Load earlier messages".
+    /// came back full) — the thread pages them in as you scroll up.
     private(set) var hasOlder = false
     private(set) var isLoadingOlder = false
     /// The collab listing this conversation was opened from (Collab Board
@@ -222,7 +230,7 @@ final class ConversationViewModel {
         }
     }
 
-    /// Messages per page — the first load, each "load earlier" step, and the poll.
+    /// Messages per page — the first load, each earlier page, and the poll.
     static let pageSize = 50
 
     /// Prepends the next page of older messages. The RPC pages newest-first by
@@ -255,7 +263,7 @@ final class ConversationViewModel {
 
     func send() async {
         let text = String(draft.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxMessageLength))
-        guard !text.isEmpty, !isSending, collabRequestGate == nil else { return }
+        guard !text.isEmpty, !isSending, composerReady, collabRequestGate == nil else { return }
         draft = ""
         isSending = true
 
@@ -315,7 +323,7 @@ final class ConversationViewModel {
     func sendAttachment(data: Data, fileName: String, fileType: String, caption: String) async {
         // An attachment is a message: same gate, checked before the upload so a
         // blocked send never puts bytes in storage.
-        guard let userId = currentUserId, !isSending, collabRequestGate == nil else { return }
+        guard let userId = currentUserId, !isSending, composerReady, collabRequestGate == nil else { return }
 
         // Strip EXIF/GPS from still images by re-encoding to JPEG off the main
         // thread. (Avatars/covers already do this; the DM path previously shipped
@@ -539,6 +547,27 @@ final class ConversationViewModel {
         } catch {
             debugLog("[ConversationVM] respondToRequest: \(error)")
             setRequestStatus(message.id, previous)
+        }
+    }
+
+    /// Takes back my own pending collab request: the card reads "withdrawn"
+    /// and the thread opens as a normal DM. Optimistic, rolled back on failure.
+    /// Returns whether it went through (the caller toasts).
+    func withdrawRequest(_ message: ChatMessage) async -> Bool {
+        guard let requestId = message.requestId, message.isFromMe, message.isPendingRequest else { return false }
+        let previous = message.requestStatus
+        setRequestStatus(message.id, "withdrawn")
+        do {
+            try await service.withdrawCollabRequest(requestId: requestId)
+            inbox?.requestStatusChanged(convoId: convoId, status: "withdrawn")
+            if let otherUserId {
+                social?.setCollabStatus("none", userId: otherUserId, convoId: nil)
+            }
+            return true
+        } catch {
+            debugLog("[ConversationVM] withdrawRequest: \(error)")
+            setRequestStatus(message.id, previous)
+            return false
         }
     }
 

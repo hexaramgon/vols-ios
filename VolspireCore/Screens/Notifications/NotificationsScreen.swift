@@ -41,6 +41,15 @@ struct NotificationsScreen: View {
             inboxStore.clearNotificationsDot()
             await viewModel.load()
         }
+        // An activity push while this page is open — show the new row (load
+        // marks it read) and keep the bell dot off.
+        .onReceive(NotificationCenter.default.publisher(for: .pushReceived)) { note in
+            guard note.userInfo?["convo_id"] == nil else { return }
+            Task {
+                await viewModel.load()
+                inboxStore.clearNotificationsDot()
+            }
+        }
     }
 
     /// "N new" under the title — the open-time unread snapshot.

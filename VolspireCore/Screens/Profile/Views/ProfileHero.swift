@@ -472,9 +472,10 @@ private extension ProfileHeroView {
                 LucideIcon(viewModel.isFollowing ? .userCheck : .userPlus, Self.leadIconSize)
                 Text(viewModel.isFollowing ? "Following" : "Follow").font(.appSubheadlineSemibold)
             }
-            // Following = the quiet grey, still tappable here —
-            // the profile is where you unfollow.
-            .foregroundStyle(viewModel.isFollowing ? Color.vControlLabel : Color.vOnInverse)
+            // Following = the grey control fill with the same label colour as
+            // the Message / Collab pills beside it (CapsuleButtonLabel
+            // .secondary); still tappable — the profile is where you unfollow.
+            .foregroundStyle(viewModel.isFollowing ? Color.vText : Color.vOnInverse)
             .frame(maxWidth: .infinity)
             .frame(height: Self.buttonHeight)
             // Cross-fade between ink and grey so following ↔ not

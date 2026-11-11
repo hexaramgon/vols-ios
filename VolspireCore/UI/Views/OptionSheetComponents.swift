@@ -306,6 +306,11 @@ struct CancelSendButtons: View {
     /// Otherwise the action is ink, like every other button — blue only marks
     /// active / selected state.
     var destructive = false
+    /// The left button's label — "Cancel" unless the sheet's secondary action
+    /// lives there (the public link's "Turn off link").
+    var cancelTitle = "Cancel"
+    /// Red label on the left button (still the quiet control fill).
+    var cancelDestructive = false
     let canSend: Bool
     let isSending: Bool
     let onCancel: () -> Void
@@ -316,7 +321,8 @@ struct CancelSendButtons: View {
     var body: some View {
         HStack(spacing: 10) {
             Button(action: onCancel) {
-                Text("Cancel").font(.appCallout).foregroundStyle(Color.vControlLabel)
+                Text(cancelTitle).font(.appCallout)
+                    .foregroundStyle(cancelDestructive ? Color.vDestructive : Color.vControlLabel)
                     .frame(maxWidth: .infinity).frame(height: Self.height)
                     .background(Color.vControl, in: Capsule())
             }

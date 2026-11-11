@@ -437,7 +437,11 @@ private extension ExpandableNowPlaying {
         // Full-screen mode: the drag pages tracks, never dismisses.
         if drag.axis == .vertical, feedSwipeEnabled, !drag.dismissFromTop {
             drag.dismissArmed = false
-            stage.dragFeed(dy - drag.baselineY, height: viewSize.height)
+            // The SCREEN height, not the gesture view's (778 vs 874pt on a 17
+            // Pro): the portrait backdrop is screen-tall, so paging by the
+            // shorter view left its bottom ~96pt showing at the top after a
+            // swipe. Same height the swipe-hint overlay already uses.
+            stage.dragFeed(dy - drag.baselineY, height: UIScreen.size.height)
             return
         }
 
@@ -487,7 +491,7 @@ private extension ExpandableNowPlaying {
 
         if axis == .vertical, feedSwipeEnabled, !topDismiss {
             let projected = (value.translation.height - baseline) + value.velocity.height / 5
-            stage.settleFeed(projected: projected, height: viewSize.height, controller: model)
+            stage.settleFeed(projected: projected, height: UIScreen.size.height, controller: model)
             return
         }
         // Any other ending must not strand a feed drag mid-screen (e.g. full

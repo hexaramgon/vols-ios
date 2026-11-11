@@ -18,6 +18,8 @@ final class AvatarPreviewState {
     private(set) var sourceFrame: CGRect = .zero
     /// Circular (profile avatar) vs rounded-rect (image attachment).
     private(set) var circular = true
+    /// The attachment's filename (message photos) — used when saving it.
+    private(set) var name: String?
     /// Mounted (overlay present) for the whole open→close lifecycle.
     private(set) var mounted = false
     /// Drives the open/close animation (false = at the source frame, true = zoomed).
@@ -28,9 +30,10 @@ final class AvatarPreviewState {
     /// Live swipe-to-dismiss offset of an image attachment.
     var dragY: CGFloat = 0
 
-    func present(url: URL, sourceFrame: CGRect, circular: Bool = true) {
+    func present(url: URL, sourceFrame: CGRect, circular: Bool = true, name: String? = nil) {
         guard sourceFrame != .zero else { return }
         self.url = url
+        self.name = name
         self.sourceFrame = sourceFrame
         self.circular = circular
         zoomed = false

@@ -93,6 +93,27 @@ enum VideoTranscoder {
         return output
     }
 
+    // MARK: - Trim (no re-encode)
+
+    /// Cuts an already-prepared upload (.mp4, H.264/AAC) to `start...end`
+    /// seconds with a passthrough export — fast, and no quality loss. Returns
+    /// a new temp .mp4 the caller owns; `input` is left untouched.
+    static func trim(_ input: URL, start: Double, end: Double) async throws -> URL {
+        let asset = AVURLAsset(url: input)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
+            throw Failure.failed
+        }
+        session.timeRange = CMTimeRange(
+            start: CMTime(seconds: start, preferredTimescale: 600),
+            end: CMTime(seconds: end, preferredTimescale: 600)
+        )
+        session.shouldOptimizeForNetworkUse = true
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("trim_\(UUID().uuidString).mp4")
+        try await session.export(to: output, as: .mp4)
+        return output
+    }
+
     // MARK: - Remux (no re-encode)
 
     private static func remux(_ asset: AVAsset, to output: URL, progress: @escaping @Sendable (Double) -> Void) async throws {

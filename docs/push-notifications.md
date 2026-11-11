@@ -5,6 +5,10 @@ follows, credits, DMs) through Apple's APNs, driven end-to-end by Supabase:
 database triggers detect events, edge functions deliver them. This doc maps
 the whole pipeline, where each piece lives, and how to debug it.
 
+> **While the app is open**, new DMs/activity arrive over Supabase Realtime
+> (instant banner + dots), not through this pipeline — see
+> [realtime-in-app-notifications.md](realtime-in-app-notifications.md).
+
 ## The pipeline at a glance
 
 ```

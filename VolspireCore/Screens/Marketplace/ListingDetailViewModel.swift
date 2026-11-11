@@ -21,6 +21,9 @@ final class ListingDetailViewModel {
     private(set) var listing: ApiListing
     private(set) var comments: [ApiListingComment] = []
     private(set) var commentsLoaded = false
+    /// The comments request failed with nothing on screen — the section
+    /// shows a retry, never "No comments yet".
+    private(set) var commentsFailed = false
 
     var isSaved: Bool
     var status: String
@@ -132,9 +135,23 @@ final class ListingDetailViewModel {
         }
     }
 
+    /// Flips `commentsLoaded` on a real response only; a failure shows the
+    /// retry (or, on a later refetch, keeps what's already on screen).
     func loadComments() async {
-        comments = (try? await service.getListingComments(listingId: listing.listingId)) ?? []
-        commentsLoaded = true
+        do {
+            comments = try await service.getListingComments(listingId: listing.listingId)
+            commentsLoaded = true
+            commentsFailed = false
+        } catch {
+            debugLog("[ListingDetailVM] loadComments failed: \(error)")
+            if !commentsLoaded { commentsFailed = true }
+        }
+    }
+
+    /// The comments section's Try Again: back to the skeleton, then refetch.
+    func retryComments() async {
+        commentsFailed = false
+        await loadComments()
     }
 
     // MARK: - Save

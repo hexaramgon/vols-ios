@@ -101,14 +101,22 @@ enum ServiceStyle {
 
 // MARK: - Role tags (mirrors the web app's TagPicker ROLE_TAGS)
 
+/// Geared to bedroom producers and underground artists — no industry roles
+/// (A&R, Manager, Music Director were dropped; people who already have one
+/// keep it — RolePicker shows non-canonical tags). The ONE list: Explore's
+/// collab filter (`CollabRoles`) derives from it. The web app's TagPicker
+/// ROLE_TAGS should carry the same list.
 enum ProfileRoles {
     static let max = 3
     static let all = [
-        "Artist", "Producer", "Engineer", "Songwriter", "DJ", "Vocalist",
-        "Beatmaker", "Mixer", "Mastering Engineer", "Composer", "Arranger",
-        "Lyricist", "Session Musician", "Sound Designer", "Music Director",
-        "Manager", "A&R", "Rapper", "Singer", "Guitarist", "Drummer",
-        "Bassist", "Keyboardist",
+        "Artist", "Producer", "Engineer", "Songwriter",
+        // Grassroots up front.
+        "Bedroom Producer", "Beatmaker", "Loop Maker", "Rapper", "Singer",
+        "Topliner", "Remixer", "DJ", "Crate Digger", "Vocalist",
+        "Mixer", "Mastering Engineer", "Sound Designer", "Composer", "Arranger",
+        "Lyricist", "Multi-instrumentalist", "Session Musician", "Live Performer",
+        "Guitarist", "Drummer", "Bassist", "Keyboardist",
+        "Cover Artist", "Videographer", "Hobbyist",
     ]
 }
 

@@ -126,6 +126,14 @@ final class UploadTrackViewModel {
     /// When a video is attached, upload only its extracted audio (as an audio
     /// track) instead of the full video. Off by default (keep the video).
     var videoAudioOnly = false
+    /// The prepared clip BEFORE any trim, kept on disk so Trim always cuts
+    /// from the whole thing (a trim can be widened again). nil when the video
+    /// couldn't be prepared — Trim is hidden then.
+    private(set) var untrimmedVideoURL: URL?
+    /// Length of `untrimmedVideoURL`, seconds.
+    private(set) var untrimmedVideoDuration: Double = 0
+    /// The kept range in seconds; nil = the whole clip.
+    private(set) var videoTrim: ClosedRange<Double>?
 
     /// True from the moment a video is picked until it's loaded + compressed
     /// and attached — covers the two silent, potentially slow steps that
@@ -424,6 +432,54 @@ final class UploadTrackViewModel {
         isProcessingVideo = false
         videoProcessingProgress = 0
         videoAudioOnly = false
+        dropUntrimmedVideo()
+    }
+
+    private func dropUntrimmedVideo() {
+        if let untrimmedVideoURL { try? FileManager.default.removeItem(at: untrimmedVideoURL) }
+        untrimmedVideoURL = nil
+        untrimmedVideoDuration = 0
+        videoTrim = nil
+    }
+
+    /// Trim (or `nil` = reset to the whole clip). Cuts from the untrimmed
+    /// clip without re-encoding; runs as the usual "preparing" state, so
+    /// Publish waits for it. A newer pick cancels it.
+    func applyVideoTrim(_ range: ClosedRange<Double>?) {
+        guard let source = untrimmedVideoURL else { return }
+        // The whole clip (or near enough) is no trim at all.
+        let whole = range.map { $0.lowerBound <= 0.05 && $0.upperBound >= untrimmedVideoDuration - 0.05 } ?? true
+        let target: ClosedRange<Double>? = whole ? nil : range
+        guard target != videoTrim else { return }
+        videoTask?.cancel()
+        isProcessingVideo = true
+        videoProcessingProgress = 0
+        videoTask = Task {
+            var output: URL?
+            if let target {
+                do {
+                    output = try await VideoTranscoder.trim(source, start: target.lowerBound, end: target.upperBound)
+                } catch {
+                    if Task.isCancelled { return }
+                    debugLog("[UploadVM] video trim failed: \(error)")
+                    isProcessingVideo = false
+                    ToastCenter.shared.show("Couldn't trim the video. Try again.", style: .error)
+                    return
+                }
+            }
+            let read = output ?? source
+            let data = await Task.detached { try? Data(contentsOf: read) }.value
+            if let output { try? FileManager.default.removeItem(at: output) }
+            guard !Task.isCancelled else { return }
+            if let data {
+                videoData = data
+                videoTrim = target
+            } else {
+                ToastCenter.shared.show("Couldn't trim the video. Try again.", style: .error)
+            }
+            videoProcessingProgress = 1
+            isProcessingVideo = false
+        }
     }
 
     /// Prepares a just-picked video (already staged to a local temp file by
@@ -434,6 +490,7 @@ final class UploadTrackViewModel {
     func handleVideoFile(at url: URL, fileName: String) {
         videoTask?.cancel()
         videoAudioOnly = false // fresh attach defaults to keeping the video
+        dropUntrimmedVideo()
         videoData = nil
         videoFileName = nil
         isProcessingVideo = true
@@ -460,7 +517,14 @@ final class UploadTrackViewModel {
             if let prepared {
                 // Tens of MB — read off-main.
                 videoData = await Task.detached { try? Data(contentsOf: prepared) }.value
-                try? FileManager.default.removeItem(at: prepared)
+                // Kept (not deleted) as the untrimmed source for Trim.
+                untrimmedVideoDuration = (try? await AVURLAsset(url: prepared).load(.duration).seconds) ?? 0
+                if Task.isCancelled {
+                    try? FileManager.default.removeItem(at: prepared)
+                    return
+                }
+                untrimmedVideoURL = untrimmedVideoDuration > 0 ? prepared : nil
+                if untrimmedVideoURL == nil { try? FileManager.default.removeItem(at: prepared) }
                 videoFileName = (fileName as NSString).deletingPathExtension + ".mp4"
             } else {
                 // Couldn't prepare it — upload the original bytes.

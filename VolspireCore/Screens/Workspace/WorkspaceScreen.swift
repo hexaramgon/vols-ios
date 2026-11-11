@@ -260,35 +260,8 @@ extension WorkspaceScreen {
             }
             .padding(.horizontal, pad)
             .padding(.top, 40)
-        } else if !workspaceStore.foldersLoaded, FeatureFlags.workspaceFolderGrid {
-            LazyVGrid(columns: folderColumns, alignment: .leading, spacing: 20) {
-                ForEach(0 ..< 4, id: \.self) { _ in
-                    VStack(alignment: .leading, spacing: 10) {
-                        RoundedRectangle(cornerRadius: Radius.tile, style: .continuous).fill(Color.vSkeleton)
-                            .aspectRatio(1, contentMode: .fit)
-                        Capsule().fill(Color.vSkeleton).frame(width: 110, height: 10)
-                        Capsule().fill(Color.vSkeleton).frame(width: 70, height: 8)
-                    }
-                }
-            }
-            .padding(.horizontal, pad)
-            .shimmering()
         } else if !workspaceStore.foldersLoaded {
-            VStack(spacing: 0) {
-                ForEach(0 ..< 6, id: \.self) { _ in
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: Radius.tile).fill(Color.vSkeleton).frame(width: 40, height: 40)
-                        VStack(alignment: .leading, spacing: 6) {
-                            RoundedRectangle(cornerRadius: Radius.tile).fill(Color.vSkeleton).frame(width: 150, height: 12)
-                            RoundedRectangle(cornerRadius: Radius.tile).fill(Color.vSkeleton).frame(width: 90, height: 10)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                }
-            }
-            .shimmering()
+            pageSkeleton
         } else if workspaceStore.folders.isEmpty {
             // The animated ghost-rows empty state (My Network / Messages / Library).
             HomeEmpty(
@@ -354,6 +327,53 @@ extension WorkspaceScreen {
 
             }
         }
+    }
+
+    /// The whole page in its loaded shape — Activity rail, a folder-group
+    /// heading, then the grid (or rows) — bones only, no text, so the real
+    /// content lands where the skeleton was.
+    private var pageSkeleton: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            WorkspaceActivityRail.Skeleton()
+            VStack(alignment: .leading, spacing: 0) {
+                // "Your folders" heading.
+                Capsule().fill(Color.vSkeleton).frame(width: 104, height: 14)
+                    .padding(.vertical, 3)
+                    .padding(.horizontal, pad)
+                    .padding(.bottom, FeatureFlags.workspaceFolderGrid ? 6 : 4)
+                if FeatureFlags.workspaceFolderGrid {
+                    LazyVGrid(columns: folderColumns, alignment: .leading, spacing: 20) {
+                        ForEach(0 ..< 4, id: \.self) { _ in
+                            VStack(alignment: .leading, spacing: 10) {
+                                RoundedRectangle(cornerRadius: Radius.tile, style: .continuous).fill(Color.vSkeleton)
+                                    .aspectRatio(1, contentMode: .fit)
+                                Capsule().fill(Color.vSkeleton).frame(width: 110, height: 10)
+                                Capsule().fill(Color.vSkeleton).frame(width: 70, height: 8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, pad)
+                    .padding(.top, 6)
+                } else {
+                    // WorkspaceFolderRow geometry: 44pt art, 14 gap, 10pt vertical.
+                    ForEach(0 ..< 6, id: \.self) { _ in
+                        HStack(spacing: 14) {
+                            RoundedRectangle(cornerRadius: Radius.tile).fill(Color.vSkeleton).frame(width: 44, height: 44)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Capsule().fill(Color.vSkeleton).frame(width: 150, height: 12)
+                                Capsule().fill(Color.vSkeleton).frame(width: 90, height: 10)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, pad)
+                        .padding(.vertical, 10)
+                    }
+                }
+            }
+            .padding(.top, 28)
+            .shimmering()
+        }
+        .accessibilityHidden(true)
     }
 
     /// A group heading in the profile's section-title type.

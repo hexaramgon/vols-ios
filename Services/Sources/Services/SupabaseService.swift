@@ -40,7 +40,7 @@ public enum AccountStatus: String, Sendable {
 // MARK: - Supabase Service Implementation
 
 public final class SupabaseService: Sendable {
-    private let client: SupabaseClient
+    let client: SupabaseClient   // internal: LiveEvents.swift opens the realtime channel
     private let cache: APICache
 
     public init(client: SupabaseClient = supabaseClient, cache: APICache = .shared) {
@@ -129,6 +129,13 @@ public final class SupabaseService: Sendable {
         try await executeRpc("reject_request", params: ["p_request_id": requestId])
     }
 
+    /// Takes back my own still-pending collab request — requester only. The
+    /// card becomes `withdrawn` (the thread opens as a normal DM) and the
+    /// pending collaborator relationship is removed.
+    public func withdrawCollabRequest(requestId: String) async throws {
+        try await executeRpc("withdraw_collab_request", params: ["p_request_id": requestId])
+    }
+
     /// Sends a text message; returns the new message id.
     public func sendMessage(convoId: String, content: String) async throws -> String {
         return try await performRpc("send_message", params: ["p_convo_id": convoId, "p_content": content])
@@ -204,7 +211,10 @@ public final class SupabaseService: Sendable {
     }
 
     /// Fetches the current user's notifications (cached 30s)
-    public func getUserNotifications() async throws -> [ApiNotification] {
+    /// `force` drops the cached copy first (the in-app alert needs the row
+    /// that just arrived, not the feed from 30s ago).
+    public func getUserNotifications(force: Bool = false) async throws -> [ApiNotification] {
+        if force { await cache.remove(APICache.key("get_user_notifications", params: nil)) }
         return try await cachedRpc("get_user_notifications", params: nil, ttl: CacheTTL.realtime)
     }
 

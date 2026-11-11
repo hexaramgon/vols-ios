@@ -66,6 +66,8 @@ struct UploadTrackScreen: View {
     /// Step 1's pinned pick: full preview, or a slim bar while the grid is
     /// scrolled down. A new pick opens it back up.
     @State var pickExpanded = true
+    /// The video time-trim sheet (VideoTrimSheet).
+    @State var showVideoTrim = false
     /// The grid is being dragged / flung (not just re-laid-out).
     @State var gridScrolling = false
     /// A freshly-picked cover awaiting crop in the full-screen cropper.
@@ -140,6 +142,14 @@ struct UploadTrackScreen: View {
         // compressor re-encodes to MP4 anyway and reads HEVC natively.
         .photosPicker(isPresented: $showVideoPicker, selection: $selectedVideo, matching: .videos,
                       preferredItemEncoding: .current)
+        .sheet(isPresented: $showVideoTrim) {
+            if let url = viewModel.untrimmedVideoURL {
+                VideoTrimSheet(url: url, duration: viewModel.untrimmedVideoDuration,
+                               range: viewModel.videoTrim) { range in
+                    viewModel.applyVideoTrim(range)
+                }
+            }
+        }
         .sheet(isPresented: $showGenrePicker) {
             GenrePickerSheet(genre: $viewModel.genre)
         }

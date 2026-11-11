@@ -38,15 +38,8 @@ struct TrackAnalyticsDetail: View {
 
 private extension TrackAnalyticsDetail {
     var header: some View {
-        HStack(spacing: 16) {
+        AnalyticsSubjectHeader(title: track.title, caption: headerCaption) {
             ArtworkView(.placeholder(track.coverURL, name: track.title), cornerRadius: Radius.tile)
-                .frame(width: 64, height: 64)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(track.title)
-                    .font(.appTitle3).foregroundStyle(Color.vText).lineLimit(1)
-                Text(headerCaption)
-                    .font(.appCaptionCompact).foregroundStyle(Color.vText3).lineLimit(1)
-            }
         }
     }
 
@@ -60,16 +53,23 @@ private extension TrackAnalyticsDetail {
         return parts.joined(separator: " · ")
     }
 
+    /// Titled like the other blocks (the heading above the card, not a
+    /// caption inside it).
     var thisWeekCard: some View {
+        AnalyticsBlock(title: "This week") { thisWeekBody }
+    }
+
+    private var thisWeekBody: some View {
         let delta = track.weekDelta
         return HStack(alignment: .bottom, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("This week").font(.appCaptionCompact).foregroundStyle(Color.vText3)
                 let count = Text(track.thisWeek.compactCount).font(.appLargeTitle).foregroundStyle(Color.vText)
                 let unit = Text(track.thisWeek == 1 ? "play" : "plays").font(.appSubheadline).foregroundStyle(Color.vText3)
                 Text("\(count) \(unit)").monospacedDigit()
-                Text("\(track.lastWeek.compactCount) the week before")
-                    .font(.appCaptionCompact).foregroundStyle(Color.vText3)
+                // The number bold, in full ink; the words stay quiet.
+                let before = Text(track.lastWeek.compactCount).font(.appLabel).foregroundStyle(Color.vText)
+                Text("\(before) the week before")
+                    .font(.appCaption).foregroundStyle(Color.vText3).monospacedDigit()
             }
             Spacer(minLength: 0)
             if delta != 0 {
@@ -93,15 +93,15 @@ private extension TrackAnalyticsDetail {
     var statTiles: some View {
         Grid(horizontalSpacing: 8, verticalSpacing: 8) {
             GridRow {
-                AnalyticsStatTile(icon: .headphones, label: "Streams",
+                AnalyticsStatTile(label: "Streams",
                                   value: track.streams.compactCount, sub: "Every play, replays included")
-                AnalyticsStatTile(icon: .users, label: "Listeners",
+                AnalyticsStatTile(label: "Listeners",
                                   value: track.uniqueListeners.compactCount, sub: "Different people")
             }
             GridRow {
-                AnalyticsStatTile(icon: .clock, label: "Avg listen",
+                AnalyticsStatTile(label: "Avg listen",
                                   value: track.avgListenTime.durationLabel, sub: "Before stopping or skipping")
-                AnalyticsStatTile(icon: .skipForward, label: "Avg seeks",
+                AnalyticsStatTile(label: "Avg seeks",
                                   value: "\(Int(track.avgSeekCount.rounded()))", sub: "Scrubs per listen")
             }
         }

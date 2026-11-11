@@ -87,7 +87,7 @@ private extension AnalyticsScreen {
                         .foregroundStyle(Color.vText)
                         .lineLimit(1)
                     Text("See who follows you, manage collaborators")
-                        .font(.appCaption)
+                        .font(.appSubheadline)
                         .foregroundStyle(Color.vText3)
                         .lineLimit(1)
                 }
@@ -95,7 +95,7 @@ private extension AnalyticsScreen {
                 LucideIcon(.chevronRight, .md).foregroundStyle(Color.vText3)
             }
             .padding(.horizontal, ViewConst.screenPaddings)
-            .padding(.vertical, 12)
+            .padding(.vertical, 13)
             .contentShape(.rect)
         }
         .buttonStyle(ListingStripButtonStyle())
@@ -109,10 +109,10 @@ private extension AnalyticsScreen {
 // MARK: - Track list
 
 private extension AnalyticsScreen {
-    /// Library's row layout: rows 4pt apart, inset so each row's own 6pt
-    /// lead lands on the 16pt page column.
+    /// Rows 6pt apart (a touch roomier than Library's 4), inset so each
+    /// row's own 6pt lead lands on the 16pt page column.
     var trackList: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             ForEach(Array(viewModel.tracks.enumerated()), id: \.element.id) { index, track in
                 Button { openTrackId = track.id } label: {
                     trackRow(track)
@@ -142,7 +142,9 @@ private extension AnalyticsScreen {
                     .foregroundStyle(Color.vTextRow)
                     .lineLimit(1)
                 Text("\(track.streams.compactCount) streams · \(track.uniqueListeners.compactCount) listeners")
-                    .font(.appFont.fileSubtitle)
+                    // 14pt here (the shared folder-row subtitle is 13) — this
+                    // page's own size, so the folder rows don't move.
+                    .font(.appSubheadline)
                     .foregroundStyle(Color.vText3)
                     .monospacedDigit()
                     .lineLimit(1)
@@ -150,7 +152,7 @@ private extension AnalyticsScreen {
             .frame(maxWidth: .infinity, alignment: .leading)
             if delta != 0 {
                 Text("\(delta > 0 ? "↑" : "↓")\(abs(delta))%")
-                    .font(.appLabelCompact)
+                    .font(.appSubheadlineSemibold)   // 14pt semibold
                     .foregroundStyle(delta > 0 ? Color.vSuccessText : Color.vError)
                     .monospacedDigit()
             }
@@ -160,7 +162,7 @@ private extension AnalyticsScreen {
         }
         .padding(.leading, 6)
         .padding(.trailing, 4)
-        .padding(.vertical, 10)
+        .padding(.vertical, 11)
         .contentShape(.rect)
     }
 }
@@ -187,7 +189,8 @@ private extension AnalyticsScreen {
     var analyticsSkeleton: some View {
         let bone = Color.vSkeleton
         return VStack(alignment: .leading, spacing: 0) {
-            VStack(spacing: 0) {
+            // Same rhythm as the loaded rows: 6pt apart, 11pt vertical padding.
+            VStack(spacing: 6) {
                 ForEach(0 ..< 6, id: \.self) { _ in
                     HStack(spacing: 14) {
                         RoundedRectangle(cornerRadius: 8).fill(bone).frame(width: 44, height: 44)
@@ -198,7 +201,7 @@ private extension AnalyticsScreen {
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 11)
                 }
             }
             .padding(.vertical, 8)

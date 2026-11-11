@@ -21,25 +21,23 @@ struct WorkspaceActivityRail: View {
     @Binding var expanded: String?
 
     var body: some View {
+        if !workspace.activityLoaded {
+            // In flight (or failed): bones only — no title, no "Nothing yet".
+            // Profile's secondary tabs do the same.
+            Self.Skeleton()
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Activity")
                 .font(.appFont.sectionTitle)
                 .foregroundStyle(Color.vText)
                 .padding(.horizontal, ViewConst.screenPaddings)
 
-            if !workspace.foldersLoaded {
-                HStack(spacing: 14) {
-                    ForEach(0 ..< 5, id: \.self) { _ in
-                        VStack(spacing: 8) {
-                            Circle().fill(Color.vSkeleton).frame(width: 60, height: 60)
-                            Capsule().fill(Color.vSkeleton).frame(width: 48, height: 8)
-                        }
-                        .frame(width: 74)
-                    }
-                }
-                .padding(.horizontal, ViewConst.screenPaddings)
-                .shimmering()
-            } else if workspace.activityGroups.isEmpty {
+            if workspace.activityGroups.isEmpty {
                 Text("Nothing yet. Uploads, comments and new members across your folders show up here.")
                     .font(.appSubheadline)
                     .foregroundStyle(Color.vText3)
@@ -58,17 +56,71 @@ struct WorkspaceActivityRail: View {
                 }
                 .scrollClipDisabled()
 
-                if let id = expanded, let g = groups.first(where: { $0.actorId == id }) {
-                    overview(g)
-                        // Taps on the card's own blank space don't count as "outside".
-                        .contentShape(.rect)
-                        .onTapGesture {}
-                        .padding(.horizontal, ViewConst.screenPaddings - 6)
-                        .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
+                // Two layers so opening/closing and switching people animate
+                // differently. The outer slot fades in/out as a whole. Inside,
+                // each person's card is its OWN view (id'd by actor): switching
+                // drops the old card at once and fades the new one in, instead
+                // of morphing the old name/avatar/rows into the new ones.
+                if expanded != nil {
+                    VStack(spacing: 0) {
+                        if let id = expanded, let g = groups.first(where: { $0.actorId == id }) {
+                            overview(g)
+                                .id(g.actorId)
+                                .transition(.asymmetric(
+                                    insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)),
+                                    removal: .identity
+                                ))
+                        }
+                    }
+                    // Taps on the card's own blank space don't count as "outside".
+                    .contentShape(.rect)
+                    .onTapGesture {}
+                    .padding(.horizontal, ViewConst.screenPaddings - 6)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
                 }
             }
         }
         .animation(.smooth(duration: 0.28), value: expanded)
+    }
+
+    /// The rail's loading shape — a title bone over avatar bones, in the
+    /// loaded rail's geometry so the real one lands on it. Also the top of the
+    /// Workspace page's skeleton while the folders load.
+    struct Skeleton: View {
+        var body: some View {
+            VStack(alignment: .leading, spacing: 12) {
+                Capsule().fill(Color.vSkeleton).frame(width: 72, height: 14)
+                    .padding(.vertical, 3)
+                    .padding(.horizontal, ViewConst.screenPaddings)
+                // Five bones (~458pt) are wider than a phone. As a plain row
+                // they reported that width and stretched the WHOLE Workspace
+                // page off both edges until the real (scrolling) rail landed
+                // — so they ride in an overlay of a screen-wide, fixed-height
+                // slot and simply run off the trailing edge (see the
+                // fill-images overlay pattern).
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 76)
+                    .overlay(alignment: .leading) {
+                        HStack(spacing: 14) {
+                            ForEach(0 ..< 5, id: \.self) { _ in
+                                VStack(spacing: 8) {
+                                    Circle().fill(Color.vSkeleton).frame(width: 60, height: 60)
+                                    Capsule().fill(Color.vSkeleton).frame(width: 48, height: 8)
+                                }
+                                .frame(width: 74)
+                            }
+                        }
+                        .fixedSize()
+                        .padding(.horizontal, ViewConst.screenPaddings)
+                    }
+                    .padding(.vertical, 4)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
+            .shimmering()
+            .accessibilityHidden(true)
+        }
     }
 
     private func avatar(_ g: WorkspaceActivityGroup) -> some View {
@@ -108,19 +160,29 @@ struct WorkspaceActivityRail: View {
 
     private func overview(_ g: WorkspaceActivityGroup) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Who + count.
+            // Who + count. Avatar and @name open their profile.
             HStack(spacing: 12) {
-                AvatarView(url: workspace.activityAvatarURL(g.avatar), name: g.username, size: 40)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("@\(g.username ?? "user")")
-                        .font(.appSubheadline)
-                        .foregroundStyle(Color.vText)
-                        .lineLimit(1)
-                    Text("\(g.events.count) \(g.events.count == 1 ? "update" : "updates") this month")
-                        .font(.appFootnote)
-                        .foregroundStyle(Color.vText3)
-                        .lineLimit(1)
+                Button {
+                    router.navigateToProfile(userId: g.actorId)
+                } label: {
+                    HStack(spacing: 12) {
+                        AvatarView(url: workspace.activityAvatarURL(g.avatar), name: g.username, size: 40)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("@\(g.username ?? "user")")
+                                .font(.appSubheadline)
+                                .foregroundStyle(Color.vText)
+                                .lineLimit(1)
+                            Text("\(g.events.count) \(g.events.count == 1 ? "update" : "updates") this month")
+                                .font(.appFootnote)
+                                .foregroundStyle(Color.vText3)
+                                .lineLimit(1)
+                        }
+                    }
+                    .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("@\(g.username ?? "user")")
+                .accessibilityHint("Opens their profile")
                 Spacer(minLength: 0)
             }
             .padding(.bottom, 8)

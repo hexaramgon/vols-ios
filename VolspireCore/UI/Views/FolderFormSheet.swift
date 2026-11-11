@@ -63,7 +63,7 @@ struct ItemFormSheet: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     SheetFieldLabel("Name")
-                    SheetTextField(prompt: namePrompt, text: $name, maxLength: nameLimit, autoFocus: true)
+                    SheetTextField(prompt: namePrompt, text: $name, maxLength: nameLimit)
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     SheetFieldLabel("Description", optional: true)
@@ -96,8 +96,8 @@ struct ItemFormSheet: View {
             .keyboardSafeForm()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Full height from the start, name field auto-focused. A short .height
-        // detent got stretched to full height and sprung to the top when the
+        // Full height from the start; no auto-focus (the keyboard waits for a
+        // tap on a field). A short .height detent got stretched to full height and sprung to the top when the
         // keyboard came up (overshoot, text lagging its fields); a .large sheet
         // doesn't move when the keyboard arrives.
         .presentationDetents([.large])
@@ -226,8 +226,7 @@ struct FolderFormSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
                     SheetFieldLabel("Folder name")
-                    SheetTextField(prompt: "e.g. Album Sessions, Client Work…", text: $name, maxLength: Self.nameMax,
-                                   autoFocus: true)
+                    SheetTextField(prompt: "e.g. Album Sessions, Client Work…", text: $name, maxLength: Self.nameMax)
                 }
                 VStack(alignment: .leading, spacing: 8) {
                     SheetFieldLabel("Description", optional: true)
@@ -263,8 +262,8 @@ struct FolderFormSheet: View {
             .keyboardSafeForm()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Full height + auto-focused name field, so the keyboard never springs
-        // the sheet to the top (see ItemFormSheet).
+        // Full height, so the keyboard never springs the sheet to the top when
+        // a field is tapped (see ItemFormSheet). No auto-focus on open.
         .presentationDetents([.large])
         .sheetBackground()
     }
@@ -274,19 +273,14 @@ struct FolderFormSheet: View {
 
 /// The full-screen edit page in the Edit Track layout — header, Cover Art
 /// (optional), Details (labeled name + description), any extra sections
-/// (e.g. Privacy), an optional danger Delete, and the pinned Save Changes,
-/// which stays off until something changed. Shared by Edit Release,
-/// Edit Playlist and Edit Folder.
+/// (e.g. Privacy), and the pinned Save Changes, which stays off until
+/// something changed. Shared by Edit Release, Edit Playlist and Edit Folder.
+/// No Delete here on purpose — deleting lives in each item's "…" menu only.
 struct EditDetailsScreen<Extra: View>: View {
     struct Cover {
         let data: Binding<Data?>
         var savedURL: URL? = nil
         let caption: String
-    }
-
-    struct Delete {
-        let title: String
-        let confirm: DestructiveConfirm
     }
 
     var icon: LucideIcon.Name = .squarePen
@@ -304,7 +298,6 @@ struct EditDetailsScreen<Extra: View>: View {
     let hasChanges: Bool
     let busy: Bool
     var error: String? = nil
-    var delete: Delete? = nil
     let onSave: () async -> Void
     @ViewBuilder var extra: () -> Extra
 
@@ -312,7 +305,6 @@ struct EditDetailsScreen<Extra: View>: View {
     @State private var showCoverPicker = false
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var coverCropTarget: CropTarget?
-    @State private var deleteConfirm: DestructiveConfirm?
 
     private var nameMissing: Bool { name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -341,22 +333,6 @@ struct EditDetailsScreen<Extra: View>: View {
                     }
 
                     extra()
-
-                    if let delete {
-                        Button {
-                            deleteConfirm = delete.confirm
-                        } label: {
-                            HStack(spacing: 8) {
-                                LucideIcon(.trash2, .md)
-                                Text(delete.title).font(.appSubheadlineSemibold)
-                            }
-                            .foregroundStyle(Color.vError)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: CancelSendButtons.height)
-                            .background(Color.vDangerSoft, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
@@ -373,7 +349,6 @@ struct EditDetailsScreen<Extra: View>: View {
             }
         }
         .background(Color.vBase.ignoresSafeArea())
-        .confirmModal($deleteConfirm)
         .photosPicker(isPresented: $showCoverPicker, selection: $selectedPhoto, matching: .images)
         .onChange(of: selectedPhoto) { _, newValue in
             Task {
@@ -404,11 +379,11 @@ extension EditDetailsScreen where Extra == EmptyView {
          nameLabel: String = "Name", namePrompt: String, nameLimit: Int = 50, name: Binding<String>,
          descriptionPrompt: String = "What's it about?", descriptionLimit: Int = 300,
          description: Binding<String>, hasChanges: Bool, busy: Bool, error: String? = nil,
-         delete: Delete? = nil, onSave: @escaping () async -> Void) {
+         onSave: @escaping () async -> Void) {
         self.init(icon: icon, title: title, subtitle: subtitle, cover: cover, nameLabel: nameLabel,
                   namePrompt: namePrompt, nameLimit: nameLimit, name: name,
                   descriptionPrompt: descriptionPrompt, descriptionLimit: descriptionLimit,
                   description: description, hasChanges: hasChanges, busy: busy, error: error,
-                  delete: delete, onSave: onSave) { EmptyView() }
+                  onSave: onSave) { EmptyView() }
     }
 }

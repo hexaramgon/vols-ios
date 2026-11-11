@@ -16,6 +16,8 @@ public struct SecondaryButton: View {
     private let expands: Bool
     private let busy: Bool
     private let enabled: Bool
+    private let labelColor: Color
+    private let disabledLabelColor: Color
     private let action: () -> Void
 
     /// - Parameters:
@@ -23,6 +25,8 @@ public struct SecondaryButton: View {
     ///   - expands: false renders a hugging capsule instead of full width.
     ///   - busy: shows a spinner in place of the label and blocks taps.
     ///   - enabled: false blocks taps and dims the label to `vText4`.
+    ///   - labelColor / disabledLabelColor: a darker label where a screen
+    ///     wants it (defaults: `vControlLabel` / `vText4`).
     public init(
         _ title: String,
         icon: LucideIcon.Name? = nil,
@@ -30,6 +34,8 @@ public struct SecondaryButton: View {
         expands: Bool = true,
         busy: Bool = false,
         enabled: Bool = true,
+        labelColor: Color = .vControlLabel,
+        disabledLabelColor: Color = .vText4,
         action: @escaping () -> Void
     ) {
         self.title = title
@@ -38,6 +44,8 @@ public struct SecondaryButton: View {
         self.expands = expands
         self.busy = busy
         self.enabled = enabled
+        self.labelColor = labelColor
+        self.disabledLabelColor = disabledLabelColor
         self.action = action
     }
 
@@ -45,7 +53,7 @@ public struct SecondaryButton: View {
         Button(action: action) {
             Group {
                 if busy {
-                    ProgressView().tint(Color.vControlLabel)
+                    ProgressView().tint(labelColor)
                 } else {
                     HStack(spacing: 6) {
                         if let icon { LucideIcon(icon, .md) }
@@ -54,7 +62,7 @@ public struct SecondaryButton: View {
                     .modifier(CapsuleLabelFit(expands: expands))
                 }
             }
-            .foregroundStyle(enabled ? Color.vControlLabel : Color.vText4)
+            .foregroundStyle(enabled ? labelColor : disabledLabelColor)
             .frame(maxWidth: expands ? .infinity : nil)
             .frame(height: size.height)
             .padding(.horizontal, expands ? 0 : (icon == nil ? 24 : 20))

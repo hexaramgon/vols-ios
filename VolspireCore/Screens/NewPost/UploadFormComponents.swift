@@ -572,16 +572,18 @@ struct CoverDraft {
 /// Visual only — wrap it in a tappable row so the whole row is the target.
 struct UploadSwitch: View {
     var isOn: Bool
+    /// 1 = 44×24; larger where the switch sits alone (Audio only).
+    var scale: CGFloat = 1
 
     var body: some View {
         Capsule()
             .fill(isOn ? Color.vInverse : Color.ink(0.22))
-            .frame(width: 44, height: 24)
+            .frame(width: 44 * scale, height: 24 * scale)
             .overlay {
                 Circle()
                     .fill(isOn ? Color.vOnInverse : Color.dynamic(light: .white, dark: UIColor(white: 0.83, alpha: 1)))
-                    .frame(width: 16, height: 16)
-                    .offset(x: isOn ? 10 : -10)
+                    .frame(width: 16 * scale, height: 16 * scale)
+                    .offset(x: (isOn ? 10 : -10) * scale)
             }
     }
 }
@@ -1146,7 +1148,8 @@ struct GenrePickerSheet: View {
 struct UploadSegment<Value: Hashable>: Identifiable {
     let value: Value
     let title: String
-    let icon: LucideIcon.Name
+    /// Optional — text-only segments (e.g. the public link's expiry).
+    var icon: LucideIcon.Name? = nil
     var id: Value { value }
 }
 
@@ -1156,6 +1159,9 @@ struct UploadSegment<Value: Hashable>: Identifiable {
 struct UploadSegmentedSwitch<Value: Hashable>: View {
     let segments: [UploadSegment<Value>]
     let selected: Value
+    /// Segment label font — semibold by default; lighter where it sits
+    /// under a regular-weight label (the public link's expiry).
+    var labelFont: Font = .appSubheadlineSemibold
     let onSelect: (Value) -> Void
 
     @Namespace private var thumb
@@ -1169,8 +1175,8 @@ struct UploadSegmentedSwitch<Value: Hashable>: View {
                     onSelect(segment.value)
                 } label: {
                     HStack(spacing: 6) {
-                        LucideIcon(segment.icon, .md)
-                        Text(segment.title).font(.appSubheadlineSemibold)
+                        if let icon = segment.icon { LucideIcon(icon, .md) }
+                        Text(segment.title).font(labelFont)
                     }
                     .foregroundStyle(on ? Color.vOnInverse : Color.vText)
                     .frame(maxWidth: .infinity)
@@ -1786,12 +1792,14 @@ struct ComposerRow: View {
 struct ComposerAddRow: View {
     let title: String
     var trailing: String? = nil
+    /// The circled glyph — "+" to add; a swap glyph where it replaces.
+    var icon: LucideIcon.Name = .plus
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                LucideIcon(.plus, .md)
+                LucideIcon(icon, .md)
                     .foregroundStyle(Color.vText)
                     .frame(width: 28, height: 28)
                     .background(Color.vControlActive, in: Circle())

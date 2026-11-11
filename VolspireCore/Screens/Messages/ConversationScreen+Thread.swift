@@ -69,7 +69,6 @@ struct ChatThread: View {
     /// The attach sheet (inline photo grid + Files).
     @State private var showAttachSheet = false
     /// Brief confirmation pill above the composer ("Saved to Photos").
-    @State private var savedNotice: String?
     /// A picked photo/file staged in the input bar — sent only when send is tapped.
     @State private var pendingAttachment: PendingAttachment?
     /// Audio attachment staged for "Add to Workspace" (drives the folder picker).
@@ -81,13 +80,22 @@ struct ChatThread: View {
     @State private var optionsMessage: ChatMessage?
     @State private var pendingReportMessage: ChatMessage?
     @State private var reportingMessage: ChatMessage?
+    /// The thread is scrolled within ~a screen of its top (drives auto-loading
+    /// earlier pages).
+    @State private var nearTop = false
+    /// The user has scrolled at least once — the open-at-bottom settle can
+    /// briefly read as "near top", which must not page in history by itself.
+    @State private var userScrolled = false
+    /// The thread's backing UIScrollView — keep-your-place on prepend sets its
+    /// offset directly (SwiftUI's ScrollPosition is ignored mid-fling).
+    @State private var threadScroll = EnclosingScrollView.Box()
 
     private let bottomAnchor = "thread-bottom"
 
     private var canSend: Bool {
         let hasText = !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return (hasText || pendingAttachment != nil) && !viewModel.isSending
-            && viewModel.collabRequestGate == nil
+            && viewModel.composerReady && viewModel.collabRequestGate == nil
     }
 
     var body: some View {
@@ -107,23 +115,6 @@ struct ChatThread: View {
         }
         .animation(.easeOut(duration: 0.25), value: viewModel.messages.isEmpty)
         .animation(.easeOut(duration: 0.25), value: viewModel.loadingState)
-        // "Saved to Photos" / "Saved" — a short pill just above the composer.
-        .overlay(alignment: .bottom) {
-            if let savedNotice {
-                HStack(spacing: 6) {
-                    LucideIcon(.check, .sm)
-                    Text(savedNotice).font(.appFootnoteSemibold)
-                }
-                .foregroundStyle(Color.vOnInverse)
-                .padding(.horizontal, 14)
-                .frame(height: 34)
-                .background(Color.vInverse, in: Capsule())
-                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-                .padding(.bottom, 12)
-                .transition(.opacity.combined(with: .scale(scale: 0.92)))
-            }
-        }
-        .animation(.smooth(duration: 0.25), value: savedNotice)
         .sheet(isPresented: $showAttachSheet) {
             // Each tile closes the sheet, then opens its picker once it's gone.
             AttachSheet(
@@ -140,13 +131,19 @@ struct ChatThread: View {
         .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { _, item in handlePhoto(item) }
         .safeAreaInset(edge: .bottom) {
-            // A gated thread swaps the composer for the reason it's closed —
-            // a disabled field with no explanation reads as a bug.
-            if let gate = viewModel.collabRequestGate {
-                gatedNotice(gate)
-            } else {
-                inputBar
+            // Nothing until the thread is known (see `composerReady`) — then
+            // a gated thread swaps the composer for the reason it's closed (a
+            // disabled field with no explanation reads as a bug).
+            Group {
+                if !viewModel.composerReady {
+                    Color.clear.frame(height: 0)
+                } else if let gate = viewModel.collabRequestGate {
+                    gatedNotice(gate).transition(.opacity)
+                } else {
+                    inputBar.transition(.opacity)
+                }
             }
+            .animation(.easeOut(duration: 0.2), value: viewModel.composerReady)
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -190,16 +187,16 @@ struct ChatThread: View {
     }
 
     /// Options for a held attachment — Download (photos → Photos, everything
-    /// else → Files), Add to Workspace (audio), Share, plus Report on the other
+    /// else → Files), Add to Workspace (audio), plus Report on the other
     /// person's messages (reports the message the attachment belongs to).
     private func attachmentActions(_ target: WorkspaceAttachmentTarget) -> [TrackOptionsSheet.Action] {
         var actions: [TrackOptionsSheet.Action] = []
         if target.isImage {
             actions.append(.init(icon: .download, title: "Save to Photos", subtitle: "Download it to your library",
                                  awaitsCompletion: true) {
-                if await AttachmentDownloads.saveToPhotos(from: target.url) {
+                if await AttachmentDownloads.saveToPhotos(from: target.url, name: target.name) {
                     Haptics.success()
-                    flashSaved("Saved to Photos")
+                    ToastCenter.shared.show("Saved to Photos")
                 } else {
                     viewModel.attachmentError = "Couldn't save the photo. Check Volspire's Photos access in Settings."
                 }
@@ -209,8 +206,16 @@ struct ChatThread: View {
                                  dismissesSheet: false) {
                 do {
                     let tmp = try await AttachmentDownloads.toTempFile(target.url, name: target.name)
-                    UIApplication.presentSaveToFiles(tmp)
+                    UIApplication.presentSaveToFiles(tmp) { saved in
+                        // Close the options sheet so the toast (root level) is visible.
+                        optionsTarget = nil
+                        if saved {
+                            Haptics.success()
+                            ToastCenter.shared.show("Saved to Files")
+                        }
+                    }
                 } catch {
+                    optionsTarget = nil
                     viewModel.attachmentError = "Couldn't download the file. Please try again."
                 }
             })
@@ -220,9 +225,6 @@ struct ChatThread: View {
                 workspaceTarget = target
             })
         }
-        actions.append(.init(icon: .share2, title: "Share", subtitle: "Send it on", dismissesSheet: false) {
-            await shareAttachment(target)
-        })
         if let msg = target.senderMessage, !msg.isFromMe {
             actions.append(.init(icon: .flag, title: "Report", subtitle: "Flag this message for review") {
                 // TrackOptionsSheet runs perform ~0.3s after dismissing, so setting
@@ -233,25 +235,6 @@ struct ChatThread: View {
         return actions
     }
 
-    /// Downloads the attachment to a temp file and presents the share sheet
-    /// (over the options sheet, which stays up — same pattern as track share).
-    private func shareAttachment(_ target: WorkspaceAttachmentTarget) async {
-        do {
-            let tmp = try await AttachmentDownloads.toTempFile(target.url, name: target.name)
-            UIApplication.presentActivitySheet([tmp])
-        } catch {
-            viewModel.attachmentError = "Couldn't download the file. Please try again."
-        }
-    }
-
-    /// Shows the confirmation pill for a moment.
-    private func flashSaved(_ text: String) {
-        savedNotice = text
-        Task {
-            try? await Task.sleep(for: .seconds(1.8))
-            if savedNotice == text { savedNotice = nil }
-        }
-    }
 
     private var emptyState: some View {
         InboxEmptyState(
@@ -267,13 +250,17 @@ struct ChatThread: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // Non-lazy: a page is 50 messages (more only when the user asks
-                // for earlier ones), and a LazyVStack doesn't render the bottom
+                // Non-lazy: a page is 50 messages (more only as the user scrolls
+                // back), and a LazyVStack doesn't render the bottom
                 // rows until scrolled — which makes the initial scroll-to-bottom
                 // silently no-op (opening blank).
                 VStack(spacing: 0) {
                     if viewModel.hasOlder {
-                        loadOlderButton(proxy)
+                        // Earlier pages load on their own as you scroll up —
+                        // this is just the "more above" spinner. Fixed height
+                        // in every state so it never shifts the thread.
+                        ProgressView()
+                            .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, msg in
                         let divider = shouldShowDivider(at: index)
@@ -291,9 +278,33 @@ struct ChatThread: View {
                 }
                 .padding(.horizontal, ViewConst.screenPaddings)
                 .padding(.vertical, 10)
+                .background(EnclosingScrollView(box: threadScroll))
             }
             // Opens already pinned to the latest message — no load-then-jump.
             .defaultScrollAnchor(.bottom)
+            // Keep your place when an earlier page is prepended: the first
+            // message changed in the SAME layout pass as the height (an
+            // onChange fires after layout — too late), so shift the offset by
+            // exactly the added height. Set on the UIScrollView itself, which
+            // also holds mid-fling (a fling carries on from the new spot).
+            .onScrollGeometryChange(for: ThreadScrollMetrics.self) { geo in
+                ThreadScrollMetrics(height: geo.contentSize.height, firstId: viewModel.messages.first?.id)
+            } action: { old, new in
+                guard old.firstId != nil, old.firstId != new.firstId,
+                      let sv = threadScroll.scrollView else { return }
+                let delta = new.height - old.height
+                guard delta != 0 else { return }
+                sv.contentOffset.y += delta
+            }
+            .onScrollPhaseChange { _, phase in
+                if phase == .interacting { userScrolled = true }
+            }
+            .onScrollGeometryChange(for: Bool.self) { geo in
+                geo.contentOffset.y + geo.contentInsets.top < geo.containerSize.height
+            } action: { _, isNear in
+                nearTop = isNear
+                loadOlderIfNeeded()
+            }
             .scrollDismissesKeyboard(.interactively)
             // Tap on inert space drops the keyboard (bubbles' own taps/long-
             // presses still win) — the app-wide behaviour.
@@ -317,33 +328,26 @@ struct ChatThread: View {
         }
     }
 
-    /// Loads the previous page, then re-pins to the message that was on top so
-    /// the reader's place doesn't jump.
-    private func loadOlderButton(_ proxy: ScrollViewProxy) -> some View {
-        Button {
-            let anchor = viewModel.messages.first?.id
-            Task {
-                await viewModel.loadOlder()
-                // The prepended rows must be laid out before the re-pin lands.
-                try? await Task.sleep(for: .milliseconds(50))
-                if let anchor { proxy.scrollTo(anchor, anchor: .top) }
-            }
-        } label: {
-            Group {
-                if viewModel.isLoadingOlder {
-                    ProgressView()
-                } else {
-                    Text("Load earlier messages")
-                        .font(.appFootnoteMedium)
-                        .foregroundStyle(Color.vText2)
-                }
-            }
-            .frame(maxWidth: .infinity, minHeight: 36)
-            .contentShape(Rectangle())
+    struct ThreadScrollMetrics: Equatable {
+        var height: CGFloat
+        var firstId: String?
+    }
+
+    /// Pages in earlier messages while the reader is near the top — and keeps
+    /// going if a short page still leaves them there. The prepend offset
+    /// compensation (messageList) holds their place.
+    private func loadOlderIfNeeded() {
+        guard nearTop, userScrolled, viewModel.hasOlder, !viewModel.isLoadingOlder else { return }
+        Task {
+            let before = viewModel.messages.count
+            await viewModel.loadOlder()
+            // A failed/empty page stops here (no retry loop while offline) —
+            // the next scroll toward the top tries again.
+            guard viewModel.messages.count > before else { return }
+            // Let the prepended rows lay out (updates nearTop) before re-checking.
+            try? await Task.sleep(for: .milliseconds(100))
+            loadOlderIfNeeded()
         }
-        .buttonStyle(.plain)
-        .disabled(viewModel.isLoadingOlder)
-        .padding(.top, 6)
     }
 
     private func timeDivider(_ date: Date) -> some View {
@@ -449,7 +453,7 @@ struct ChatThread: View {
     }
 
     /// The request's lifecycle rendered as a centered system-style message —
-    /// direction-aware wording for pending / accepted / declined (the actions
+    /// direction-aware wording for pending / accepted / declined / withdrawn (the actions
     /// themselves live in the conversation header).
     private func collabStatusMessage(_ msg: ChatMessage) -> some View {
         let status = msg.requestStatus ?? "pending"
@@ -462,6 +466,10 @@ struct ChatThread: View {
             msg.isFromMe
                 ? "@\(otherUsername) declined your collab request."
                 : "You declined the collab request."
+        case "withdrawn":
+            msg.isFromMe
+                ? "You withdrew your collab request."
+                : "@\(otherUsername) withdrew their collab request."
         default:
             msg.isFromMe
                 ? "Waiting for @\(otherUsername) to respond. Messaging unlocks once they accept."
@@ -475,6 +483,7 @@ struct ChatThread: View {
             switch status {
             case "accepted": PopMark(isOn: true, rest: .none, size: 18)
             case "rejected": PopMark(isOn: true, mark: .cross, rest: .none, tint: Color.vText3, size: 18)
+            case "withdrawn": LucideIcon(.circleMinus, .xs).foregroundStyle(Color.vText3)
             default: LucideIcon(.clock, .xs).foregroundStyle(Color.vText3)
             }
             Text(text)
@@ -589,10 +598,10 @@ struct ChatThread: View {
                 isFromMe: msg.isFromMe,
                 shape: bubbleShape(isFromMe: msg.isFromMe, tail: tail),
                 onTap: { url, frame in
-                    avatarPreview.present(url: url, sourceFrame: frame, circular: false)
+                    avatarPreview.present(url: url, sourceFrame: frame, circular: false, name: msg.attachmentName)
                 },
                 onLongPress: {
-                    // Hold a photo for Save to Photos / Share / Report.
+                    // Hold a photo for Save to Photos / Report.
                     guard let url = msg.attachmentURL else { return }
                     Haptics.impact(.medium)
                     optionsTarget = WorkspaceAttachmentTarget(
@@ -605,7 +614,7 @@ struct ChatThread: View {
                 // Don't play over the app's music — pause it when a voice note starts.
                 if playerController.state.isPlaying { playerController.onPlayPause() }
             }, onLongPress: {
-                // Hold the bubble for options (Add to Workspace / Share / Report).
+                // Hold the bubble for options (Add to Workspace / Report).
                 Haptics.impact(.medium)
                 optionsTarget = WorkspaceAttachmentTarget(
                     url: url, name: msg.attachmentName, type: msg.attachmentType, senderMessage: msg
@@ -614,7 +623,7 @@ struct ChatThread: View {
         } else {
             fileChip(msg)
                 .onLongPressGesture(minimumDuration: 0.35) {
-                    // Hold a file for Download / Share / Report.
+                    // Hold a file for Download / Report.
                     guard let url = msg.attachmentURL else { return }
                     Haptics.impact(.medium)
                     optionsTarget = WorkspaceAttachmentTarget(
@@ -901,7 +910,7 @@ private struct MessageOptionsSheet: View {
 /// Remembered image aspect ratios (by cache key), persisted across launches,
 /// so a photo seen once lays out at its real shape straight away — opening a
 /// conversation never shows bubbles resizing from square.
-@MainActor private enum ChatImageAspects {
+@MainActor enum ChatImageAspects {
     private static let defaultsKey = "volspire:chat-image-aspects"
     private static var byKey: [String: Double] =
         (UserDefaults.standard.dictionary(forKey: defaultsKey) as? [String: Double]) ?? [:]
@@ -1076,5 +1085,33 @@ private struct AttachSheet: View {
         }
         .buttonStyle(CardPress())
         .accessibilityLabel("\(title), \(caption)")
+    }
+}
+
+// MARK: - Backing scroll view
+
+/// Finds the UIScrollView behind a SwiftUI ScrollView (place it in the
+/// content's background) so its offset can be adjusted synchronously.
+struct EnclosingScrollView: UIViewRepresentable {
+    final class Box { weak var scrollView: UIScrollView? }
+    let box: Box
+
+    func makeUIView(context: Context) -> UIView {
+        let view = FinderView()
+        view.box = box
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+
+    private final class FinderView: UIView {
+        var box: Box?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            var v = superview
+            while let current = v, !(current is UIScrollView) { v = current.superview }
+            if let sv = v as? UIScrollView { box?.scrollView = sv }
+        }
     }
 }

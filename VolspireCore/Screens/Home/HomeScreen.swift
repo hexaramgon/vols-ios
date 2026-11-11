@@ -119,7 +119,7 @@ struct HomeScreen: View {
                 // Messages, Notifications, Search — far right, above the tabs
                 // (moved here from Workspace's and Library's headers).
                 // Two bubbles = conversations (the single bubble is Comments).
-                HeaderIconButton(icon: .messagesSquare, showDot: inboxStore.inboxHasUnread) {
+                HeaderIconButton(icon: .messagesSquare, showDot: inboxStore.unreadMessages > 0) {
                     router.navigateToMessages()
                 }
                 .accessibilityLabel("Messages")
@@ -153,9 +153,11 @@ struct HomeScreen: View {
         // Tapping the Home tab button while on Home: back to the top of the
         // current tab.
         .onChange(of: router.rootResetTick) { _, _ in
-            // Re-tapping Explore: search closed, back to the top.
+            // Re-tapping Explore: search closed, back to the Collab tab
+            // (from any other tab) and to its top.
             if showSearch { withAnimation(.easeOut(duration: 0.2)) { showSearch = false } }
-            scrollTopTicks[selectedTab, default: 0] += 1
+            if selectedTab != .collab { selectTab(.collab) }
+            scrollTopTicks[.collab, default: 0] += 1
             headerState.unfold()
         }
         // Each tab keeps its own scroll; the brand row shows on arrival.
@@ -382,20 +384,35 @@ struct ExploreHeaderBand<Actions: View>: View {
     private func tabButton(_ tab: ExploreTab) -> some View {
         let active = tab == selectedTab
         return Button { onSelect(tab) } label: {
-            Text(tab.label)
-                .font(active ? .appSubheadlineBold : .appSubheadlineMedium)
-                .foregroundStyle(active ? Color.vText : Color.vText3)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 16)
-                .overlay(alignment: .bottom) {
-                    if active {
-                        Capsule().fill(Color.vInverse).frame(width: 48, height: 4)
-                            .matchedGeometryEffect(id: "underline", in: underline)
-                    }
+            // Both weights stacked and crossfaded: the tab is always as wide
+            // as its BOLD label, so selecting one doesn't widen it and shove
+            // its neighbours sideways (a font-weight swap can't animate — it
+            // snapped while the row jiggled under the sliding underline).
+            ZStack {
+                Text(tab.label)
+                    .font(.appSubheadlineBold)
+                    .foregroundStyle(Color.vText)
+                    .opacity(active ? 1 : 0)
+                Text(tab.label)
+                    .font(.appSubheadlineMedium)
+                    .foregroundStyle(Color.vText3)
+                    .opacity(active ? 0 : 1)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+            .overlay(alignment: .bottom) {
+                if active {
+                    Capsule().fill(Color.vInverse).frame(width: 48, height: 4)
+                        .matchedGeometryEffect(id: "underline", in: underline)
                 }
-                .contentShape(.rect)
+            }
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        // One label for VoiceOver (the stacked copies would read twice).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(tab.label)
+        .accessibilityAddTraits(active ? [.isButton, .isSelected] : .isButton)
     }
 }
 

@@ -134,7 +134,9 @@ extension UploadTrackScreen {
                         UploadSegment(value: MediaSource.library, title: "Library", icon: .images),
                         UploadSegment(value: MediaSource.files, title: "Files", icon: .folderOpen),
                     ],
-                    selected: mediaSource
+                    selected: mediaSource,
+                    // Medium, not semibold — matches Trim / Browse beside it.
+                    labelFont: .appSubheadlineMedium
                 ) { source in
                     mediaSource = source
                     if source == .files {
@@ -183,15 +185,14 @@ extension UploadTrackScreen {
                             onBrowse: { showVideoPicker = true }
                         )
                     } else {
-                        Button { showAudioPicker = true } label: {
-                            CapsuleButtonLabel(
-                                icon: .folderOpen,
-                                title: viewModel.mediaAttached ? "Choose another file" : "Choose a file",
-                                style: .secondary, expands: true, iconSize: .md,
-                                height: CapsuleButtonLabel.heroHeight, font: .appSubheadlineSemibold, spacing: 8
-                            )
+                        // The pack composer's "Add files" row, in its card. With a
+                        // file attached it swaps it out instead.
+                        ComposerRowGroup {
+                            ComposerAddRow(
+                                title: viewModel.mediaAttached ? "Replace file" : "Choose a file",
+                                icon: viewModel.mediaAttached ? .arrowLeftRight : .plus
+                            ) { showAudioPicker = true }
                         }
-                        .buttonStyle(.plain)
                         .padding(.horizontal, 20)
                         Text("Audio (MP3, WAV, FLAC, AIFF) or a video file")
                             .font(.appFootnote)
@@ -202,6 +203,8 @@ extension UploadTrackScreen {
                 .padding(.top, 4)
                 .padding(.bottom, 24)
             }
+            // Files' short content shouldn't rubber-band (nothing to scroll).
+            .scrollBounceBehavior(.basedOnSize)
             // Dragging down the grid shrinks the pick (also after a pick
             // re-opened it mid-grid); reaching the top opens it again. Only
             // user scrolling counts — the pick resizing the viewport mustn't
@@ -213,8 +216,11 @@ extension UploadTrackScreen {
                 geo.contentOffset.y + geo.contentInsets.top
             } action: { oldY, newY in
                 // Only the user's own scrolling — content changes (switching
-                // to Files resets the offset) mustn't re-open it.
-                guard gridScrolling else { return }
+                // to Files resets the offset) mustn't re-open it. Library only:
+                // on Files a drag just stretched the short content past 24pt
+                // (collapse) and the bounce-back hit the top (expand) — two
+                // animated resizes per drag, the stutter.
+                guard gridScrolling, mediaSource == .library else { return }
                 if newY <= 8 {
                     setPickExpanded(true)
                 } else if newY - oldY > 1, newY > 24 {
@@ -275,9 +281,16 @@ extension UploadTrackScreen {
                 videoProcessingCard
             } else if let data = viewModel.videoData {
                 VStack(alignment: .leading, spacing: 8) {
-                    // Top-right, right under the Library / Files switch.
-                    videoModeToggle
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    // Right under the Library / Files switch: Trim far left,
+                    // Audio only far right.
+                    HStack(spacing: 12) {
+                        if viewModel.untrimmedVideoURL != nil,
+                           viewModel.untrimmedVideoDuration > VideoTrimModel.minLength * 2 {
+                            videoTrimButton
+                        }
+                        Spacer(minLength: 0)
+                        videoModeToggle
+                    }
                     // Audio-only videos preview as audio — matching what
                     // actually gets uploaded. Keyed by file ONLY: flipping
                     // the mode swaps the container in place.
@@ -289,7 +302,8 @@ extension UploadTrackScreen {
                                             if playerController.state.isPlaying { playerController.onPlayPause() }
                                         },
                                         maxVideoHeight: (UIScreen.size.height * 0.34).rounded())
-                    .id(viewModel.videoFileName)
+                    // A new trim is new bytes under the same name — rebuild.
+                    .id("\(viewModel.videoFileName ?? "")|\(trimKey)")
                 }
             }
         } else {
@@ -382,6 +396,34 @@ extension UploadTrackScreen {
         )
     }
 
+    /// Identity of the current trim, for keying the preview.
+    var trimKey: String {
+        viewModel.videoTrim.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "full"
+    }
+
+    /// Over an attached video, far left: a secondary capsule button that
+    /// opens the time-trim sheet. Shows the kept length once trimmed.
+    var videoTrimButton: some View {
+        let trimmed = viewModel.videoTrim
+        return Button {
+            showVideoTrim = true
+        } label: {
+            // The app's secondary capsule (as "Choose a file"); centred in a
+            // 44pt tap target.
+            CapsuleButtonLabel(
+                icon: .scissors,
+                title: trimmed.map { "Trim · \(VideoTrimSheet.time($0.upperBound - $0.lowerBound))" } ?? "Trim",
+                style: .secondary,
+                font: .appSubheadlineMedium
+            )
+            .monospacedDigit()
+            .frame(minHeight: 44)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(trimmed == nil ? "Trim video" : "Trim video, trimmed")
+    }
+
     /// Over an attached video, top-right: a compact "Audio only" + switch.
     /// Off keeps the video; on uploads only its sound (the preview below
     /// swaps to audio). Label and switch are one tap target.
@@ -395,7 +437,7 @@ extension UploadTrackScreen {
                 Text("Audio only")
                     .font(.appSubheadlineMedium)
                     .foregroundStyle(on ? Color.vText : Color.vText2)
-                UploadSwitch(isOn: on)
+                UploadSwitch(isOn: on, scale: 1.25)
             }
             .frame(minHeight: 44)
             .contentShape(.rect)

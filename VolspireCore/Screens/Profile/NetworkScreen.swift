@@ -82,7 +82,8 @@ struct NetworkScreen: View {
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, user in
                     if index > 0 { SettingsDivider() }
                     row(userId: user.userId, username: user.username, avatar: user.profileImageUrl) {
-                        SecondaryButton("Remove", size: .inline, expands: false) { confirmRemove(user) }
+                        SecondaryButton("Remove", size: .inline, expands: false,
+                                        labelColor: .vText) { confirmRemove(user) }
                     }
                     .staggeredAppear(index, in: "network.collaborators")
                 }
@@ -108,9 +109,10 @@ struct NetworkScreen: View {
                 ForEach(Array(followers.enumerated()), id: \.element.id) { index, user in
                     if index > 0 { SettingsDivider() }
                     row(userId: user.userId, username: user.username, avatar: user.profileImageUrl) {
-                        // Follow back; once following it's the grey, inactive
-                        // check (Spotlight / nearby list) — unfollow from their profile.
-                        FollowIconButton(userId: user.userId, fallback: user.isFollowing ?? false, size: .md, lockOnceFollowing: true)
+                        // The collaborators' "Remove" pill, as "Follow back";
+                        // once following it's a dimmed "Following" (unfollow
+                        // from their profile).
+                        FollowBackButton(userId: user.userId, fallback: user.isFollowing ?? false)
                     }
                     .staggeredAppear(index, in: "network.followers")
                 }
@@ -138,8 +140,9 @@ struct NetworkScreen: View {
                 HStack(spacing: 12) {
                     AvatarView(urlString: avatar, name: username, size: 32)
                     Text("@\(username ?? "user")")
-                        // Folder file rows' title style.
-                        .font(.appFont.fileTitle)
+                        // The shared row title (15m) — 1pt up from the
+                        // folder-file style it used.
+                        .font(.appFont.trackTitle)
                         .foregroundStyle(Color.vTextRow)
                         .lineLimit(1)
                     Spacer(minLength: 8)
@@ -178,5 +181,40 @@ struct NetworkScreen: View {
         loading = false
         // Let the first render land before removals animate.
         Task { @MainActor in settled = true }
+    }
+}
+
+/// A follower row's action, in the same grey inline pill as a collaborator's
+/// "Remove": "Follow back", then a dimmed, untappable "Following" (this list
+/// never unfollows — that's on their profile).
+private struct FollowBackButton: View {
+    let userId: String
+    let fallback: Bool
+    @Environment(SocialStore.self) private var social
+    @State private var inFlight = false
+
+    var body: some View {
+        let following = social.isFollowing(userId, fallback: fallback)
+        SecondaryButton(
+            following ? "Following" : "Follow back",
+            size: .inline,
+            expands: false,
+            busy: inFlight,
+            enabled: !following,
+            // Darker than the default pill label (ink 0.70 / vText4), to
+            // match the collaborators' "Remove".
+            labelColor: .vText,
+            disabledLabelColor: .vText3
+        ) {
+            guard !inFlight, !following else { return }
+            inFlight = true
+            Haptics.impact(.soft)
+            Task {
+                _ = await social.toggleFollow(userId: userId, currentlyFollowing: false)
+                inFlight = false
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: following)
+        .accessibilityLabel(following ? "Following" : "Follow back")
     }
 }

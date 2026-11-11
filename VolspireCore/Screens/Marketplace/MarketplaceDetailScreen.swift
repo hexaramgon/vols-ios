@@ -743,16 +743,10 @@ private extension MarketplaceDetailScreen {
         }
     }
 
-    /// Folder (free pack, signed in — links it into a workspace folder; Share
-    /// lives in the "…" menu, else Share), then Download.
+    /// Download, then Folder (free pack, signed in — links it into a
+    /// workspace folder; Share lives in the "…" menu, else Share).
     func packActions(compact: Bool) -> some View {
         HStack(spacing: 8) {
-            if freePackId != nil, dependencies.authManager.currentUserId != nil {
-                HeroCapsuleButton("Folder", icon: .folderPlus, primary: true, compact: compact) { showFolderPicker = true }
-                    .accessibilityLabel("Add to folder")
-            } else {
-                HeroCapsuleButton("Share", icon: .share2, compact: compact) { showShareSheet = true }
-            }
             if let packId = freePackId {
                 HeroCapsuleButton("Download", icon: .download, busy: isDownloadingPack, compact: compact) {
                     Task { await downloadFreePack(packId) }
@@ -760,6 +754,12 @@ private extension MarketplaceDetailScreen {
             } else if let id = creatorId {
                 // Paid (full marketplace only): checkout isn't wired.
                 HeroCapsuleButton("Creator", icon: .user, primary: true, compact: compact) { router.navigateToProfile(userId: id) }
+            }
+            if freePackId != nil, dependencies.authManager.currentUserId != nil {
+                HeroCapsuleButton("Folder", icon: .folderPlus, primary: true, compact: compact) { showFolderPicker = true }
+                    .accessibilityLabel("Add to folder")
+            } else {
+                HeroCapsuleButton("Share", icon: .share2, compact: compact) { showShareSheet = true }
             }
         }
         .fixedSize()
@@ -1459,7 +1459,8 @@ private extension MarketplaceDetailScreen {
     var performanceSection: some View {
         if case let .pack(p) = item {
             DashboardLinkCard(title: "Pack Analytics", subtitle: analyticsSubtitle, accentTile: true) {
-                router.navigateToPackAnalytics(packId: p.packId, packName: title)
+                router.navigateToPackAnalytics(packId: p.packId, packName: title,
+                                               coverURL: storage.resolveTrackUrl(coverPath))
             }
             .padding(.horizontal, 20)
         }

@@ -275,7 +275,10 @@ struct RootTabView: View {
         }
         // Unread dots + app badge refresh at every moment the counts can
         // change — one pipeline in InboxStore.
-        .task { await dependencies.inboxStore.refreshUnread() }
+        .task {
+            await dependencies.inboxStore.refreshUnread()
+            dependencies.inboxStore.startLiveUpdates()
+        }
         // Warm the library store once per session so bookmark glyphs are
         // correct on every surface — not just after the Library tab loads.
         .task { await dependencies.libraryStore.loadIfNeeded() }
@@ -297,7 +300,12 @@ struct RootTabView: View {
             Task { await dependencies.inboxStore.refreshUnread() }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await dependencies.inboxStore.refreshUnread() } }
+            if phase == .active {
+                Task { await dependencies.inboxStore.appBecameActive() }
+                dependencies.inboxStore.startLiveUpdates()
+            } else if phase == .background {
+                dependencies.inboxStore.stopLiveUpdates()
+            }
         }
         .task {
             await dependencies.socialStore.loadMyProfileIfNeeded()
@@ -498,10 +506,12 @@ struct RootTabView: View {
     private func tabLabel(for item: TabBarItem) -> some View {
         VStack(spacing: 3) {
             tabIcon(for: item)
-                // Unread dot on the Workspace tab — DMs OR notifications,
-                // reached from its header's Messages button.
+                // Unread dot on the Explore tab — DMs OR notifications; its
+                // header hosts both the Messages and bell buttons. (It sat on
+                // Workspace after those buttons moved out of Workspace's
+                // header, pointing at a tab with no way to the message.)
                 .overlay(alignment: .topTrailing) {
-                    if item == .workspace, dependencies.inboxStore.inboxHasUnread {
+                    if item == .home, dependencies.inboxStore.inboxHasUnread {
                         Circle()
                             .fill(Color.vUnread)
                             .frame(width: 8, height: 8)
@@ -585,10 +595,10 @@ private struct NewPostSheet: View {
         if FeatureFlags.marketplaceSurfaces {
             list.append(.init(id: "service", icon: .briefcase, title: "Service", caption: "Offer mixing, features and more"))
             list.append(.init(id: "sample_pack", icon: .package, title: "Pack",
-                              caption: "Sell samples or presets from Files or iCloud Drive"))
+                              caption: "Sell samples or presets"))
         } else if FeatureFlags.freePacks {
             list.append(.init(id: "sample_pack", icon: .package, title: "Pack",
-                              caption: "Free samples or presets from Files or iCloud Drive"))
+                              caption: "Share samples or presets"))
         }
         return list
     }

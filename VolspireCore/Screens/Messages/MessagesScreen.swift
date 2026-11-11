@@ -19,7 +19,6 @@ struct MessagesScreen: View {
     @Environment(InboxStore.self) private var inboxStore
     @Environment(\.dismiss) private var dismiss
     @Environment(Dependencies.self) private var dependencies
-    @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = MessagesScreenViewModel()
     @FocusState private var searchFocused: Bool
     /// The search field is open (from the header's search icon — Workspace's
@@ -67,15 +66,10 @@ struct MessagesScreen: View {
         }
         .task {
             viewModel.inbox = inboxStore
-            await inboxStore.loadConversationsIfNeeded()
+            await inboxStore.loadOrRevalidateConversations()
         }
-        // Returning from a thread needs NO list refetch anymore — the thread's
-        // event hooks patched the row (preview/order/read) in the store live.
-        .onChange(of: scenePhase) { _, phase in
-            // Foregrounding (e.g. opening the app from a message push) — refresh the
-            // list so the new conversation / message shows without a manual reload.
-            if phase == .active { Task { await inboxStore.refreshConversations() } }
-        }
+        // Foregrounding + pushes arriving in-app refresh the list in
+        // InboxStore itself (appBecameActive / .pushReceived).
     }
 
     // MARK: - Content
