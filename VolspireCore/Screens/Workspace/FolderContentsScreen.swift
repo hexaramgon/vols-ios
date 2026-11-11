@@ -931,6 +931,7 @@ struct FolderEmptyState: View {
 struct ManageMembersSheet: View {
     @Bindable var viewModel: FolderContentsViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(Router.self) private var router
     /// The member whose role sheet is open.
     @State private var roleTarget: ApiFolderMember?
     /// Both lists have landed — until then a skeleton holds the sheet's shape.
@@ -1099,7 +1100,7 @@ struct ManageMembersSheet: View {
     private static let pillWidth: CGFloat = 96
 
     private func inviteRow(_ user: ApiUserSummary) -> some View {
-        personRow(url: user.profileImageUrl, name: user.username, subtitle: "Collaborator") {
+        personRow(userId: user.userId, url: user.profileImageUrl, name: user.username, subtitle: "Collaborator") {
             if viewModel.memberActionId == user.userId {
                 ProgressView().controlSize(.small).tint(Color.vText)
                     .frame(width: Self.pillWidth)
@@ -1129,7 +1130,7 @@ struct ManageMembersSheet: View {
 
     private func memberRow(_ member: ApiFolderMember) -> some View {
         let isOwnerMember = member.role == "owner"
-        return personRow(url: member.profileImageUrl, name: member.username, subtitle: Self.roleBlurb(member.role)) {
+        return personRow(userId: member.userId, url: member.profileImageUrl, name: member.username, subtitle: Self.roleBlurb(member.role)) {
             if isOwnerMember {
                 // Same capsule as a role, just not tappable.
                 CapsuleButtonLabel(title: "Owner", style: .secondary, expands: true)
@@ -1201,21 +1202,35 @@ struct ManageMembersSheet: View {
 
     /// One person: avatar, name / subtitle in the shared row fonts, and a
     /// trailing control — the same flat row as the collab request's tracks.
+    /// Tapping the person (avatar / name) closes the sheet and opens their
+    /// profile; the trailing control keeps its own action.
     private func personRow(
-        url: String?, name: String?, subtitle: String,
+        userId: String, url: String?, name: String?, subtitle: String,
         @ViewBuilder trailing: () -> some View
     ) -> some View {
         HStack(spacing: 11) {
-            AvatarView(url: viewModel.avatarURL(url), name: name, size: 38)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name ?? "user").font(.appFont.trackTitle).foregroundStyle(Color.vTextRow).lineLimit(1)
-                Text(subtitle).font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
+            Button { openProfile(userId) } label: {
+                HStack(spacing: 11) {
+                    AvatarView(url: viewModel.avatarURL(url), name: name, size: 38)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name ?? "user").font(.appFont.trackTitle).foregroundStyle(Color.vTextRow).lineLimit(1)
+                        Text(subtitle).font(.appFont.trackSubtitle).foregroundStyle(Color.vText3).lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                }
+                .contentShape(.rect)
             }
-            Spacer(minLength: 8)
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens profile")
             trailing()
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
         .transition(.opacity.combined(with: .scale(scale: 0.97)))
+    }
+
+    private func openProfile(_ userId: String) {
+        dismiss()
+        router.navigateToProfile(userId: userId)
     }
 }
 
