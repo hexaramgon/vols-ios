@@ -9,8 +9,8 @@
 //    to remove), then a few quick options to toggle in one tap.
 //  - "Filters" opens a sheet with every option as a toggle chip. Choices are a
 //    draft until "Show N …" applies them; Reset clears the draft.
-//  - Listings and Marketplace only (`showsSaved`): a "Saved" chip leads the
-//    row and gets its own "Show" section in the sheet, sharing the one
+//  - Listings and Marketplace only (`showsSaved`): a "Saved" chip sits right
+//    after "Filters" (always left of "Clear all", on or off) and gets its own "Show" section in the sheet, sharing the one
 //    selection set (`FilterBar.savedId`). No other filter offers it.
 //  Multi-select throughout; an empty selection means "everything".
 //
@@ -50,15 +50,24 @@ struct FilterBar: View {
 
     @State private var showSheet = false
 
-    private var selectedOptions: [FilterOption] { (pinned + options).filter { selection.contains($0.id) } }
+    // Saved never moves: it sits right after Filters (left of Clear all) on
+    // or off — it used to jump between the active chips and the quick ones.
+    private var selectedOptions: [FilterOption] { options.filter { selection.contains($0.id) } }
     private var quickOptions: [FilterOption] {
-        (pinned + quick.compactMap { id in options.first { $0.id == id } }).filter { !selection.contains($0.id) }
+        quick.compactMap { id in options.first { $0.id == id } }.filter { !selection.contains($0.id) }
     }
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 filtersButton
+                ForEach(pinned) { o in
+                    if selection.contains(o.id) {
+                        activeChip(o)
+                    } else {
+                        FilterChip(o.label, icon: o.icon, isOn: false) { toggle(o.id) }
+                    }
+                }
                 if !selection.isEmpty { clearButton }
                 ForEach(selectedOptions) { o in activeChip(o) }
                 ForEach(quickOptions) { o in

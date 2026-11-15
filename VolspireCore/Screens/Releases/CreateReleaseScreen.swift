@@ -146,6 +146,10 @@ final class CreateReleaseViewModel {
     }
 
     func publish() async {
+        await ExtraBackgroundTime.run("Release upload") { await performPublish() }
+    }
+
+    private func performPublish() async {
         guard canPublish, !isPublishing, let library, let userId = auth.currentUserId else { return }
         isPublishing = true
         publishError = nil
@@ -169,46 +173,72 @@ final class CreateReleaseViewModel {
         }
         guard let releaseId else { return }
 
-        for index in rows.indices where rows[index].status != .done {
-            rows[index].status = .uploading
-            let row = rows[index]
-            do {
-                let trackId: String
-                if let existing = row.trackId {
-                    // Uploaded on an earlier attempt — only the add failed.
-                    trackId = existing
-                } else {
-                    let durationMs = await UploadTrackViewModel.readMediaDurationMs(fileURL: row.fileURL)
-                    // Memory-mapped: pages in as the upload reads it, so one
-                    // big file at a time never sits fully in memory.
-                    let mediaData = try Data(contentsOf: row.fileURL, options: .alwaysMapped)
-                    trackId = try await service.createTrackV2(
-                        userId: userId,
-                        title: row.title.trimmingCharacters(in: .whitespaces),
-                        description: nil,
-                        genre: genre,
-                        visibility: visibility,
-                        mediaData: mediaData,
-                        mediaFileName: row.fileName,
-                        isVideo: false,
-                        coverData: cover.data,
-                        coverFileName: cover.fileName,
-                        credits: [],
-                        tags: [],
-                        durationMs: durationMs,
-                        paidTiers: [],
-                        assets: [],
-                        lookingForCollab: false
-                    )
-                    rows[index].trackId = trackId
+        // Every remaining track starts at once: each is one background upload
+        // job that also adds the track to the release, so a publish cut off
+        // by the app closing still finishes (on the next launch at worst).
+        let pending = rows.indices.filter { rows[$0].status != .done }
+        for index in pending { rows[index].status = .uploading }
+        let genre = genre, visibility = visibility, service = service
+        let coverData = cover.data, coverFileName = cover.fileName
+        await withTaskGroup(of: (Int, Result<String, Error>).self) { group in
+            for index in pending {
+                let row = rows[index]
+                group.addTask {
+                    do {
+                        if let existing = row.trackId {
+                            // Created on an earlier attempt — only the add failed.
+                            try await service.addTracksToRelease(releaseId: releaseId, trackIds: [existing])
+                            return (index, .success(existing))
+                        }
+                        let durationMs = await UploadTrackViewModel.readMediaDurationMs(fileURL: row.fileURL)
+                        // Streamed from disk — never loaded into memory.
+                        let trackId = try await service.createTrackV2(
+                            userId: userId,
+                            title: row.title.trimmingCharacters(in: .whitespaces),
+                            description: nil,
+                            genre: genre,
+                            visibility: visibility,
+                            mediaFile: row.fileURL,
+                            mediaFileName: row.fileName,
+                            isVideo: false,
+                            coverData: coverData,
+                            coverFileName: coverFileName,
+                            credits: [],
+                            tags: [],
+                            durationMs: durationMs,
+                            paidTiers: [],
+                            assets: [],
+                            lookingForCollab: false,
+                            addToRelease: releaseId
+                        )
+                        return (index, .success(trackId))
+                    } catch {
+                        return (index, .failure(error))
+                    }
                 }
-                try await library.addTracks(toRelease: releaseId, trackIds: [trackId])
-                rows[index].status = .done
-            } catch {
-                debugLog("[CreateReleaseVM] track \(row.fileName): \(error)")
-                rows[index].status = .failed("Upload failed")
+            }
+            for await (index, result) in group {
+                switch result {
+                case .success(let trackId):
+                    rows[index].trackId = trackId
+                    rows[index].status = .done
+                case .failure(let error):
+                    debugLog("[CreateReleaseVM] track \(rows[index].fileName): \(error)")
+                    // The track exists; a retry only re-runs the add.
+                    if let notAdded = error as? SupabaseService.TrackNotAddedToRelease, !notAdded.trackId.isEmpty {
+                        rows[index].trackId = notAdded.trackId
+                    }
+                    rows[index].status = .failed("Upload failed")
+                }
             }
         }
+        // Uploads land in any order — put the release in the picked order.
+        if rows.allSatisfy({ $0.status == .done }) {
+            let order = rows.compactMap(\.trackId)
+            do { try await library.reorderRelease(releaseId: releaseId, trackIds: order) }
+            catch { debugLog("[CreateReleaseVM] reorder: \(error)") }
+        }
+        await library.refreshMyReleases()
 
         if rows.allSatisfy({ $0.status == .done }) {
             finished = true

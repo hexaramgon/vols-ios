@@ -359,6 +359,7 @@ extension LibraryScreen {
                     artwork: libraryStore.coverURL(for: t),
                     title: t.title,
                     artist: t.artist?.username,
+                    artistId: t.artist?.userId,
                     audioURL: StorageService().trackMediaURL(t.audioUrl)
                 )
             )
@@ -467,7 +468,7 @@ extension LibraryScreen {
     fileprivate func openList(_ title: String, tracks: [HomeTrack]) {
         let items = tracks.map { t in
             Media(id: MediaID(t.id),
-                  meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL))
+                  meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, artistId: t.artistId, audioURL: t.audioURL))
         }
         router.navigateToMedia(items: items, listMeta: .init(artwork: nil, title: title, subtitle: listBlurb(title)),
                                showSave: false, compactHeader: true)

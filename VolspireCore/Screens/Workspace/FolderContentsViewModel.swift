@@ -440,6 +440,24 @@ final class FolderContentsViewModel {
         pendingUploads.removeAll { $0.id == id }
     }
 
+    /// Folder files are shared as-is (and can sit behind a public link), so
+    /// only location/device metadata goes: images keep their exact format and
+    /// pixels, videos their streams. Other files (audio, docs, zips) and the
+    /// rare image/video ImageIO/AVFoundation can't rewrite upload unchanged —
+    /// a folder is a deliberate share, so a failed strip doesn't block it.
+    nonisolated private static func withoutLocation(_ data: Data, fileName: String, fileType: String) async -> Data {
+        if fileType.hasPrefix("image/") {
+            return await Task.detached(priority: .userInitiated) {
+                ImageSanitizer.removingLocation(data)
+            }.value ?? data
+        }
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        if ["mov", "mp4", "m4v"].contains(ext) {
+            return await VideoTranscoder.removingMetadata(data, fileExtension: ext) ?? data
+        }
+        return data
+    }
+
     private func upload(_ item: PendingUpload) async {
         do {
             // Read off the main thread — a big file's Data(contentsOf:) would
@@ -455,7 +473,7 @@ final class FolderContentsViewModel {
             try await supabaseService.uploadFile(
                 folderId: folderId,
                 fileName: item.fileName,
-                fileData: fileData,
+                fileData: await Self.withoutLocation(fileData, fileName: item.fileName, fileType: item.fileType),
                 fileType: item.fileType
             )
             // The real row replaces the optimistic one in a single update.

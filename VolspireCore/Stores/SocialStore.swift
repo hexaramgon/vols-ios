@@ -211,3 +211,32 @@ final class SocialStore {
 
     private func key(_ raw: String) -> String { raw.lowercased() }
 }
+
+// MARK: - Profile seeds
+
+/// Name + avatar of people the app has already shown (artist cards, search
+/// results, conversation rows, listing authors), by user id. A pushed
+/// profile's skeleton shows them on its first frame instead of blank bones
+/// while `get_user_profile` loads. Display-only: never used as profile data.
+@MainActor
+enum ProfileSeeds {
+    struct Seed: Equatable {
+        let username: String
+        let avatarURL: URL?
+    }
+
+    private static var byId: [String: Seed] = [:]
+
+    static func note(userId: String, username: String?, avatarURL: URL?) {
+        guard let username, !username.isEmpty else { return }
+        // Bounded — old entries just mean a plain skeleton once.
+        if byId.count > 1000 { byId.removeAll() }
+        byId[userId.lowercased()] = Seed(username: username, avatarURL: avatarURL)
+    }
+
+    static func seed(for userId: String) -> Seed? {
+        byId[userId.lowercased()]
+    }
+
+    static func clear() { byId.removeAll() }
+}

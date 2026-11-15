@@ -26,9 +26,9 @@ public final class VisualizerAudioTap {
         // format, which installTap crashes on. nil = use the node's format
         // at tap time instead.
         let valid = format.sampleRate > 0
-        if valid { sampleRate = Float(format.sampleRate) }
+        if valid { setSampleRate(Float(format.sampleRate)) }
         node.installTap(onBus: bus, bufferSize: AVAudioFrameCount(Self.frameSize), format: valid ? format : nil) { [weak self] buffer, _ in
-            self?.sampleRate = Float(buffer.format.sampleRate)
+            self?.setSampleRate(Float(buffer.format.sampleRate))
             self?.ingest(buffer)
         }
     }
@@ -40,7 +40,20 @@ public final class VisualizerAudioTap {
 
     /// Sample rate of the tapped node; the analyzer needs it to place the
     /// bass/mid/treb band boundaries. 44100 until a tap is installed.
-    public private(set) var sampleRate: Float = 44100
+    /// Written on the audio thread, read on the render thread — under `lock`.
+    public var sampleRate: Float {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedSampleRate
+    }
+
+    private var storedSampleRate: Float = 44100
+
+    private func setSampleRate(_ rate: Float) {
+        lock.lock()
+        storedSampleRate = rate
+        lock.unlock()
+    }
 
     /// Most recent 1024 mono samples in [-1, 1]. Safe from any thread.
     public func latestSamples() -> [Float] {

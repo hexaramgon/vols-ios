@@ -256,7 +256,8 @@ private struct ReleaseMenu: View {
                 artist: "@\(track.artist)",
                 actions: actions,
                 queueMedia: Media(id: MediaID(track.id), meta: MediaMeta(
-                    artwork: track.coverURL, title: track.title, artist: track.artist, audioURL: track.audioURL
+                    artwork: track.coverURL, title: track.title, artist: track.artist,
+                    artistId: track.artistId, audioURL: track.audioURL
                 ))
             )
             .sheetBackground()
@@ -288,7 +289,7 @@ private struct ReleaseMenu: View {
         Task {
             if playerController.state.currentMediaID?.value != track.id {
                 await dependencies.mediaPlayer.play(MediaID(track.id), queue: feed.map {
-                    Media(id: MediaID($0.id), meta: MediaMeta(artwork: $0.coverURL, title: $0.title, artist: $0.artist, audioURL: $0.audioURL))
+                    Media(id: MediaID($0.id), meta: MediaMeta(artwork: $0.coverURL, title: $0.title, artist: $0.artist, artistId: $0.artistId, audioURL: $0.audioURL))
                 })
             }
             playerController.pendingExpand = true

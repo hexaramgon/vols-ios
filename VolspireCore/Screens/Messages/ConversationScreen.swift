@@ -33,6 +33,11 @@ struct ConversationScreen: View {
     @Environment(ConversationState.self) private var conversationState
     @Environment(InboxStore.self) private var inboxStore
     @Environment(SocialStore.self) private var socialStore
+    @Environment(\.scenePhase) private var scenePhase
+    /// False while this thread's tab isn't the selected one (tabs stay mounted).
+    @Environment(\.isActiveRootTab) private var isActiveRootTab
+    /// Between onAppear and onDisappear (a page pushed over it disappears it).
+    @State private var isOnScreen = false
 
     let conversation: ActiveConversation
 
@@ -47,6 +52,20 @@ struct ConversationScreen: View {
     /// The other participant's profile (roles, location, collaborator status)
     /// for the header subtitle — `get_user_profile`, cached.
     @State private var otherProfile: ApiUserProfile?
+
+    /// On screen AND its tab is the active one — the thread reads incoming
+    /// messages, and pushes/banners for it are suppressed. Off either way
+    /// (pushed over, or another tab), it's an ordinary unread thread.
+    private func syncVisibility() {
+        let visible = isOnScreen && isActiveRootTab
+        viewModel?.isVisible = visible
+        let push = PushNotificationManager.shared
+        if visible {
+            push.visibleConversationId = conversation.convoId
+        } else if push.visibleConversationId == conversation.convoId {
+            push.visibleConversationId = nil
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -85,6 +104,7 @@ struct ConversationScreen: View {
                 vm.draft = inboxStore.draft(for: conversation.convoId)
             }
             viewModel = vm
+            syncVisibility()
             if otherProfile == nil, let otherId = conversation.otherUserId {
                 Task { otherProfile = try? await dependencies.supabaseService.getUserProfile(userId: otherId) }
             }
@@ -105,14 +125,25 @@ struct ConversationScreen: View {
         // pop (a hidden bar disables it) so back behaves like every other screen.
         .toolbar(.hidden, for: .navigationBar)
         .enableSwipeBack()
+        // Realtime: a new message in this thread merges at once (the poll in
+        // .task is only the fallback now).
+        .onChange(of: inboxStore.liveMessageCount(for: conversation.convoId)) { _, _ in
+            Task { await viewModel?.mergeLatestNow() }
+        }
+        // The realtime socket is closed while backgrounded — catch up on return
+        // instead of waiting for the fallback poll.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await viewModel?.mergeLatestNow() } }
+        }
+        .onChange(of: isActiveRootTab) { _, _ in syncVisibility() }
         .onAppear {
+            isOnScreen = true
+            syncVisibility()
             conversationState.activeConversation = conversation
-            PushNotificationManager.shared.visibleConversationId = conversation.convoId
         }
         .onDisappear {
-            if PushNotificationManager.shared.visibleConversationId == conversation.convoId {
-                PushNotificationManager.shared.visibleConversationId = nil
-            }
+            isOnScreen = false
+            syncVisibility()
             // Keep whatever was typed — restored on the next open of this thread.
             if let viewModel {
                 inboxStore.setDraft(viewModel.draft, for: conversation.convoId)

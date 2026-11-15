@@ -248,6 +248,9 @@ private struct SignInForm: View {
                         }
                     }
                 }
+                // One sign-in at a time — a second one racing the first would
+                // decide the account by whichever finishes last.
+                .disabled(isLoading)
 
                 AuthBottomLink(prompt: "New to Volspire?", action: "Create account", onTap: onRegister)
                     .padding(.top, 8)
@@ -292,9 +295,10 @@ private struct ForgotPasswordFlow: View {
         newPassword.count >= 8 && newPassword == confirmPassword
     }
 
-    /// Back once the code is verified is a dead end — the reset finishes
-    /// forward — so both the chevron and the swipe stop at step 2.
-    private var canGoBack: Bool { step < 2 }
+    /// Back on the new-password step cancels the reset: it signs out of the
+    /// recovery session (otherwise a failing save left no way out, and
+    /// killing the app logged in with the password unchanged).
+    private var canGoBack: Bool { true }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -319,6 +323,14 @@ private struct ForgotPasswordFlow: View {
     private func goBack() {
         if step == 0 {
             onClose()
+        } else if step == 2 {
+            Task {
+                isLoading = true
+                await authManager.signOut()
+                authManager.holdSessionForOnboarding = false
+                isLoading = false
+                onClose()
+            }
         } else {
             go(to: 0)
         }

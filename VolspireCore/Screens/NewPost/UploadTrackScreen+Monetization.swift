@@ -30,21 +30,21 @@ extension UploadTrackScreen {
                 label: "MP3",
                 hint: "Lossy audio. Included with Creator and Exclusive.",
                 fileName: viewModel.mp3FileName,
-                bytes: viewModel.mp3Data?.count
+                bytes: viewModel.mp3File?.bytes
             )
             assetRow(
                 kind: "wav",
                 label: "WAV",
                 hint: "Lossless, production-grade. Included with Creator, Pro, and Exclusive.",
                 fileName: viewModel.wavFileName,
-                bytes: viewModel.wavData?.count
+                bytes: viewModel.wavFile?.bytes
             )
             assetRow(
                 kind: "stems",
                 label: "Stems (zip)",
                 hint: "Multitrack zip for remixing. Included with Pro and Exclusive.",
                 fileName: viewModel.stemsFileName,
-                bytes: viewModel.stemsData?.count
+                bytes: viewModel.stemsFile?.bytes
             )
         }
     }

@@ -93,6 +93,14 @@ enum AttachmentDownloads {
         return tmp
     }
 
+    /// Sign-out: downloaded attachments (Share / Save to Files copies) are
+    /// the account's private files — nothing else ever deletes them.
+    static func removeAll() {
+        try? FileManager.default.removeItem(
+            at: FileManager.default.temporaryDirectory.appendingPathComponent("downloads", isDirectory: true)
+        )
+    }
+
     /// Last path component only, never empty or a dot-name.
     static func safeFileName(_ name: String?, fallback: String) -> String {
         let last = ((name ?? "") as NSString).lastPathComponent

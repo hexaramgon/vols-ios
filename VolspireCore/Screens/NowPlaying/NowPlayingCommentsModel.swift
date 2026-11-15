@@ -60,6 +60,10 @@ final class NowPlayingCommentsModel {
 
     /// The track / file the current `comments` belong to.
     private(set) var loadedKey: String?
+    /// The item the panel is showing now — the latest one asked for. A reply
+    /// (load, post, delete) that lands after a skip is for an older item and
+    /// must not touch this one's list or composer.
+    private var requestedKey: String?
     private let supabaseService = SupabaseService()
 
     var canSend: Bool {
@@ -70,23 +74,35 @@ final class NowPlayingCommentsModel {
     /// track (`trackId`). File comments take precedence when both are set.
     func loadComments(trackId: String?, fileId: String? = nil) async {
         let key = fileId ?? trackId
-        guard let key, key != loadedKey else { return }
+        guard let key else { return }
+        requestedKey = key
+        // Back on the item already listed (a skip there and back): its
+        // comments are up — an in-flight load for the other one is dropped.
+        guard key != loadedKey else { isLoading = false; return }
         isLoading = true
-        defer { isLoading = false }
         do {
-            if let fileId {
-                comments = try await supabaseService.getFileComments(fileId: fileId)
-            } else if let trackId {
-                comments = try await supabaseService.getTrackComments(trackId: trackId)
+            let rows = if let fileId {
+                try await supabaseService.getFileComments(fileId: fileId)
+            } else {
+                try await supabaseService.getTrackComments(trackId: key)
             }
+            guard requestedKey == key else { return }
+            comments = rows
             loadedKey = key
             loadFailed = false
+            isLoading = false
         } catch {
+            // A skip cancels this load (`.task(id:)`) — not a failure; the
+            // newer load owns the list and the spinner.
+            guard requestedKey == key, !error.isCancellation else { return }
             debugLog("[NowPlayingComments] load failed: \(error)")
             comments = []
             loadFailed = true
+            isLoading = false
         }
     }
+
+    private func isCurrent(_ key: String?) -> Bool { key != nil && key == requestedKey }
 
     func loadCurrentUser() async {
         guard currentUser == nil, let uid = supabaseService.currentUserId else { return }
@@ -137,6 +153,7 @@ final class NowPlayingCommentsModel {
             }
         }
         isSending = true
+        let key = fileId ?? trackId
 
         Task {
             defer { isSending = false }
@@ -147,10 +164,18 @@ final class NowPlayingCommentsModel {
                     try await supabaseService.postComment(content: content, trackId: trackId, parentId: parentId, timestampSeconds: timestamp, timestampEndSeconds: timestampEnd)
                     AnalyticsService.shared?.log(.commentPosted, trackId: trackId, metadata: ["kind": "track", "parent_id": parentId.map { .string($0) } ?? .null])
                 }
+                // Skipped meanwhile: that item reloads when it's next shown.
+                guard isCurrent(key) else { return }
                 loadedKey = nil
                 await loadComments(trackId: trackId, fileId: fileId)
             } catch {
                 debugLog("[NowPlayingComments] post failed: \(error)")
+                // Skipped meanwhile: don't put that item's draft into this
+                // one's composer.
+                guard isCurrent(key) else {
+                    ToastCenter.shared.show("Couldn't post your comment.", style: .error)
+                    return
+                }
                 sendError = "Couldn't post your comment. Please try again."
                 removeComment(tempId)
                 commentText = content
@@ -165,6 +190,7 @@ final class NowPlayingCommentsModel {
     func delete(commentId: String, trackId: String?, fileId: String? = nil) {
         guard trackId != nil || fileId != nil else { return }
         let snapshot = comments
+        let key = fileId ?? trackId
         removeComment(commentId)
         Task {
             do {
@@ -176,7 +202,7 @@ final class NowPlayingCommentsModel {
                 ToastCenter.shared.show("Comment deleted")
             } catch {
                 debugLog("[NowPlayingComments] delete failed: \(error)")
-                comments = snapshot
+                if isCurrent(key) { comments = snapshot }
                 ToastCenter.shared.show("Couldn't delete the comment — it's back.", style: .error)
             }
         }

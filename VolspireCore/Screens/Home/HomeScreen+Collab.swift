@@ -153,7 +153,7 @@ extension HomeScreen {
     private func openPopular(_ tracks: [HomeTrack]) {
         let items = tracks.map { t in
             Media(id: MediaID(t.id),
-                  meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL))
+                  meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, artistId: t.artistId, audioURL: t.audioURL))
         }
         router.navigateToMedia(
             items: items,
@@ -208,6 +208,7 @@ extension HomeScreen {
                 nearby
                 listingsPreview
                 SpotlightSection(artists: featured, index: $spotlightIndex, playback: playback,
+                                 selectedRoles: selectedRoles,
                                  onProfile: { router.navigateToProfile(userId: $0) })
                     .opacity(refilterOpacity)
             }
@@ -225,6 +226,7 @@ extension HomeScreen {
             onProfile: { router.navigateToProfile(userId: $0) },
             onSettings: { router.navigateToSettings() },
             dim: refilterOpacity,
+            selectedRoles: selectedRoles,
             filter: roleChips
         )
     }
@@ -296,6 +298,8 @@ private struct NearbySection<Filter: View>: View {
     let onSettings: () -> Void
     /// Results opacity while a role change refetches (the filter stays solid).
     let dim: Double
+    /// The role filter's picks — rows name the role(s) each artist matched.
+    let selectedRoles: Set<String>
     /// The role filter, right under the section title.
     let filter: Filter
 
@@ -485,9 +489,19 @@ private struct NearbySection<Filter: View>: View {
                 HStack(spacing: 12) {
                     AvatarView(url: a.artist.avatarURL, name: a.artist.username, size: 40)
                     VStack(alignment: .leading, spacing: 2) {
-                        let name = Text("@\(a.artist.username)").font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
-                        let role = Text(a.artist.tags.first.map { " · \($0)" } ?? "").font(.appSubheadline).foregroundStyle(Color.vText3)
-                        Text("\(name)\(role)").lineLimit(1)
+                        // Filtering by role: name the role(s) they matched as
+                        // a pill — their FIRST tag alone could be a different
+                        // role entirely.
+                        let matched = matchedRoles(a.artist.tags, selectedRoles)
+                        HStack(spacing: 6) {
+                            let name = Text("@\(a.artist.username)").font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
+                            let role = Text(matched.isEmpty ? (a.artist.tags.first.map { " · \($0)" } ?? "") : "")
+                                .font(.appSubheadline).foregroundStyle(Color.vText3)
+                            Text("\(name)\(role)").lineLimit(1)
+                            if let first = matched.first {
+                                MatchPill(label: matched.count > 1 ? "\(first) +\(matched.count - 1)" : first)
+                            }
+                        }
                         HStack(spacing: 4) {
                             LucideIcon(.mapPin, .xs)
                             Text(cityName(a.place.name) + (distance.map { " · \(Geo.formatDistance($0, unit: distanceUnit))" } ?? ""))
@@ -510,6 +524,16 @@ private struct NearbySection<Filter: View>: View {
 
     private func cityName(_ s: String) -> String {
         s.split(separator: ",").first.map(String.init) ?? s
+    }
+}
+
+/// The artist's tags that match the role filter (empty when no filter is on),
+/// in their own order and casing.
+private func matchedRoles(_ tags: [String], _ roles: Set<String>) -> [String] {
+    guard !roles.isEmpty else { return [] }
+    var seen = Set<String>()
+    return tags.filter { t in
+        roles.contains { $0.caseInsensitiveCompare(t) == .orderedSame } && seen.insert(t.lowercased()).inserted
     }
 }
 
@@ -621,6 +645,8 @@ private struct SpotlightSection: View {
     let artists: [ExploreArtistItem]
     @Binding var index: Int
     let playback: HomePlayback
+    /// The role filter's picks — cards name the role(s) each artist matched.
+    var selectedRoles: Set<String> = []
     let onProfile: (String) -> Void
 
     @Environment(Dependencies.self) private var dependencies
@@ -698,6 +724,14 @@ private struct SpotlightSection: View {
                         .monospacedDigit()
                         .lineLimit(1)
                         .padding(.top, 4)
+                    // Filtering by role: the role(s) that put them here.
+                    let matched = matchedRoles(a.tags, selectedRoles)
+                    if !matched.isEmpty {
+                        HStack(spacing: 6) {
+                            ForEach(matched.prefix(3), id: \.self) { MatchPill(label: $0) }
+                        }
+                        .padding(.top, 8)
+                    }
                 }
                 .contentShape(.rect)
             }
@@ -749,7 +783,10 @@ private struct SpotlightSection: View {
                 .shimmering()
             }
         }
-        .frame(height: tile + 38, alignment: .top)
+        // At least the cover + the title/plays lines (~43pt with their 8+1pt
+        // gaps — a fixed 38 was short, so the plays line ran into the card's
+        // bottom padding), and free to grow with larger text.
+        .frame(minHeight: tile + 44, alignment: .top)
     }
 
     private func trackTile(_ t: HomeTrack, siblings: [HomeTrack], size: CGFloat) -> some View {

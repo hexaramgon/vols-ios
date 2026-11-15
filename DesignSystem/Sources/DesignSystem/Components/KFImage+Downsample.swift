@@ -28,4 +28,16 @@ public extension KFImage {
         // configures a transition, which can animate the swap.
         return fade > 0 ? base.fade(duration: fade) : base
     }
+
+    /// Warms the cache with exactly the copy `downsampled(to: side)` asks for.
+    /// A bare `ImagePrefetcher(urls:)` would put full-size decodes (~4MB per
+    /// 1024px cover) in the memory cache and evict the small ones lists use.
+    static func prefetchDownsampled(_ urls: [URL], side: CGFloat) {
+        guard !urls.isEmpty else { return }
+        let px = max(1, side) * UIScreen.displayScale
+        ImagePrefetcher(
+            urls: urls,
+            options: [.processor(DownsamplingImageProcessor(size: CGSize(width: px, height: px))), .cacheOriginalImage]
+        ).start()
+    }
 }

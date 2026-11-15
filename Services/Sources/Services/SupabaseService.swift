@@ -8,6 +8,7 @@
 import Foundation
 import SharedUtilities
 import Supabase
+import UniformTypeIdentifiers
 
 // MARK: - Supabase Configuration
 
@@ -174,7 +175,9 @@ public final class SupabaseService: Sendable {
     }
 
     /// Fetches a user profile from Supabase RPC function (cached 5 min)
-    public func getUserProfile(userId: String) async throws -> ApiUserProfile {
+    /// `force` drops the cached copy first (a save needs the server's truth).
+    public func getUserProfile(userId: String, force: Bool = false) async throws -> ApiUserProfile {
+        if force { await cache.remove(APICache.key("get_user_profile", params: ["profile_id": userId])) }
         return try await cachedRpc("get_user_profile", params: ["profile_id": userId], ttl: CacheTTL.long)
     }
 
@@ -1011,12 +1014,13 @@ public final class SupabaseService: Sendable {
         /// "mp3", "wav", or "stems".
         public let kind: String
         public let fileName: String
-        public let data: Data
+        /// On disk — streamed up, never loaded (stems can be 500 MB).
+        public let fileURL: URL
 
-        public init(kind: String, fileName: String, data: Data) {
+        public init(kind: String, fileName: String, fileURL: URL) {
             self.kind = kind
             self.fileName = fileName
-            self.data = data
+            self.fileURL = fileURL
         }
     }
 
@@ -1054,7 +1058,7 @@ public final class SupabaseService: Sendable {
         description: String?,
         genre: String,
         visibility: String,
-        mediaData: Data,
+        mediaFile: URL,
         mediaFileName: String,
         isVideo: Bool,
         coverData: Data?,
@@ -1064,11 +1068,12 @@ public final class SupabaseService: Sendable {
         durationMs: Int?,
         paidTiers: [TrackTierInput],
         assets: [TrackAssetUpload],
-        lookingForCollab: Bool
+        lookingForCollab: Bool,
+        addToRelease releaseId: String? = nil
     ) async throws -> String {
         // Reject mislabeled / streaming-format media before anything uploads
         // (see MediaSniffer — the web runs the same check).
-        try MediaSniffer.validate(mediaData, fileName: mediaFileName)
+        try MediaSniffer.validate(fileAt: mediaFile, fileName: mediaFileName)
 
         let uid = userId.lowercased()
 
@@ -1077,23 +1082,27 @@ public final class SupabaseService: Sendable {
         }
 
         // The streamable master (audio, or the video for a visual track —
-        // p_has_visual flips) — always lands in p_audio_url.
-        let mediaPath = try await uploadToStorage(
-            .trackMedia,
-            path: "\(uid)/\(UUID().uuidString)_\(Self.safeStorageName(mediaFileName))",
-            data: mediaData,
-            contentType: isVideo ? "video/mp4" : Self.audioMimeType(forExt: Self.safeStorageExt(mediaFileName))
-        )
+        // p_has_visual flips) — always lands in p_audio_url. Paths are chosen
+        // up front, so the RPC params are complete before anything uploads.
+        let mediaPath = "\(uid)/\(UUID().uuidString)_\(Self.safeStorageName(mediaFileName))"
+        var files: [(BackgroundUploads.File, URL)] = [(
+            .init(bucket: .trackMedia, path: mediaPath,
+                  contentType: isVideo ? "video/mp4" : Self.audioMimeType(forExt: Self.safeStorageExt(mediaFileName))),
+            mediaFile
+        )]
 
         // Tier assets — private bucket, path starts with the uploader's id
         // to match the bucket's RLS policy.
         var assetPaths: [String: String] = [:]
         for asset in assets {
-            assetPaths[asset.kind] = try await uploadToStorage(
-                .trackAssets,
-                path: "\(uid)/\(UUID().uuidString)_\(asset.kind)_\(Self.safeStorageName(asset.fileName))",
-                data: asset.data
-            )
+            let path = "\(uid)/\(UUID().uuidString)_\(asset.kind)_\(Self.safeStorageName(asset.fileName))"
+            assetPaths[asset.kind] = path
+            files.append((.init(bucket: .trackAssets, path: path, contentType: Self.mimeType(forFileName: path)), asset.fileURL))
+        }
+        for (file, url) in files {
+            let max = StorageBucket(rawValue: file.bucket)?.maxUploadBytes ?? .max
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            guard size <= max else { throw SupabaseError.fileTooLarge(maxBytes: max) }
         }
 
         // Per-tier asset bundles — same kind mapping as the web form.
@@ -1140,11 +1149,43 @@ public final class SupabaseService: Sendable {
         struct Created: Decodable {
             let trackId: String
         }
-        let created: Created = try await performRpc("create_track_v2", params: params)
-        // The new track should appear on the author's profile immediately —
-        // drop the cached profile (5-min TTL) so the next visit refetches.
-        await invalidateProfile(userId: userId)
-        return created.trackId
+        // The files go up on the background session (they keep going if the
+        // app is backgrounded); the RPC runs once they've all landed.
+        // A release's track is added to it as part of the same job, so a
+        // publish cut off by the app closing still completes the release.
+        let followUp = try releaseId.map { id in
+            BackgroundUploads.FollowUp(
+                rpc: "add_tracks_to_release",
+                params: try rpcParamsData(["p_release_id": id]) ?? Data(),
+                idParam: "p_track_ids",
+                resultKey: "track_id"
+            )
+        }
+        let data: Data
+        do {
+            data = try await BackgroundUploads.shared.run(
+                userId: uid, label: title, rpc: "create_track_v2",
+                params: rpcParamsData(params) ?? Data(), files: files, then: followUp
+            )
+        } catch let failed as BackgroundUploads.FollowUpFailed {
+            let created = try? JSONDecoder.api.decode(Created.self, from: failed.result)
+            throw TrackNotAddedToRelease(trackId: created?.trackId ?? "", underlying: mapError(failed.underlying))
+        } catch {
+            throw mapError(error)
+        }
+        do {
+            return try JSONDecoder.api.decode(Created.self, from: data).trackId
+        } catch {
+            debugLog("[SupabaseService] create_track_v2 DECODE ERROR: \(error)")
+            throw mapError(error)
+        }
+    }
+
+    /// `createTrackV2(addToRelease:)`: the track was created, but adding it
+    /// to the release failed — retry only the add.
+    public struct TrackNotAddedToRelease: Error {
+        public let trackId: String
+        public let underlying: Error
     }
 
     // MARK: - Track edit / delete (web track-edit parity)
@@ -1518,6 +1559,12 @@ public final class SupabaseService: Sendable {
             .from(bucket)
             .upload(path, data: data, options: .init(contentType: contentType, upsert: upsert))
         return path
+    }
+
+    /// Same extension → MIME mapping the SDK uses for its uploads.
+    private static func mimeType(forFileName name: String) -> String {
+        UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType
+            ?? "application/octet-stream"
     }
 
     /// Shared cover-image upload (covers are JPEG re-encodes from the picker).
@@ -2038,6 +2085,34 @@ public final class SupabaseService: Sendable {
         return value
     }
 
+    // MARK: - Stale-first reads
+
+    /// The last cached response for a `cachedRpc` call, even past its TTL
+    /// (in-memory or the disk mirror); nil if it was never fetched or was
+    /// invalidated. A screen with nothing on it shows this at once, then runs
+    /// the normal fetch and swaps in place — instead of a skeleton for a full
+    /// round-trip. Never for read-state data (notifications, conversations,
+    /// unread counts), where an old copy would mislead.
+    public func lastCached<T: Decodable & Sendable>(_ functionName: String, params: [String: Any]? = nil) async -> T? {
+        await cache.stale(APICache.key(functionName, params: params))
+    }
+
+    public func lastHomeTracks() async -> HomeTracksResponse? {
+        await lastCached("get_home_tracks")
+    }
+
+    public func lastUserProfile(userId: String) async -> ApiUserProfile? {
+        await lastCached("get_user_profile", params: ["profile_id": userId])
+    }
+
+    public func lastUserLibrary() async -> [ApiUserLike]? {
+        await lastCached("get_user_library")
+    }
+
+    public func lastUserFolders() async -> [ApiUserFolder]? {
+        await lastCached("get_user_folders")
+    }
+
     // MARK: - Private
 
     /// Decodes an RPC's response into a DTO via the shared `.api` decoder.
@@ -2252,5 +2327,26 @@ public extension Error {
     /// use `localizedDescription`, which is friendly for `SupabaseError`.
     var serverRawDetail: String {
         (self as? SupabaseError)?.rawDetail ?? localizedDescription
+    }
+}
+
+// MARK: - Background uploads backend
+
+extension SupabaseService: BackgroundUploadBackend {
+    public func signedUploadURL(bucket: String, path: String) async throws -> URL {
+        do {
+            return try await client.storage.from(bucket)
+                .createSignedUploadURL(path: path, options: .init(upsert: true)).signedURL
+        } catch {
+            throw mapError(error)
+        }
+    }
+
+    /// The closing RPC of a background upload job. The new content should
+    /// show on the author's profile at once — drop its cached copy too.
+    public func runUploadRPC(_ name: String, params: Data) async throws -> Data {
+        let data = try await performRpcData(name, paramsData: params)
+        if let uid = currentUserId { await invalidateProfile(userId: uid) }
+        return data
     }
 }

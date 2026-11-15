@@ -63,6 +63,13 @@ struct ChatThread: View {
     @Environment(Router.self) private var router
 
     @FocusState private var inputFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
+    /// The latest message is in view (live, from the scroll geometry).
+    @State private var isAtBottom = true
+    /// Was at the latest message when the keyboard / app state started to
+    /// change — re-pinned once it settles. The keyboard's late return after
+    /// leaving the app left the thread a keyboard-height short of the bottom.
+    @State private var keepBottom = false
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var showFileImporter = false
@@ -321,8 +328,34 @@ struct ChatThread: View {
             // has settled first). `willShow` (not `willChangeFrame`) so it doesn't
             // fight the interactive drag-to-dismiss.
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                keepBottom = true
                 DispatchQueue.main.async {
                     withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+                }
+            }
+            // The scroll above runs before the keyboard's inset has settled
+            // (badly so when iOS restores the keyboard on returning to the
+            // app) — pin again once the keyboard is fully up / down.
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+                if keepBottom { scrollToBottom(proxy, animated: false) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                keepBottom = isAtBottom
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
+                if keepBottom { scrollToBottom(proxy, animated: false) }
+            }
+            .onScrollGeometryChange(for: Bool.self) { geo in
+                geo.visibleRect.maxY >= geo.contentSize.height - 40
+            } action: { _, atBottom in
+                isAtBottom = atBottom
+            }
+            // Leaving the app: remember whether the thread was at its latest
+            // message (before the keyboard goes); coming back, put it there.
+            .onChange(of: scenePhase) { old, phase in
+                if old == .active { keepBottom = isAtBottom }
+                if phase == .active, keepBottom {
+                    DispatchQueue.main.async { scrollToBottom(proxy, animated: false) }
                 }
             }
         }
@@ -568,6 +601,7 @@ struct ChatThread: View {
                 artwork: track.coverURL,
                 title: track.title,
                 artist: track.artist,
+                artistId: track.artistUserId,
                 audioURL: track.audioURL
             )
         )
@@ -923,6 +957,12 @@ private struct MessageOptionsSheet: View {
         if byKey.count > 600 { byKey.removeAll() }
         byKey[key] = Double(aspect)
         UserDefaults.standard.set(byKey, forKey: defaultsKey)
+    }
+
+    /// Sign-out: keys are the account's attachment storage paths.
+    static func clear() {
+        byKey = [:]
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
     }
 }
 

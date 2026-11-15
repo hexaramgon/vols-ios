@@ -48,8 +48,6 @@ final class LibraryStore {
 
     private(set) var loadState: LoadState = .idle
     private(set) var playlistsLoadState: LoadState = .idle
-    /// The last load got no response (used as an offline indicator).
-    private(set) var loadFailed = false
 
     /// How many saved tracks the Library page shows inline before "See all".
     /// Also bounds the cover prefetch so a large library doesn't warm hundreds
@@ -119,7 +117,6 @@ final class LibraryStore {
         releasesLoadedUsers = []
         loadState = .idle
         playlistsLoadState = .idle
-        loadFailed = false
     }
 
     // MARK: - Loads
@@ -128,9 +125,16 @@ final class LibraryStore {
     /// warm-up can all call this in the same frame and share one fetch.
     func loadIfNeeded() async {
         if let loadTask { return await loadTask.value }
-        guard case .idle = loadState else { return }
+        // An earlier failure (nothing on screen) retries on the next visit.
+        switch loadState {
+        case .idle, .error: break
+        case .loading, .loaded: return
+        }
         loadState = .loading
-        let task = Task { await fetchAll() }
+        let task = Task {
+            await showLastCached()
+            await fetchAll()
+        }
         loadTask = task
         await task.value
         loadTask = nil
@@ -146,13 +150,38 @@ final class LibraryStore {
         await fetchAll()
     }
 
+    /// Stale-first: the last saved list + uploads (even past their TTL, from
+    /// the cache's disk mirror) paint at once instead of the skeleton;
+    /// `fetchAll` then swaps fresh data in place. Only when BOTH are cached —
+    /// half a library would read as "empty section".
+    private func showLastCached() async {
+        guard let me = auth.currentUserId,
+              let saved = await service.lastUserLibrary(),
+              let profile = await service.lastUserProfile(userId: me),
+              // A cached empty library isn't shown — that waits for a live response.
+              !(saved.isEmpty && profile.tracks.isEmpty)
+        else { return }
+        applyLibrary(saved)
+        uploadedTracks = profile.tracks
+        prefetchCovers()
+        loadState = .loaded
+        // Rows are tappable now — register their media before the refresh lands.
+        for track in saved { await mediaState?.addTrack(media(for: track)) }
+        for track in profile.tracks { await mediaState?.addTrack(media(upload: track)) }
+    }
+
     private func fetchAll() async {
         // Concurrent so first paint waits on max(RTT), not the sum.
         async let savedOk = fetchSavedTracks()
         async let uploadsOk = fetchUploads()
         let (saved, uploads) = await (savedOk, uploadsOk)
-        loadFailed = !saved || !uploads
-        loadState = .loaded
+        // A failed half with nothing (not even the stale copy) on screen is
+        // an error, never an empty library — `loadIfNeeded` retries it.
+        if saved && uploads || loadState == .loaded {
+            loadState = .loaded
+        } else {
+            loadState = .error("Couldn't load your library")
+        }
     }
 
     private func fetchSavedTracks() async -> Bool {
@@ -436,6 +465,7 @@ final class LibraryStore {
                 artwork: coverURL(for: track),
                 title: track.title,
                 artist: track.artist?.username,
+                artistId: track.artist?.userId,
                 audioURL: storage.trackMediaURL(track.audioUrl)
             )
         )
@@ -460,8 +490,8 @@ final class LibraryStore {
     /// out of sync with the section's slide.
     private func prefetchCovers() {
         let urls = savedTracks.prefix(savedLimit).compactMap { coverURL(for: $0) }
-        guard !urls.isEmpty else { return }
-        ImagePrefetcher(urls: Array(Set(urls))).start()
+        // TrackListRow's default 50pt cover — the exact copy the rows ask for.
+        ArtworkView.prefetch(Array(Set(urls)), side: 50)
     }
 
     // MARK: - Releases
@@ -504,7 +534,7 @@ final class LibraryStore {
         if releaseFetchTokens[k] == token { releaseTasks[k] = nil }
     }
 
-    private func refreshMyReleases() async {
+    func refreshMyReleases() async {
         guard let me = auth.currentUserId else { return }
         await loadReleases(userId: me, fresh: true)
     }

@@ -255,7 +255,7 @@ final class PlayerController {
                 await mediaState?.addTrack(
                     Media(
                         id: MediaID(item.mediaId),
-                        meta: MediaMeta(artwork: item.coverURL, title: item.title, artist: item.artist, audioURL: item.audioURL)
+                        meta: MediaMeta(artwork: item.coverURL, title: item.title, artist: item.artist, artistId: item.artistUserId, audioURL: item.audioURL)
                     )
                 )
             }
@@ -394,7 +394,7 @@ private extension PlayerController {
             }
             await mediaState?.addTrack(Media(id: id, meta: MediaMeta(
                 artwork: meta.artwork, title: meta.title, subtitle: meta.subtitle,
-                description: meta.description, artist: meta.artist, genre: meta.genre,
+                description: meta.description, artist: meta.artist, artistId: meta.artistId, genre: meta.genre,
                 audioURL: freshURL, duration: meta.duration, timestamp: meta.timestamp
             )))
             player?.skip(to: id)
@@ -744,6 +744,20 @@ extension PlayerController {
 
     func removeFromQueue(_ id: MediaID) {
         player?.removeFromQueue(id)
+    }
+
+    /// Drops every queued track by a (just-blocked) artist. Matches the
+    /// artist id when the item carries one, else the username (release and
+    /// playlist rows only come with a username).
+    func removeQueuedTracks(byArtist userId: String, username: String) {
+        guard let player else { return }
+        let uid = userId.lowercased(), name = username.lowercased()
+        let theirs = player.items.filter { id in
+            guard let meta = meta(for: id) else { return false }
+            if let artistId = meta.artistId { return artistId.lowercased() == uid }
+            return !name.isEmpty && meta.artist?.lowercased() == name
+        }
+        for id in theirs { player.removeFromQueue(id) }
     }
 
     func clearUpNext() {

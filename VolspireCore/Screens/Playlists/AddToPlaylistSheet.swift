@@ -30,6 +30,9 @@ struct AddToPlaylistSheet: View {
     @State private var addingId: String?
     @State private var addedIds: Set<String> = []
     @State private var errorText: String?
+    /// Couldn't learn which playlists already hold the track — unchecked rows
+    /// would be a guess (and re-adding drifts counts), so show Try again.
+    @State private var membershipFailed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -51,23 +54,37 @@ struct AddToPlaylistSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .presentationDetents([.medium, .large])
         .sheetBackground(alwaysDark: alwaysDark)
-        .task {
-            // Load the playlists and which ones already contain this track in
-            // parallel, so every row's check is accurate on open (matches the web
-            // app's `get_playlists_for_track`), not just the one we arrived from.
-            async let playlistsLoad: () = libraryStore.loadPlaylistsIfNeeded()
-            async let memberResult = service.getPlaylistsForTrack(trackId: trackId)
-            _ = await playlistsLoad
-            var seed = Set((try? await memberResult) ?? [])
+        .task { await load() }
+    }
+
+    /// Loads the playlists and which ones already contain this track in
+    /// parallel, so every row's check is accurate on open (matches the web
+    /// app's `get_playlists_for_track`), not just the one we arrived from.
+    private func load() async {
+        loaded = false
+        membershipFailed = false
+        async let playlistsLoad: () = libraryStore.loadPlaylistsIfNeeded()
+        async let memberResult = service.getPlaylistsForTrack(trackId: trackId)
+        _ = await playlistsLoad
+        do {
+            var seed = Set(try await memberResult)
             if let currentPlaylistId { seed.insert(currentPlaylistId) }
             addedIds = seed
-            loaded = true
+        } catch {
+            guard !error.isCancellation else { return }
+            membershipFailed = true
         }
+        loaded = true
     }
 
     @ViewBuilder
     private var content: some View {
-        if !loaded {
+        if loaded, membershipFailed {
+            LoadErrorView(icon: .listMusic, title: "Couldn't load your playlists") {
+                Task { await load() }
+            }
+            .padding(.top, 24)
+        } else if !loaded {
             ProgressView().tint(Color.vText2)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {

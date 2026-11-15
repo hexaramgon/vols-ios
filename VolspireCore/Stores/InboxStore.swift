@@ -105,6 +105,7 @@ final class InboxStore {
     static let pageSize = 40
     /// Unread counts from `get_unread_counts` — the only fetch path for them.
     private(set) var unreadMessages = 0
+    private var unreadGeneration = 0
     private(set) var unreadNotifications = 0
     /// The realtime listener (foreground only) and its open subscription.
     private var liveTask: Task<Void, Never>?
@@ -166,6 +167,7 @@ final class InboxStore {
         unreadNotifications = 0
         stopLiveUpdates()
         draftsByConvo = [:]
+        liveMessageCounts = [:]
     }
 
     // MARK: - Conversation list
@@ -257,6 +259,12 @@ final class InboxStore {
             if olderKept.isEmpty { hasMoreConversations = rows.count == Self.pageSize }
             conversations = (page + olderKept)
                 .sorted { ($0.lastMessageAt ?? .distantPast) > ($1.lastMessageAt ?? .distantPast) }
+            // The open thread reads what arrives; a list read on the server
+            // before its mark-read would otherwise re-dot its row.
+            if let visible = PushNotificationManager.shared.visibleConversationId.map(key),
+               let i = conversations.firstIndex(where: { key($0.id) == visible }) {
+                conversations[i].unreadCount = 0
+            }
             loadState = .loaded
         } catch {
             debugLog("[InboxStore] conversations load: \(error)")
@@ -270,7 +278,13 @@ final class InboxStore {
     /// `get_unread_counts` path (previously fetched independently by the tab
     /// bar, the badge refresher, and per-screen counters).
     func refreshUnread(force: Bool = false) async {
-        guard let counts = try? await service.getUnreadCounts(force: force) else { return }
+        unreadGeneration += 1
+        let generation = unreadGeneration
+        guard let counts = try? await service.getUnreadCounts(force: force),
+              // Newest request wins: a live message's count, read before the
+              // open thread's mark-read, can land after its refresh and
+              // bring the dot back.
+              generation == unreadGeneration else { return }
         unreadMessages = counts.messages
         unreadNotifications = counts.notifications
         PushNotificationManager.shared.setBadge(counts.notifications + counts.messages)
@@ -330,6 +344,8 @@ final class InboxStore {
     private func handle(_ event: LiveEvent) async {
         switch event {
         case .message(let convoId, _):
+            // First, so an open thread merges the message right away.
+            liveMessageCounts[key(convoId), default: 0] += 1
             async let unread: Void = refreshUnread(force: true)
             await refreshConversations()
             await unread
@@ -451,11 +467,24 @@ final class InboxStore {
 
     private func key(_ raw: String) -> String { raw.lowercased() }
 
+    /// Bumped for each realtime `new_message`, per conversation. An open
+    /// thread watches its own count and merges immediately — its poll is now
+    /// only the fallback for missed events and request-status flips.
+    private var liveMessageCounts: [String: Int] = [:]
+
+    func liveMessageCount(for convoId: String) -> Int {
+        liveMessageCounts[key(convoId)] ?? 0
+    }
+
     // MARK: - Row mapping (from `get_user_conversations`)
 
     private static func map(_ c: ApiConversation, me: String?) -> ConversationItem {
         // Case-insensitive: Postgres UUIDs are lowercase, some SDK paths uppercase.
         let fromMe = me != nil && c.lastMessageUserId?.lowercased() == me?.lowercased()
+        if let other = c.otherUserId {
+            ProfileSeeds.note(userId: other, username: c.otherUsername,
+                              avatarURL: c.otherProfileImageUrl.flatMap { URL(string: $0) })
+        }
         return ConversationItem(
             id: c.convoId,
             otherUserId: c.otherUserId,

@@ -97,7 +97,9 @@ final class ReleaseDetailViewModel {
         }
     }
 
-    func addTracks(_ trackIds: [String]) async {
+    /// Returns whether the add went through (the sheet only checks it then).
+    @discardableResult
+    func addTracks(_ trackIds: [String]) async -> Bool {
         await run { try await $0.addTracks(toRelease: self.releaseId, trackIds: trackIds) }
     }
 
@@ -149,15 +151,18 @@ final class ReleaseDetailViewModel {
 
     /// Runs a store mutation, then reloads this page; a failure surfaces as
     /// the page's error banner.
-    private func run(_ mutation: (LibraryStore) async throws -> Void) async {
-        guard let library else { return }
+    @discardableResult
+    private func run(_ mutation: (LibraryStore) async throws -> Void) async -> Bool {
+        guard let library else { return false }
         actionError = nil
         do {
             try await mutation(library)
             await load()
+            return true
         } catch {
             debugLog("[ReleaseDetailVM] mutation: \(error)")
             actionError = "Couldn't update the release. Please try again."
+            return false
         }
     }
 
@@ -405,11 +410,13 @@ struct ReleaseReorderSheet: View {
 struct ReleaseAddTracksSheet: View {
     /// Lowercased ids already in the release — hidden.
     let existingIds: Set<String>
-    let onAdd: ([String]) async -> Void
+    /// Returns whether the add succeeded.
+    let onAdd: ([String]) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
     @Environment(LibraryStore.self) private var libraryStore
     @State private var addingId: String?
+    @State private var addFailed = false
     @State private var addedIds: Set<String> = []
 
     private let storage = StorageService()
@@ -422,12 +429,22 @@ struct ReleaseAddTracksSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             SheetHeader(icon: .listMusic, title: "Add tracks", subtitle: "Add from your uploads") { dismiss() }
 
+            if addFailed {
+                ErrorBanner("Couldn't add that track. Please try again.")
+                    .padding(.horizontal, 18)
+                    .padding(.top, 12)
+            }
+
             if candidates.isEmpty {
                 switch libraryStore.loadState {
                 case .idle, .loading:
                     ProgressView().tint(Color.vText2)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .loaded, .error:
+                case .error:
+                    LoadErrorView(icon: .music, title: "Couldn't load your uploads") {
+                        Task { await libraryStore.refresh() }
+                    }
+                case .loaded:
                     EmptyStateView(
                         icon: .music,
                         title: libraryStore.uploadedTracks.isEmpty ? "No uploads yet" : "Everything's already here",
@@ -481,9 +498,13 @@ struct ReleaseAddTracksSheet: View {
     private func add(_ track: ApiProfileTrack) async {
         guard addingId == nil, !addedIds.contains(track.id) else { return }
         addingId = track.id
-        await onAdd([track.id])
-        addedIds.insert(track.id)
-        Haptics.impact(.soft)
+        addFailed = false
+        if await onAdd([track.id]) {
+            addedIds.insert(track.id)
+            Haptics.impact(.soft)
+        } else {
+            addFailed = true
+        }
         addingId = nil
     }
 }

@@ -107,6 +107,60 @@ struct TrackFilePrefill: Hashable, Sendable {
     let isVideo: Bool
 }
 
+/// A picked file staged on disk for the upload form. Uploads stream from
+/// it; nothing is held in memory (a stems zip can be 500 MB).
+struct StagedFile: Equatable {
+    let url: URL
+    let bytes: Int
+
+    init(_ url: URL) {
+        self.url = url
+        bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    }
+}
+
+/// Asks iOS for its few extra seconds (~30) of background time, so leaving
+/// the app mid-upload doesn't suspend it at once. A stopgap: a long upload
+/// still dies when the time runs out (a background URLSession is the fix).
+@MainActor
+enum ExtraBackgroundTime {
+    private final class Token: @unchecked Sendable {
+        var id = UIBackgroundTaskIdentifier.invalid
+    }
+
+    static func run(_ name: String, _ work: () async -> Void) async {
+        let token = Token()
+        token.id = UIApplication.shared.beginBackgroundTask(withName: name) {
+            // Out of time: the work is suspended with the app.
+            UIApplication.shared.endBackgroundTask(token.id)
+            token.id = .invalid
+        }
+        await work()
+        if token.id != .invalid {
+            UIApplication.shared.endBackgroundTask(token.id)
+            token.id = .invalid
+        }
+    }
+}
+
+/// The upload form's staged files. Each is deleted when it's replaced or
+/// cleared; whatever's left goes when the form does (published, dismissed).
+private final class StagedFileBin {
+    private var urls: Set<URL> = []
+
+    func keep(_ url: URL) { urls.insert(url) }
+
+    func discard(_ url: URL?) {
+        guard let url else { return }
+        urls.remove(url)
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    deinit {
+        for url in urls { try? FileManager.default.removeItem(at: url) }
+    }
+}
+
 @MainActor
 @Observable
 final class UploadTrackViewModel {
@@ -117,12 +171,15 @@ final class UploadTrackViewModel {
     var mediaType: UploadMediaType = .video
 
     // Public preview (the streamable master)
-    var audioData: Data?
+    var audioFile: StagedFile?
     var audioFileName: String?
     /// Why the last picked audio file was rejected (shown under the picker).
     var audioFileError: String?
-    var videoData: Data?
+    /// The video that gets uploaded: the prepared clip, or its trim.
+    var videoFile: StagedFile?
     var videoFileName: String?
+    /// Why the last picked video couldn't be attached (shown in the pick area).
+    var videoFileError: String?
     /// When a video is attached, upload only its extracted audio (as an audio
     /// track) instead of the full video. Off by default (keep the video).
     var videoAudioOnly = false
@@ -162,12 +219,23 @@ final class UploadTrackViewModel {
     private var collabFieldFocused = false
 
     // Buyer-download assets, uploaded once and bundled per tier.
-    var mp3Data: Data?
+    var mp3File: StagedFile?
     var mp3FileName: String?
-    var wavData: Data?
+    var wavFile: StagedFile?
     var wavFileName: String?
-    var stemsData: Data?
+    var stemsFile: StagedFile?
     var stemsFileName: String?
+
+    @ObservationIgnored private let bin = StagedFileBin()
+
+    /// Swaps a staged file: deletes `old` (unless it's the new one, or the
+    /// untrimmed clip Trim still cuts from) and takes ownership of `new`.
+    private func replace(_ old: StagedFile?, with new: URL?) -> StagedFile? {
+        if let old, old.url != new, old.url != untrimmedVideoURL { bin.discard(old.url) }
+        guard let new else { return nil }
+        bin.keep(new)
+        return StagedFile(new)
+    }
 
     // Tiers — free is always on.
     var tierEnabled: [TrackTier: Bool] = [.free: true, .creator: false, .pro: false, .exclusive: false]
@@ -183,20 +251,20 @@ final class UploadTrackViewModel {
     // MARK: Validation (mirrors web isValid / tierValidation)
 
     var tierValidation: String? {
-        if tierEnabled[.creator] == true, mp3Data == nil, wavData == nil {
+        if tierEnabled[.creator] == true, mp3File == nil, wavFile == nil {
             return "Creator tier needs at least one of MP3 or WAV"
         }
-        if tierEnabled[.pro] == true, wavData == nil || stemsData == nil {
+        if tierEnabled[.pro] == true, wavFile == nil || stemsFile == nil {
             return "Pro tier needs WAV + stems"
         }
-        if tierEnabled[.exclusive] == true, wavData == nil || stemsData == nil {
+        if tierEnabled[.exclusive] == true, wavFile == nil || stemsFile == nil {
             return "Exclusive tier needs WAV + stems"
         }
         return nil
     }
 
     var mediaAttached: Bool {
-        mediaType == .audio ? audioData != nil : videoData != nil
+        mediaType == .audio ? audioFile != nil : videoFile != nil
     }
 
     var canUpload: Bool {
@@ -220,9 +288,9 @@ final class UploadTrackViewModel {
     func includedAssets(for tier: TrackTier) -> [String] {
         tier.assetKinds.filter { kind in
             switch kind {
-            case "mp3": mp3Data != nil
-            case "wav": wavData != nil
-            default: stemsData != nil
+            case "mp3": mp3File != nil
+            case "wav": wavFile != nil
+            default: stemsFile != nil
             }
         }
     }
@@ -318,18 +386,18 @@ final class UploadTrackViewModel {
         switch result {
         case .success(let url):
             do {
-                guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.postUploads.maxUploadBytes) else { return }
+                // Copied to temp (on disk, not memory); uploads stream from it.
+                guard let staged = try SecurityScopedFile.stage(url, maxBytes: StorageBucket.trackMedia.maxUploadBytes) else { return }
                 // Validate on pick, not just on Publish — a file that can't be
                 // published should bounce before the rest of the form is filled.
                 // createTrackV2 re-runs the check as a backstop.
-                do {
-                    try MediaSniffer.validate(data, fileName: url.lastPathComponent)
-                } catch {
-                    audioFileError = error.localizedDescription
+                if let error = Self.mediaProblem(staged, fileName: url.lastPathComponent) {
+                    try? FileManager.default.removeItem(at: staged)
+                    audioFileError = error
                     return
                 }
                 audioFileError = nil
-                audioData = data
+                audioFile = replace(audioFile, with: staged)
                 audioFileName = url.lastPathComponent
             } catch let error as FileTooLargeError {
                 audioFileError = error.localizedDescription
@@ -354,44 +422,46 @@ final class UploadTrackViewModel {
             return
         }
         mediaType = .audio
-        Task {
-            // Off the main thread — a long WAV is tens of MB.
-            let url = prefill.localURL
-            let data = await Task.detached(priority: .userInitiated) {
-                defer { try? FileManager.default.removeItem(at: url) }
-                return try? Data(contentsOf: url)
-            }.value
-            guard let data else {
-                audioFileError = "Couldn't read that file."
-                return
-            }
-            do {
-                try MediaSniffer.validate(data, fileName: prefill.fileName)
-            } catch {
-                audioFileError = error.localizedDescription
-                return
-            }
-            audioFileError = nil
-            audioData = data
-            audioFileName = prefill.fileName
+        // The prefill is already a temp file this flow owns — used in place.
+        let url = prefill.localURL
+        if let error = Self.mediaProblem(url, fileName: prefill.fileName) {
+            try? FileManager.default.removeItem(at: url)
+            audioFileError = error
+            return
+        }
+        audioFileError = nil
+        audioFile = replace(audioFile, with: url)
+        audioFileName = prefill.fileName
+    }
+
+    /// Why a staged file can't be a track's media (user-facing), or nil.
+    /// Reads only the file's head.
+    private static func mediaProblem(_ url: URL, fileName: String) -> String? {
+        do {
+            try MediaSniffer.validate(fileAt: url, fileName: fileName)
+            return nil
+        } catch let error as MediaSniffer.ValidationError {
+            return error.reason
+        } catch {
+            return "Couldn't read that file."
         }
     }
 
-    /// Reads a picked buyer-download asset (kind: "mp3" | "wav" | "stems").
+    /// Stages a picked buyer-download asset (kind: "mp3" | "wav" | "stems").
     func handleAssetFile(kind: String, result: Result<URL, Error>) {
         switch result {
         case .success(let url):
             do {
-                guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.trackAssets.maxUploadBytes) else { return }
+                guard let staged = try SecurityScopedFile.stage(url, maxBytes: StorageBucket.trackAssets.maxUploadBytes) else { return }
                 switch kind {
                 case "mp3":
-                    mp3Data = data
+                    mp3File = replace(mp3File, with: staged)
                     mp3FileName = url.lastPathComponent
                 case "wav":
-                    wavData = data
+                    wavFile = replace(wavFile, with: staged)
                     wavFileName = url.lastPathComponent
                 default:
-                    stemsData = data
+                    stemsFile = replace(stemsFile, with: staged)
                     stemsFileName = url.lastPathComponent
                 }
             } catch let error as FileTooLargeError {
@@ -407,13 +477,13 @@ final class UploadTrackViewModel {
     func clearAsset(kind: String) {
         switch kind {
         case "mp3":
-            mp3Data = nil
+            mp3File = replace(mp3File, with: nil)
             mp3FileName = nil
         case "wav":
-            wavData = nil
+            wavFile = replace(wavFile, with: nil)
             wavFileName = nil
         default:
-            stemsData = nil
+            stemsFile = replace(stemsFile, with: nil)
             stemsFileName = nil
         }
     }
@@ -427,16 +497,18 @@ final class UploadTrackViewModel {
     func clearVideo() {
         videoTask?.cancel()
         videoTask = nil
-        videoData = nil
+        videoFile = replace(videoFile, with: nil)
         videoFileName = nil
+        videoFileError = nil
         isProcessingVideo = false
         videoProcessingProgress = 0
         videoAudioOnly = false
         dropUntrimmedVideo()
     }
 
+    /// Callers clear `videoFile` first (it may be this same file).
     private func dropUntrimmedVideo() {
-        if let untrimmedVideoURL { try? FileManager.default.removeItem(at: untrimmedVideoURL) }
+        bin.discard(untrimmedVideoURL)
         untrimmedVideoURL = nil
         untrimmedVideoDuration = 0
         videoTrim = nil
@@ -467,16 +539,14 @@ final class UploadTrackViewModel {
                     return
                 }
             }
-            let read = output ?? source
-            let data = await Task.detached { try? Data(contentsOf: read) }.value
-            if let output { try? FileManager.default.removeItem(at: output) }
-            guard !Task.isCancelled else { return }
-            if let data {
-                videoData = data
-                videoTrim = target
-            } else {
-                ToastCenter.shared.show("Couldn't trim the video. Try again.", style: .error)
+            guard !Task.isCancelled else {
+                if let output { try? FileManager.default.removeItem(at: output) }
+                return
             }
+            // The trim (or, reset, the untrimmed clip itself) becomes the
+            // upload; a previous trim's file is deleted.
+            videoFile = replace(videoFile, with: output ?? source)
+            videoTrim = target
             videoProcessingProgress = 1
             isProcessingVideo = false
         }
@@ -490,9 +560,10 @@ final class UploadTrackViewModel {
     func handleVideoFile(at url: URL, fileName: String) {
         videoTask?.cancel()
         videoAudioOnly = false // fresh attach defaults to keeping the video
+        videoFile = replace(videoFile, with: nil)
         dropUntrimmedVideo()
-        videoData = nil
         videoFileName = nil
+        videoFileError = nil
         isProcessingVideo = true
         videoProcessingProgress = 0
         videoTask = Task {
@@ -515,23 +586,29 @@ final class UploadTrackViewModel {
                 return
             }
             if let prepared {
-                // Tens of MB — read off-main.
-                videoData = await Task.detached { try? Data(contentsOf: prepared) }.value
-                // Kept (not deleted) as the untrimmed source for Trim.
-                untrimmedVideoDuration = (try? await AVURLAsset(url: prepared).load(.duration).seconds) ?? 0
+                let duration = (try? await AVURLAsset(url: prepared).load(.duration).seconds) ?? 0
                 if Task.isCancelled {
                     try? FileManager.default.removeItem(at: prepared)
                     return
                 }
-                untrimmedVideoURL = untrimmedVideoDuration > 0 ? prepared : nil
-                if untrimmedVideoURL == nil { try? FileManager.default.removeItem(at: prepared) }
+                // The upload, and (with a known length) the untrimmed
+                // source Trim cuts from — one file.
+                untrimmedVideoDuration = duration
+                untrimmedVideoURL = duration > 0 ? prepared : nil
+                videoFile = replace(videoFile, with: prepared)
                 videoFileName = (fileName as NSString).deletingPathExtension + ".mp4"
-            } else {
-                // Couldn't prepare it — upload the original bytes.
-                videoData = await Task.detached { try? Data(contentsOf: url) }.value
-                videoFileName = fileName
+            } else if let sanitized = try? await VideoTranscoder.sanitizedCopy(url) {
+                // Couldn't prepare it — upload the source as-is, but never
+                // the raw picked bytes (they carry location metadata).
+                if Task.isCancelled {
+                    try? FileManager.default.removeItem(at: sanitized)
+                    return
+                }
+                videoFile = replace(videoFile, with: sanitized)
+                videoFileName = (fileName as NSString).deletingPathExtension + ".mov"
             }
             guard !Task.isCancelled else { return }
+            if videoFile == nil { videoFileError = "Couldn't prepare that video. Try another one." }
             videoProcessingProgress = 1
             isProcessingVideo = false
         }
@@ -540,34 +617,23 @@ final class UploadTrackViewModel {
     /// Extracts the audio track from a video into an .m4a, so an attached video
     /// can be uploaded as an audio-only track. Reuses the same export pipeline as
     /// the remux path, just with the AppleM4A (audio) preset.
-    private func extractAudio(from data: Data) async -> Data? {
-        let tempInput = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + ".mov")
-        let tempOutput = FileManager.default.temporaryDirectory
+    /// Returns the .m4a's temp file; the caller deletes it.
+    private func extractAudio(from video: URL) async -> URL? {
+        let output = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".m4a")
-
-        do {
-            try data.write(to: tempInput)
-        } catch {
-            return nil
-        }
-
-        defer {
-            try? FileManager.default.removeItem(at: tempInput)
-            try? FileManager.default.removeItem(at: tempOutput)
-        }
-
-        let asset = AVURLAsset(url: tempInput)
+        let asset = AVURLAsset(url: video)
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else {
             return nil
         }
+        VideoTranscoder.stripPrivateMetadata(session)
 
         do {
-            try await session.export(to: tempOutput, as: .m4a)
+            try await session.export(to: output, as: .m4a)
         } catch {
+            try? FileManager.default.removeItem(at: output)
             return nil
         }
-        return try? Data(contentsOf: tempOutput)
+        return output
     }
 
     func handleCoverImage(_ image: UIImage) {
@@ -577,6 +643,10 @@ final class UploadTrackViewModel {
     // MARK: - Upload
 
     func upload() async {
+        await ExtraBackgroundTime.run("Track upload") { await performUpload() }
+    }
+
+    private func performUpload() async {
         guard canUpload else { return }
         guard case .authenticated(let userId) = authManager.state else {
             uploadState = .error("Not authenticated")
@@ -585,49 +655,55 @@ final class UploadTrackViewModel {
 
         uploadState = .uploading
 
+        // An "Audio only" video's extracted .m4a — temp, deleted when done.
+        var extractedAudio: URL?
+        defer { if let extractedAudio { try? FileManager.default.removeItem(at: extractedAudio) } }
+
         do {
             let isVideo = mediaType == .video
             let useAudioOnly = isVideo && videoAudioOnly
 
             // Resolve the public-preview file. "Audio only" extracts the video's
             // audio track and uploads it as a normal audio track (no video).
-            let mediaData: Data
+            let mediaFile: URL
             let mediaFileName: String
             let uploadIsVideo: Bool
             if useAudioOnly {
-                guard let video = videoData else {
+                guard let video = videoFile else {
                     uploadState = .error("No file attached")
                     return
                 }
-                guard let audio = await extractAudio(from: video) else {
+                guard let audio = await extractAudio(from: video.url) else {
                     uploadState = .error("Couldn't extract the audio from that video")
                     return
                 }
-                mediaData = audio
+                extractedAudio = audio
+                mediaFile = audio
                 let base = (videoFileName as NSString?)?.deletingPathExtension ?? "audio"
                 mediaFileName = base + ".m4a"
                 uploadIsVideo = false
             } else {
-                guard let data = isVideo ? videoData : audioData else {
+                guard let file = isVideo ? videoFile : audioFile else {
                     uploadState = .error("No file attached")
                     return
                 }
-                mediaData = data
+                mediaFile = file.url
                 mediaFileName = (isVideo ? videoFileName : audioFileName) ?? "media.\(isVideo ? "mp4" : "mp3")"
                 uploadIsVideo = isVideo
             }
 
-            let durationMs = await Self.readMediaDurationMs(data: mediaData, fileName: mediaFileName)
+            // Staged files keep their extension, which AVFoundation needs.
+            let durationMs = await Self.readMediaDurationMs(fileURL: mediaFile)
 
             var assets: [SupabaseService.TrackAssetUpload] = []
-            if let mp3Data, let mp3FileName {
-                assets.append(.init(kind: "mp3", fileName: mp3FileName, data: mp3Data))
+            if let mp3File, let mp3FileName {
+                assets.append(.init(kind: "mp3", fileName: mp3FileName, fileURL: mp3File.url))
             }
-            if let wavData, let wavFileName {
-                assets.append(.init(kind: "wav", fileName: wavFileName, data: wavData))
+            if let wavFile, let wavFileName {
+                assets.append(.init(kind: "wav", fileName: wavFileName, fileURL: wavFile.url))
             }
-            if let stemsData, let stemsFileName {
-                assets.append(.init(kind: "stems", fileName: stemsFileName, data: stemsData))
+            if let stemsFile, let stemsFileName {
+                assets.append(.init(kind: "stems", fileName: stemsFileName, fileURL: stemsFile.url))
             }
 
             let paidTiers: [SupabaseService.TrackTierInput] = TrackTier.allCases
@@ -641,7 +717,7 @@ final class UploadTrackViewModel {
                 description: trimmedDescription.isEmpty ? nil : trimmedDescription,
                 genre: genre,
                 visibility: visibility,
-                mediaData: mediaData,
+                mediaFile: mediaFile,
                 mediaFileName: mediaFileName,
                 isVideo: uploadIsVideo,
                 coverData: coverData,
@@ -675,22 +751,8 @@ final class UploadTrackViewModel {
         }
     }
 
-    /// Reads the media duration by writing to a temp file and asking AVFoundation.
-    /// Also used by the bulk release upload.
-    static func readMediaDurationMs(data: Data, fileName: String) async -> Int? {
-        let ext = (fileName as NSString).pathExtension.lowercased()
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString + "." + (ext.isEmpty ? "dat" : ext))
-        do {
-            try data.write(to: tempURL)
-        } catch {
-            return nil
-        }
-        defer { try? FileManager.default.removeItem(at: tempURL) }
-        return await readMediaDurationMs(fileURL: tempURL)
-    }
-
-    /// Duration of a media file already on disk (needs a real extension).
+    /// Duration of a media file on disk (needs a real extension). Also used
+    /// by the bulk release upload.
     static func readMediaDurationMs(fileURL: URL) async -> Int? {
         let asset = AVURLAsset(url: fileURL)
         guard let duration = try? await asset.load(.duration) else { return nil }

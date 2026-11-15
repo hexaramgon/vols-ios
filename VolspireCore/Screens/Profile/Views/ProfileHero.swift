@@ -369,17 +369,18 @@ private extension ProfileHeroView {
         Rectangle().fill(Color.white.opacity(0.18)).frame(width: 1, height: 28)
     }
 
-    /// The line under the name: the artist's location.
-    @ViewBuilder
+    /// The line under the name: the artist's location. Without one, its
+    /// height is still kept, so the name sits at the same height on every
+    /// profile — and where the loading skeleton drew it (no jump on reveal).
     var metaLine: some View {
-        if !viewModel.location.isEmpty {
-            HStack(spacing: 5) {
-                LucideIcon(.mapPin, .xs)
-                Text(viewModel.location).font(.appFootnote).lineLimit(1)
-            }
-            .foregroundStyle(Color.vText)
-            .heroTextShadow(isLight ? 0 : 1)
+        HStack(spacing: 5) {
+            LucideIcon(.mapPin, .xs)
+            Text(viewModel.location.isEmpty ? " " : viewModel.location).font(.appFootnote).lineLimit(1)
         }
+        .foregroundStyle(Color.vText)
+        .heroTextShadow(isLight ? 0 : 1)
+        .opacity(viewModel.location.isEmpty ? 0 : 1)
+        .accessibilityHidden(viewModel.location.isEmpty)
     }
 }
 

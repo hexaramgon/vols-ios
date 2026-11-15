@@ -89,3 +89,5 @@ fastlane/test_output
 # https://github.com/johnno1962/injectionforxcode
 
 iOSInjectionProject/
+# Claude Code local settings (machine-specific; has held secrets)
+.claude/settings.local.json

@@ -29,6 +29,9 @@ struct ListingPostCard: View {
     var respondInSheet = false
     /// Inside padding left/right — the Home feed runs it tighter.
     var horizontalInset: CGFloat = 20
+    /// A category filter is on: the category shows as a pill (what it
+    /// matched), not grey byline text.
+    var showsMatch = false
 
     @Environment(Router.self) private var router
     @Environment(ListingsStore.self) private var listingsStore
@@ -112,7 +115,7 @@ struct ListingPostCard: View {
 
     private var byline: some View {
         HStack(spacing: 6) {
-            Button { router.navigateToProfile(userId: listing.author.userId) } label: {
+            Button { router.navigateToProfile(userId: listing.author.userId, username: listing.author.username, avatarURL: listing.author.profileImageUrl.flatMap { URL(string: $0) }) } label: {
                 HStack(spacing: 8) {
                     AvatarView(urlString: listing.author.profileImageUrl, name: listing.author.username, size: 24)
                     Text("@\(listing.author.username)")
@@ -124,11 +127,15 @@ struct ListingPostCard: View {
             }
             .buttonStyle(.plain)
             .layoutPriority(-1)
-            Text("· \(listing.categoryLabel)")
-                .font(.appCaption)
-                .foregroundStyle(Color.vText3)
-                .lineLimit(1)
-                .fixedSize()
+            if showsMatch {
+                MatchPill(label: listing.categoryLabel, icon: listing.categoryIcon)
+            } else {
+                Text("· \(listing.categoryLabel)")
+                    .font(.appCaption)
+                    .foregroundStyle(Color.vText3)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
 
             Text("· \(MessageTime.ago(MessageTime.parse(listing.createdAt)))")
                 .font(.appCaption)

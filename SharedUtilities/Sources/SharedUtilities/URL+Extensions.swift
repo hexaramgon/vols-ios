@@ -22,11 +22,18 @@ public extension URL {
 private actor ImageLoader {
     static let shared = ImageLoader()
 
+    /// Was 1s — on a slow network lock-screen art and the player tint came
+    /// back empty. A normal timeout; callers already run this off the UI path.
     private let requestModifier = AnyModifier { request in
         var modifiedRequest = request
-        modifiedRequest.timeoutInterval = 1
+        modifiedRequest.timeoutInterval = 10
         return modifiedRequest
     }
+
+    /// Callers are lock-screen artwork and colour extraction — neither needs
+    /// the full-res original (~4MB decoded per 1024px cover, kept in the
+    /// memory cache on every track change). 800px covers lock-screen art.
+    private let processor = DownsamplingImageProcessor(size: CGSize(width: 800, height: 800))
 
     private var loadingTasks: [URL: Task<UIImage?, Never>] = [:]
 
@@ -40,7 +47,7 @@ private actor ImageLoader {
             do {
                 let image = try await KingfisherManager.shared.retrieveImage(
                     with: url,
-                    options: [.requestModifier(requestModifier)]
+                    options: [.requestModifier(requestModifier), .processor(processor), .cacheOriginalImage]
                 ).image
                 result = image
             } catch {

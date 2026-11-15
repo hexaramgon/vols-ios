@@ -444,7 +444,7 @@ private extension ListingDetailScreen {
 
     var byline: some View {
         HStack(spacing: 12) {
-            Button { router.navigateToProfile(userId: listing.author.userId) } label: {
+            Button { router.navigateToProfile(userId: listing.author.userId, username: listing.author.username, avatarURL: listing.author.profileImageUrl.flatMap { URL(string: $0) }) } label: {
                 HStack(spacing: 12) {
                     AvatarView(urlString: listing.author.profileImageUrl, name: listing.author.username, size: 40)
                     VStack(alignment: .leading, spacing: 2) {
@@ -813,14 +813,14 @@ private extension ListingDetailScreen {
     /// return type can't express.
     func commentRow(_ comment: ApiListingComment, isReply: Bool = false) -> AnyView {
         AnyView(HStack(alignment: .top, spacing: 12) {
-            Button { router.navigateToProfile(userId: comment.user.userId) } label: {
+            Button { router.navigateToProfile(userId: comment.user.userId, username: comment.user.username, avatarURL: comment.user.profileImageUrl.flatMap { URL(string: $0) }) } label: {
                 AvatarView(urlString: comment.user.profileImageUrl, name: comment.user.username, size: 32)
             }
             .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 8) {
-                    Button { router.navigateToProfile(userId: comment.user.userId) } label: {
+                    Button { router.navigateToProfile(userId: comment.user.userId, username: comment.user.username, avatarURL: comment.user.profileImageUrl.flatMap { URL(string: $0) }) } label: {
                         Text("@\(comment.user.username)")
                             .font(.appSubheadlineSemibold).foregroundStyle(Color.vText)
                     }

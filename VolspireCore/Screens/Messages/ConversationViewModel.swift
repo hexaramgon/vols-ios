@@ -10,6 +10,7 @@
 
 import DesignSystem
 import Foundation
+import ImageIO
 import Services
 import UIKit
 import SharedUtilities
@@ -23,6 +24,26 @@ enum ImageSanitizer {
     /// a single-frame re-encode would drop the animation.
     static func jpegStrippingMetadata(_ data: Data, quality: CGFloat = 0.9) -> Data? {
         UIImage(data: data)?.jpegData(compressionQuality: quality)
+    }
+
+    /// Lossless: the same format and pixels (no re-encode), minus GPS and
+    /// XMP — for files shared as-is (workspace folders), where a JPEG
+    /// re-encode would degrade artwork. nil if ImageIO can't rewrite it.
+    static func removingLocation(_ data: Data) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let type = CGImageSourceGetType(source) else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output, type, CGImageSourceGetCount(source), nil
+        ) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageMetadataShouldExcludeGPS: true,
+            kCGImageMetadataShouldExcludeXMP: true,
+        ]
+        guard CGImageDestinationCopyImageSource(destination, source, options as CFDictionary, nil) else {
+            return nil
+        }
+        return output as Data
     }
 }
 
@@ -286,7 +307,10 @@ final class ConversationViewModel {
                                           attachmentType: nil, attachmentName: nil, pending: false)
             }
             inbox?.threadLatestChanged(convoId: convoId, preview: text, at: sentAt, fromMe: true)
-            inbox?.setDraft("", for: convoId)
+            // The sent text is gone from the composer; whatever's typed since
+            // (maybe after leaving the thread mid-send) is the draft now —
+            // clearing the stored draft here used to wipe it.
+            inbox?.setDraft(draft, for: convoId)
         } catch {
             debugLog("[ConversationVM] send: \(error)")
             messages.removeAll { $0.id == tempId }
@@ -328,18 +352,36 @@ final class ConversationViewModel {
         // Strip EXIF/GPS from still images by re-encoding to JPEG off the main
         // thread. (Avatars/covers already do this; the DM path previously shipped
         // the original bytes, leaking any embedded location.) Animated GIFs are left
-        // intact; a decode failure falls through to the original bytes. Normalising
-        // to JPEG also brings iPhone HEIC photos into the server's allowlist.
+        // intact. Normalising to JPEG also brings iPhone HEIC photos into the
+        // server's allowlist. An image that won't decode is refused rather than
+        // sent with its metadata.
         var uploadData = data
         var uploadName = fileName
         var uploadType = fileType
-        if fileType.hasPrefix("image"), fileType != "image/gif",
-           let cleaned = await Task.detached(priority: .userInitiated, operation: {
-               ImageSanitizer.jpegStrippingMetadata(data)
-           }).value {
+        if fileType.hasPrefix("image"), fileType != "image/gif" {
+            guard let cleaned = await Task.detached(priority: .userInitiated, operation: {
+                ImageSanitizer.jpegStrippingMetadata(data)
+            }).value else {
+                attachmentError = "Couldn't read that image."
+                return
+            }
             uploadData = cleaned
             uploadName = (fileName as NSString).deletingPathExtension + ".jpg"
             uploadType = "image/jpeg"
+        } else if fileType == "video/mp4" || fileType == "video/quicktime" {
+            // Camera-roll videos carry location + device metadata too. Re-muxed
+            // without it (no quality loss); unreadable → refused, not sent raw.
+            let named = (fileName as NSString).pathExtension.lowercased()
+            let ext = named.isEmpty ? (fileType == "video/mp4" ? "mp4" : "mov") : named
+            guard let cleaned = await VideoTranscoder.removingMetadata(data, fileExtension: ext) else {
+                attachmentError = "Couldn't read that video."
+                return
+            }
+            uploadData = cleaned
+            // Matches the container removingMetadata wrote.
+            let mp4 = ext == "mp4" || ext == "m4v"
+            uploadName = (fileName as NSString).deletingPathExtension + (mp4 ? ".mp4" : ".mov")
+            uploadType = mp4 ? "video/mp4" : "video/quicktime"
         }
 
         let maxBytes = StorageBucket.messageAttachments.maxUploadBytes
@@ -390,13 +432,33 @@ final class ConversationViewModel {
         isSending = false
     }
 
-    /// Polls for new messages every few seconds while the thread is on screen.
+    /// Fallback poll while the thread is on screen. New messages normally
+    /// arrive through `mergeLatestNow()` on the realtime event (InboxStore);
+    /// this catches missed events (socket gaps, backgrounding) and request-
+    /// status flips. Was a 4s poll refetching 50 rows forever.
     func startPolling() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(15))
             if Task.isCancelled { break }
-            await mergeLatest()
+            await mergeLatestNow()
         }
+    }
+
+    private var isMerging = false
+    private var mergeAgain = false
+
+    /// Merges the newest page now — the realtime path. Calls that land while
+    /// one is running fold into a single follow-up run: two overlapping
+    /// merges would each append the same new rows (duplicates).
+    func mergeLatestNow() async {
+        guard loadingState == .loaded else { return } // the first load brings them
+        if isMerging { mergeAgain = true; return }
+        isMerging = true
+        defer { isMerging = false }
+        repeat {
+            mergeAgain = false
+            await mergeLatest()
+        } while mergeAgain && !Task.isCancelled
     }
 
     private func mergeLatest() async {
@@ -429,11 +491,28 @@ final class ConversationViewModel {
             )
         }
         if fresh.contains(where: { !$0.isFromMe }) {
-            try? await service.markConvoRead(convoId: convoId)
-            PushNotificationManager.shared.clearDeliveredNotifications(convoId: convoId)
-            inbox?.threadMarkedRead(convoId: convoId)
+            if isVisible {
+                await runMarkReadChain()
+            } else {
+                // Arrived under a pushed page / in a background tab: stays
+                // unread until the thread is actually seen.
+                unreadWhileHidden = true
+            }
         }
     }
+
+    /// The thread is on screen — not covered by a pushed page or sitting in
+    /// another tab's stack (its view, polling and realtime handlers stay alive
+    /// there). Only a visible thread marks messages read.
+    @ObservationIgnored var isVisible = false {
+        didSet {
+            guard isVisible, unreadWhileHidden else { return }
+            unreadWhileHidden = false
+            Task { await runMarkReadChain() }
+        }
+    }
+
+    @ObservationIgnored private var unreadWhileHidden = false
 
     /// Preview label for an attachment-only message (mirrors the list mapping).
     private static func attachmentLabel(_ type: String) -> String {

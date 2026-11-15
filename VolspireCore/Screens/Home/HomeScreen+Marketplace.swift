@@ -136,7 +136,11 @@ extension HomeScreen {
                     ForEach(Array(filteredPacks.enumerated()), id: \.element.id) { i, pack in
                         Button {
                             if let api = pack.api { router.navigateToMarketplacePack(api) }
-                        } label: { MarketPackCard(pack: pack, side: nil) }
+                        } label: {
+                            // A type filter is on — the cover names the pack's type.
+                            MarketPackCard(pack: pack, side: nil,
+                                           matchLabel: packTypeFilter.subtracting([FilterBar.savedId]).isEmpty ? nil : pack.type)
+                        }
                             .buttonStyle(CardPress())
                             .staggeredAppear(i, in: "market.freePacks")
                     }
@@ -416,6 +420,8 @@ struct MarketPackCard: View {
     let pack: MarketPack
     /// Fixed cover side (the full marketplace's rail); nil fills the grid column.
     var side: CGFloat? = 156
+    /// A type filter is on: the pack's type as a pill on the cover.
+    var matchLabel: String? = nil
 
     /// "Drum Kit · 100 files" — a price only for paid packs (never "Free").
     private var meta: String {
@@ -433,6 +439,12 @@ struct MarketPackCard: View {
                 .aspectRatio(1, contentMode: .fit)
                 .frame(width: side)
                 .overlay { MarketArt(coverURL: pack.coverURL, gradient: nil, name: pack.name, icon: nil) }
+                .overlay(alignment: .topLeading) {
+                    if let matchLabel {
+                        MatchPill(label: matchLabel, icon: packTypes.first { $0.id == matchLabel }?.icon, onImage: true)
+                            .padding(8)
+                    }
+                }
                 .clipShape(RoundedRectangle(cornerRadius: Radius.tile, style: .continuous))
                 .coverShadow()
 

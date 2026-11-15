@@ -55,6 +55,12 @@ struct VolspireSplashView: View {
     /// Called once the animation finishes. Remove the splash from the hierarchy here.
     var onFinished: () -> Void = {}
 
+    // The launch screen (Info.plist UILaunchScreen › UIImageName "LaunchMark")
+    // pre-draws this whole lockup (mark + wordmark) exactly where it sits here,
+    // so the handoff to this view is invisible and it then runs its exit.
+    // LaunchMark.pdf is generated from these three sizes + VolspireLogo's paths
+    // by volspire-android/tools/gen_launch_mark.py — rerun it if any change.
+
     /// Size of the full 1000x1000 logo tile (the mark itself fills ~75% of it).
     var logoSize: CGFloat = 180
     /// Width of the "volspire" wordmark under the logo.

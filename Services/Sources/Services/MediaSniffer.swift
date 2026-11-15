@@ -32,6 +32,14 @@ public enum MediaSniffer {
         }
     }
 
+    /// `validate` for a file on disk — reads only the head it needs.
+    public static func validate(fileAt url: URL, fileName: String) throws {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let head = try handle.read(upToCount: 4 * 1024 * 1024) ?? Data()
+        try validate(head, fileName: fileName)
+    }
+
     /// Identifies the container from its magic bytes.
     static func sniff(_ b: [UInt8]) -> Container {
         if ascii(b, 0, 3) == "ID3" {

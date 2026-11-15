@@ -91,6 +91,7 @@ final class WorkspaceStore {
         foldersTask = nil
         for task in fileTasks.values { task.cancel() }
         fileTasks = [:]
+        packsByFolder = [:]
         folders = []
         foldersLoaded = false
         foldersFailed = false
@@ -105,7 +106,16 @@ final class WorkspaceStore {
     func loadFoldersIfNeeded() async {
         if let foldersTask { return await foldersTask.value }
         guard !foldersLoaded else { return }
-        let task = Task { await fetchFolders() }
+        let task = Task {
+            // Stale-first: the last folder list (even past its TTL) paints at
+            // once instead of the skeleton; fetchFolders swaps fresh in place.
+            // A cached EMPTY list isn't shown — "no folders" waits for a live response.
+            if folders.isEmpty, let last = await service.lastUserFolders(), !last.isEmpty {
+                folders = last
+                foldersLoaded = true
+            }
+            await fetchFolders()
+        }
         foldersTask = task
         await task.value
         foldersTask = nil

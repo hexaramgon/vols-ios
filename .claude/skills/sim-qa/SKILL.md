@@ -42,6 +42,10 @@ Always test signed in as the **App Review demo account**, `appreview@volspire.co
 
 Find the full SE UDID with `xcrun simctl list devices available | grep -i SE`. Toggle light/dark with `xcrun simctl ui $SIM appearance light|dark`.
 
+These UDIDs only exist on Hector's main Mac. On any other machine `env.sh` falls back automatically: first a booted iPhone, then the newest available non-SE iPhone. So the scripts work on a new laptop without edits; pass `SIM=` to pick a specific one.
+
+The Android counterpart is the `android-qa` skill in the volspire-android repo. Its `compare.sh` takes matching iOS + Android screenshots for parity checks.
+
 ## The loop
 
 ```bash

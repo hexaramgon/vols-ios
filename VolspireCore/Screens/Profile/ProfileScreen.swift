@@ -66,7 +66,7 @@ struct ProfileScreen: View {
         // Crossfade the skeleton out as the real profile fades in.
         ZStack {
             if isInitialLoading {
-                ScrollView { ProfileSkeleton(isOwnProfile: isOwnProfile) }
+                ScrollView { ProfileSkeleton(isOwnProfile: isOwnProfile, seed: ProfileSeeds.seed(for: resolvedUserId)) }
                     .scrollDisabled(true)
                     .transition(.opacity)
             } else if isError {

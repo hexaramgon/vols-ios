@@ -43,6 +43,10 @@ struct EditProfileScreen: View {
     @State private var errorMessage: String? = nil
     @State private var avatarItem: PhotosPickerItem? = nil
     @State private var selectedAvatarData: Data? = nil
+    /// Already uploaded for the picked photo — a retried Save (after a failed
+    /// one) reuses it instead of uploading again.
+    @State private var uploadedAvatarURL: URL? = nil
+    @State private var uploadedBannerURL: URL? = nil
     /// A freshly-picked avatar awaiting crop in the full-screen cropper.
     @State private var avatarCropTarget: CropTarget? = nil
     @State private var bannerItem: PhotosPickerItem? = nil
@@ -227,6 +231,9 @@ private extension EditProfileScreen {
                    let ui = UIImage(data: data) {
                     bannerCropTarget = CropTarget(image: ui.normalizedUp())
                 }
+                // Cleared so picking the same photo again (after a cancelled
+                // crop) is still a change.
+                bannerItem = nil
             }
         }
         .fullScreenCover(item: $bannerCropTarget) { target in
@@ -235,7 +242,11 @@ private extension EditProfileScreen {
             // ProfileLayout.
             ImageCropperView(
                 image: target.image,
-                onCrop: { data in selectedBannerData = data; bannerCropTarget = nil },
+                onCrop: { data in
+                    selectedBannerData = data
+                    uploadedBannerURL = nil
+                    bannerCropTarget = nil
+                },
                 onCancel: { bannerCropTarget = nil },
                 aspectRatio: ProfileLayout.bannerCropAspect,
                 // 2400×1350: tall enough for the iPhone hero's height fill
@@ -268,12 +279,19 @@ private extension EditProfileScreen {
                    let ui = UIImage(data: data) {
                     avatarCropTarget = CropTarget(image: ui.normalizedUp())
                 }
+                // Cleared so picking the same photo again (after a cancelled
+                // crop) is still a change.
+                avatarItem = nil
             }
         }
         .fullScreenCover(item: $avatarCropTarget) { target in
             ImageCropperView(
                 image: target.image,
-                onCrop: { data in selectedAvatarData = data; avatarCropTarget = nil },
+                onCrop: { data in
+                    selectedAvatarData = data
+                    uploadedAvatarURL = nil
+                    avatarCropTarget = nil
+                },
                 onCancel: { avatarCropTarget = nil },
                 allowsFitMode: false,
                 showsCircularMask: true
@@ -448,21 +466,21 @@ private extension EditProfileScreen {
             // Deferred image uploads run now, on Save — the avatar/banner aren't
             // committed until the user taps Save. `saveProfile` then writes the
             // resulting URLs, so upload must happen first.
-            if let data = selectedAvatarData {
-                guard await viewModel.uploadAvatar(userId: userId, imageData: data) else {
+            if let data = selectedAvatarData, uploadedAvatarURL == nil {
+                guard let url = await viewModel.uploadAvatar(userId: userId, imageData: data) else {
                     isSaving = false
                     errorMessage = "Failed to upload your photo. Please try again."
                     return
                 }
-                selectedAvatarData = nil
+                uploadedAvatarURL = url
             }
-            if let data = selectedBannerData {
-                guard await viewModel.uploadBanner(userId: userId, imageData: data) else {
+            if let data = selectedBannerData, uploadedBannerURL == nil {
+                guard let url = await viewModel.uploadBanner(userId: userId, imageData: data) else {
                     isSaving = false
                     errorMessage = "Failed to upload your banner. Please try again."
                     return
                 }
-                selectedBannerData = nil
+                uploadedBannerURL = url
             }
             let username = editUsername.trimmingCharacters(in: .whitespaces).lowercased()
             let bio = editBio.trimmingCharacters(in: .whitespaces)
@@ -472,13 +490,19 @@ private extension EditProfileScreen {
                 username: username,
                 bio: bio,
                 location: location,
-                tags: selectedTags
+                tags: selectedTags,
+                avatarURL: uploadedAvatarURL,
+                bannerURL: uploadedBannerURL
             )
             guard success else {
                 isSaving = false
                 errorMessage = viewModel.profileUpdateError ?? "Failed to save profile. Please try again."
                 return
             }
+            selectedAvatarData = nil
+            selectedBannerData = nil
+            uploadedAvatarURL = nil
+            uploadedBannerURL = nil
             // City changed → the Collab map is stale.
             let mapChanged = location != originalLocation
             originalUsername = username

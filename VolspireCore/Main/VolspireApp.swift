@@ -24,7 +24,9 @@ struct VolspireApp: App {
     private static func configureImageCache() {
         let cache = ImageCache.default
         cache.memoryStorage.config.totalCostLimit = 80 * 1024 * 1024 // 80 MB
-        cache.memoryStorage.config.countLimit = 100
+        // No count cap: a downsampled thumbnail is ~0.2MB, so 100 items bound
+        // memory far below the cost cap and evicted on-screen covers.
+        // The 80MB cost limit governs.
         cache.memoryStorage.config.expiration = .seconds(180)
 
         // The disk cache was unbounded (Kingfisher defaults `sizeLimit` to 0), so

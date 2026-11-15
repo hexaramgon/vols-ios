@@ -26,7 +26,7 @@ final class LibraryScreenViewModel {
         await player?.play(MediaID(track.id), queue: ordered.map { t in
             Media(
                 id: MediaID(t.id),
-                meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL)
+                meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, artistId: t.artistId, audioURL: t.audioURL)
             )
         })
     }

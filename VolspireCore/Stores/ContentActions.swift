@@ -69,6 +69,8 @@ final class ContentActions {
         library.trackDeleted(id)
         if playerController.state.currentMediaID?.value.caseInsensitiveCompare(id) == .orderedSame {
             mediaPlayer.reset()
+        } else {
+            playerController.removeFromQueue(MediaID(id))
         }
         Task { await mediaState.removeTrack(MediaID(id)) }
 
@@ -185,6 +187,9 @@ final class ContentActions {
         if playerController.currentArtistUserId?.caseInsensitiveCompare(userId) == .orderedSame {
             mediaPlayer.reset()
             playerController.resetForSignOut()
+        } else {
+            // …and every track of theirs waiting in the queue.
+            playerController.removeQueuedTracks(byArtist: userId, username: username)
         }
         Task {
             do {

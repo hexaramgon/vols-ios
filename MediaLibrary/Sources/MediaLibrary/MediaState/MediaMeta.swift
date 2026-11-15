@@ -12,6 +12,9 @@ public struct MediaMeta: Equatable, Hashable, Sendable {
     public let subtitle: String?
     public let description: String?
     public let artist: String?
+    /// The artist's user id, when the source row carries one — lets a block
+    /// drop every queued track of theirs (nil: fall back to the username).
+    public let artistId: String?
     public let genre: String?
     public let audioURL: URL?
     public let duration: TimeInterval?
@@ -23,6 +26,7 @@ public struct MediaMeta: Equatable, Hashable, Sendable {
         subtitle: String? = nil,
         description: String? = nil,
         artist: String? = nil,
+        artistId: String? = nil,
         genre: String? = nil,
         audioURL: URL? = nil,
         duration: TimeInterval? = nil,
@@ -33,6 +37,7 @@ public struct MediaMeta: Equatable, Hashable, Sendable {
         self.subtitle = subtitle
         self.description = description
         self.artist = artist
+        self.artistId = artistId
         self.genre = genre
         self.audioURL = audioURL
         self.duration = duration

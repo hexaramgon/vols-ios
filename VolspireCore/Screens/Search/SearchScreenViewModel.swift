@@ -77,6 +77,7 @@ final class SearchScreenViewModel {
                     artwork: cover(t.coverUrl),
                     title: t.title,
                     artist: t.artist ?? "unknown",
+                    artistId: t.artistId,
                     audioURL: storageService.trackMediaURL(t.audioUrl)
                 )
             )
@@ -111,6 +112,10 @@ private extension SearchScreenViewModel {
                 guard !Task.isCancelled else { return }
                 tracks = results.tracks
                 artists = results.artists
+                for a in results.artists {
+                    ProfileSeeds.note(userId: a.userId, username: a.username,
+                                      avatarURL: a.profileImageUrl.flatMap { URL(string: $0) })
+                }
                 // Dropped while monetization is off (FeatureFlags.marketplace):
                 // pack/service detail pages show a price with nothing to buy and
                 // carry no report/block affordance, so they must not be

@@ -11,16 +11,25 @@ import SharedUtilities
 protocol AudioSessionDelegate: AnyObject {
     func audioSessionInterruptionBegan()
     func audioSessionInterruptionEnded(shouldResume: Bool)
+    /// The output in use went away (headphones unplugged, Bluetooth dropped).
+    func audioSessionOutputLost()
+    /// The audio engine was reconfigured (route / hardware format change),
+    /// which stops it — playback has to be restarted to be heard.
+    func audioEngineConfigurationChanged()
+    /// The media server restarted: every audio object is dead.
+    func audioSessionMediaServicesReset()
 }
 
 @MainActor
 class AudioSession {
     private var interruptionTask: Task<Void, Never>?
+    private var routeTasks: [Task<Void, Never>] = []
     weak var delegate: AudioSessionDelegate?
 
     init() {
         setupAudioSession()
         setupAudioInterruptionObserver()
+        setupRouteObservers()
     }
 
     func setActive(_ active: Bool) {
@@ -33,6 +42,7 @@ class AudioSession {
 
     deinit {
         interruptionTask?.cancel()
+        routeTasks.forEach { $0.cancel() }
     }
 }
 
@@ -56,6 +66,32 @@ private extension AudioSession {
                 self?.handleAudioSessionInterruption(notification: notification)
             }
         }
+    }
+
+    /// Nothing else handles these: AudioKit doesn't, and without them an
+    /// unplug / Bluetooth drop left the state "playing" over silence.
+    func setupRouteObservers() {
+        routeTasks.append(Task { [weak self] in
+            for await notification in NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification) {
+                let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+                // Apple's rule: the old output became unavailable → pause.
+                if raw.flatMap(AVAudioSession.RouteChangeReason.init) == .oldDeviceUnavailable {
+                    self?.delegate?.audioSessionOutputLost()
+                }
+            }
+        })
+        routeTasks.append(Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: .AVAudioEngineConfigurationChange) {
+                self?.delegate?.audioEngineConfigurationChanged()
+            }
+        })
+        routeTasks.append(Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: AVAudioSession.mediaServicesWereResetNotification) {
+                // Apple: reconfigure the session after a reset.
+                self?.setupAudioSession()
+                self?.delegate?.audioSessionMediaServicesReset()
+            }
+        })
     }
 
     private func handleAudioSessionInterruption(notification: Notification) {

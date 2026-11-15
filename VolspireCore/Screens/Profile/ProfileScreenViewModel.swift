@@ -191,14 +191,26 @@ final class ProfileScreenViewModel {
 
     func loadProfile(userId: String) async {
         guard loadingState != .loading else { return }
-        loadingState = .loading
         profileUserId = userId
+
+        // Stale-first: the last copy of this profile (even past its TTL) paints
+        // at once instead of the skeleton; the fetch below swaps in fresh data.
+        // Its follow/collab state isn't pushed into the shared overlays — a
+        // stale copy must not overwrite newer in-memory truth.
+        var showingStale = false
+        if loadingState != .loaded, let last = await supabaseService.lastUserProfile(userId: userId) {
+            apply(last, reconcileShared: false)
+            loadingState = .loaded
+            showingStale = true
+        }
+        if !showingStale { loadingState = .loading }
 
         do {
             apply(try await supabaseService.getUserProfile(userId: userId))
             loadingState = .loaded
         } catch {
-            loadingState.fail(error, ifEmpty: true)
+            // With the stale copy up, a failed refresh keeps it on screen.
+            loadingState.fail(error, ifEmpty: !showingStale)
         }
     }
 
@@ -211,7 +223,7 @@ final class ProfileScreenViewModel {
         apply(profile)
     }
 
-    private func apply(_ profile: ApiUserProfile) {
+    private func apply(_ profile: ApiUserProfile, reconcileShared: Bool = true) {
         username = profile.username ?? "Unknown"
         bio = profile.bio ?? ""
         profileImageURL = profile.profileImageUrl.flatMap { URL(string: $0) }
@@ -229,7 +241,7 @@ final class ProfileScreenViewModel {
         seededCollabConvoId = profile.collabConvoId
         // Push the fresh per-user truth into the shared overlays (skipped for
         // ids with a toggle in flight).
-        if let id = profileUserId {
+        if reconcileShared, let id = profileUserId {
             social?.reconcileFollow(userId: id, isFollowing: seededIsFollowing)
             social?.setCollabStatus(seededCollabStatus, userId: id, convoId: profile.collabConvoId)
         }
@@ -256,12 +268,12 @@ final class ProfileScreenViewModel {
     /// Prefetch every tab's cover art so switching tabs shows already-cached images
     /// that slide in with the page instead of popping in mid-transition.
     func prefetchTabCovers() {
-        let urls = tracks.compactMap(\.coverURL)
-            + creditedTracks.compactMap(\.coverURL)
-            + packs.compactMap(\.coverURL)
-            + services.compactMap(\.coverURL)
-        guard !urls.isEmpty else { return }
-        ImagePrefetcher(urls: Array(Set(urls))).start()
+        // At display size (rows 44pt via ArtworkView; market cards 220pt via
+        // KFImage.downsampled) — originals would evict these from memory.
+        let rows = tracks.compactMap(\.coverURL) + creditedTracks.compactMap(\.coverURL)
+        let cards = packs.compactMap(\.coverURL) + services.compactMap(\.coverURL)
+        ArtworkView.prefetch(Array(Set(rows)), side: 44)
+        KFImage.prefetchDownsampled(Array(Set(cards)), side: 220)
     }
 
     func loadCreditedTracks(userId: String) async {
@@ -554,6 +566,7 @@ final class ProfileScreenViewModel {
                 artwork: track.coverURL,
                 title: track.title,
                 artist: username,
+                artistId: profileUserId,
                 audioURL: track.audioURL
             )
         )
@@ -565,7 +578,7 @@ final class ProfileScreenViewModel {
         let queue = creditedTracks.filter { !$0.isUnavailable }.map { t in
             Media(
                 id: MediaID(t.id),
-                meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL)
+                meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, artistId: t.artistId, audioURL: t.audioURL)
             )
         }
         Task { await player.play(MediaID(track.id), queue: queue) }
@@ -573,26 +586,25 @@ final class ProfileScreenViewModel {
 
     var profileUpdateError: String? = nil
 
-    /// Uploads a new avatar to storage and reflects it locally. Persisted to the
-    /// DB on the next `saveProfile` (the web uploads-then-saves the same way).
-    func uploadAvatar(userId: String, imageData: Data) async -> Bool {
+    /// Uploads a new avatar to storage; nil on failure. Nothing changes on
+    /// the page until `saveProfile(avatarURL:)` succeeds (the web
+    /// uploads-then-saves the same way).
+    func uploadAvatar(userId: String, imageData: Data) async -> URL? {
         do {
-            profileImageURL = try await supabaseService.uploadAvatar(userId: userId, imageData: imageData)
-            return true
+            return try await supabaseService.uploadAvatar(userId: userId, imageData: imageData)
         } catch {
             debugLog("[ProfileVM] Failed to upload avatar: \(error)")
-            return false
+            return nil
         }
     }
 
-    /// Uploads a new banner to storage and reflects it locally (see `uploadAvatar`).
-    func uploadBanner(userId: String, imageData: Data) async -> Bool {
+    /// Uploads a new banner to storage (see `uploadAvatar`).
+    func uploadBanner(userId: String, imageData: Data) async -> URL? {
         do {
-            bannerImageURL = try await supabaseService.uploadBanner(userId: userId, imageData: imageData)
-            return true
+            return try await supabaseService.uploadBanner(userId: userId, imageData: imageData)
         } catch {
             debugLog("[ProfileVM] Failed to upload banner: \(error)")
-            return false
+            return nil
         }
     }
 
@@ -607,23 +619,38 @@ final class ProfileScreenViewModel {
         try? await supabaseService.checkUsernameAvailable(username)
     }
 
-    func saveProfile(userId: String, username: String, bio: String, location: String, tags: [String]) async -> Bool {
+    /// `avatarURL` / `bannerURL`: just-uploaded images; nil keeps the current one.
+    func saveProfile(
+        userId: String, username: String, bio: String, location: String, tags: [String],
+        avatarURL: URL? = nil, bannerURL: URL? = nil
+    ) async -> Bool {
         do {
+            // The fields this form doesn't edit are written back as-is — take
+            // them from the server, not the page (which may be a stale cached
+            // copy, e.g. an avatar since changed on the web).
+            let fresh = try? await supabaseService.getUserProfile(userId: userId, force: true)
+            let keptAvatar = fresh.map { $0.profileImageUrl } ?? profileImageURL?.absoluteString
+            let keptBanner = fresh.map { $0.bannerImageUrl } ?? bannerImageURL?.absoluteString
+            let keptType = fresh?.accountType ?? accountType
+            let avatar = avatarURL?.absoluteString ?? keptAvatar
+            let banner = bannerURL?.absoluteString ?? keptBanner
             let result = try await supabaseService.updateUserProfile(
                 userId: userId,
                 username: username,
                 bio: bio.isEmpty ? nil : bio,
-                accountType: accountType,
+                accountType: keptType,
                 location: location.isEmpty ? nil : location,
-                profileImageUrl: profileImageURL?.absoluteString,
-                bannerImageUrl: bannerImageURL?.absoluteString,
+                profileImageUrl: avatar,
+                bannerImageUrl: banner,
                 tags: tags.isEmpty ? nil : tags
             )
+            profileImageURL = avatar.flatMap { URL(string: $0) }
+            bannerImageURL = banner.flatMap { URL(string: $0) }
             self.username = result.username ?? username
             self.bio = result.bio ?? bio
             self.location = result.location ?? location
             self.tags = result.tags ?? tags
-            self.accountType = result.accountType ?? accountType
+            self.accountType = result.accountType ?? keptType
             profileUpdateError = nil
             // Own identity changed — refresh the shared profile so the tab-bar
             // avatar and every own-identity surface pick it up.

@@ -84,7 +84,8 @@ extension HomeScreen {
         } else {
             LazyVStack(spacing: 12) {
                 ForEach(Array(savedListingRows.enumerated()), id: \.element.id) { i, listing in
-                    ListingPostCard(listing: listing, respondInSheet: true, horizontalInset: 14).staggeredAppear(i, in: "explore.savedListings")
+                    ListingPostCard(listing: listing, respondInSheet: true, horizontalInset: 14,
+                                    showsMatch: !pickedCategories.isEmpty).staggeredAppear(i, in: "explore.savedListings")
                 }
             }
             .padding(.horizontal, -8)
@@ -112,7 +113,8 @@ extension HomeScreen {
         } else {
             LazyVStack(spacing: 12) {
                 ForEach(Array(page.rows.enumerated()), id: \.element.id) { i, listing in
-                    ListingPostCard(listing: listing, respondInSheet: true, horizontalInset: 14).staggeredAppear(i, in: "explore.listings")
+                    ListingPostCard(listing: listing, respondInSheet: true, horizontalInset: 14,
+                                    showsMatch: !pickedCategories.isEmpty).staggeredAppear(i, in: "explore.listings")
                 }
                 PageFooter(hasMore: page.hasMore, failed: page.pageFailed, rowCount: page.rows.count) {
                     await listingsStore.loadMore(categories: pickedCategories)

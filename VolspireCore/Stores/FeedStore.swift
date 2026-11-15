@@ -5,7 +5,7 @@
 //
 
 import Foundation
-import Kingfisher
+import DesignSystem
 import Observation
 import Services
 import SharedUtilities
@@ -142,7 +142,20 @@ final class FeedStore {
 
     private func loadHomeData() async {
         guard loadState != .loading else { return }
-        loadState = .loading
+        // Stale-first: on a cold launch (or after the TTL) the last rails paint
+        // at once from the cache's disk mirror instead of the skeleton; the
+        // fetch below swaps fresh data in place.
+        var showingStale = false
+        // (A cached all-empty response isn't shown — empty rails wait for a live one.)
+        if loadState != .loaded, let last = await service.lastHomeTracks(),
+           [last.popularTracks, last.demos, last.samples].contains(where: { !($0 ?? []).isEmpty }) {
+            popularTracks = mapTracks(last.popularTracks)
+            demos = mapTracks(last.demos)
+            samples = mapTracks(last.samples)
+            loadState = .loaded
+            showingStale = true
+        }
+        if !showingStale { loadState = .loading }
         do {
             let response = try await service.getHomeTracks()
             popularTracks = mapTracks(response.popularTracks)
@@ -151,7 +164,8 @@ final class FeedStore {
             loadState = .loaded
             prefetchCovers(popularTracks + demos + samples)
         } catch {
-            loadState.fail(error, ifEmpty: true)
+            // With the stale rails up, a failed refresh keeps them on screen.
+            loadState.fail(error, ifEmpty: !showingStale)
         }
     }
 
@@ -421,6 +435,8 @@ final class FeedStore {
             // Seed the shared follow overlay (gap-fill only — this RPC is
             // cached and must not clobber fresher local knowledge).
             social?.seedFollow(userId: $0.userId, isFollowing: $0.isFollowing ?? false)
+            ProfileSeeds.note(userId: $0.userId, username: $0.username,
+                              avatarURL: $0.profileImageUrl.flatMap { URL(string: $0) })
             return ExploreArtistItem(
                 id: $0.userId,
                 username: $0.username ?? "unknown",
@@ -444,9 +460,12 @@ final class FeedStore {
         prefetch(tracks.compactMap(\.coverURL))
     }
 
+    /// At the sizes Home shows covers: rows (40–52pt) and lead cards (96pt).
+    /// Prefetching originals instead filled the memory cache with full-size
+    /// decodes and evicted these — the cover blink on scroll.
     private func prefetch(_ urls: [URL]) {
         let unique = Array(Set(urls))
-        guard !unique.isEmpty else { return }
-        ImagePrefetcher(urls: unique).start()
+        ArtworkView.prefetch(unique, side: 52)
+        ArtworkView.prefetch(unique, side: 96)
     }
 }

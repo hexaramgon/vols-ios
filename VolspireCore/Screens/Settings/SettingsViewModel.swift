@@ -94,15 +94,26 @@ final class SettingsViewModel {
         }
     }
 
-    /// Optimistically flips a toggle, rolling back if the RPC fails.
+    /// Latest request per toggle — an older reply must not overwrite it.
+    private var prefRequests: [String: Int] = [:]
+
+    /// Optimistically flips a toggle, rolling back if the RPC fails. A reply
+    /// only settles its own key, and only if it's that key's latest request —
+    /// so quick taps on two rows (or twice on one) can't flip anything back.
     func toggle(_ pref: NotificationPref, to value: Bool) async {
-        let previous = prefs[pref.rawValue] ?? true
-        prefs[pref.rawValue] = value
+        let key = pref.rawValue
+        let previous = prefs[key] ?? true
+        prefs[key] = value
         saveError = nil
+        let request = prefRequests[key, default: 0] + 1
+        prefRequests[key] = request
         do {
-            prefs = Self.dictionary(from: try await service.updateNotificationPreference(key: pref.rawValue, value: value))
+            let saved = Self.dictionary(from: try await service.updateNotificationPreference(key: key, value: value))
+            guard prefRequests[key] == request else { return }
+            if let confirmed = saved[key] { prefs[key] = confirmed }
         } catch {
-            prefs[pref.rawValue] = previous
+            guard prefRequests[key] == request else { return }
+            prefs[key] = previous
             saveError = "Could not save. Try again."
             debugLog("[SettingsVM] Failed to update notification pref: \(error)")
         }

@@ -1329,10 +1329,12 @@ struct UploadVisibilityPicker: View {
 /// Inline preview for a just-picked upload, styled like the app's player:
 /// a white play circle (Lucide glyphs) + scrubber transport row. Audio mode
 /// is the bare row in a form card; video mode lays the same row over the
-/// picture with a legibility scrim. The picked `Data` is staged to a temp
-/// file so AVPlayer can stream it, and cleaned up when the preview goes away.
+/// picture with a legibility scrim. Plays `fileURL` in place (the caller owns
+/// it); picked `Data` is staged to a temp file so AVPlayer can stream it, and
+/// cleaned up when the preview goes away.
 struct UploadPreviewPlayer: View {
-    let data: Data
+    var data: Data? = nil
+    var fileURL: URL? = nil
     let fileName: String?
     /// False for audio files AND for videos being uploaded as audio-only.
     let isVideo: Bool
@@ -1507,6 +1509,11 @@ struct UploadPreviewPlayer: View {
     }
 
     private func setup() {
+        if let fileURL {
+            attachPlayer(url: fileURL, owned: false)
+            return
+        }
+        guard let data else { return }
         // Stage to a temp file with the right extension so AVPlayer can sniff
         // the container format.
         let ext = (fileName as NSString?)?.pathExtension.lowercased() ?? ""
@@ -1526,12 +1533,13 @@ struct UploadPreviewPlayer: View {
                 try? FileManager.default.removeItem(at: url)
                 return
             }
-            attachPlayer(url: url)
+            attachPlayer(url: url, owned: true)
         }
     }
 
-    private func attachPlayer(url: URL) {
-        tempURL = url
+    /// `owned`: a temp file this preview staged (deleted on teardown).
+    private func attachPlayer(url: URL, owned: Bool) {
+        if owned { tempURL = url }
 
         let p = AVPlayer(url: url)
         player = p

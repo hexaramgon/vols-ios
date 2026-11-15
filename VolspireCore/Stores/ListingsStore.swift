@@ -100,6 +100,7 @@ final class ListingsStore {
         savedListingsLoaded = false
         savedListingsFailed = false
         savedListingIds = []
+        toggledIds = []
     }
 
     // MARK: - Loads (both RPCs are uncached — always fresh)
@@ -206,9 +207,19 @@ final class ListingsStore {
 
     // MARK: - Viewer save state
 
+    /// `fallback` (a row's own viewer flag) only counts until the store
+    /// knows better: once the Saved list has loaded, or the viewer has
+    /// toggled this listing here. (A detail fetch copies its flag into the
+    /// board row, so an unsave stayed filled and every tap unsaved again.)
     func isSaved(_ listingId: String, fallback: Bool? = nil) -> Bool {
-        savedListingIds.contains(key(listingId)) || (fallback ?? false)
+        let id = key(listingId)
+        if savedListingIds.contains(id) { return true }
+        if savedListingsLoaded || toggledIds.contains(id) { return false }
+        return fallback ?? false
     }
+
+    /// Listings saved/unsaved in this session — their set entry is the truth.
+    private var toggledIds: Set<String> = []
 
     /// THE listing-save path. Optimistically flips the id-set and inserts/
     /// removes the row in the Saved list, rolls back on failure. Returns the
@@ -221,6 +232,7 @@ final class ListingsStore {
         // Saving's own subtle signature (tick-tick); a faint tap to unsave.
         if save { Haptics.save() } else { Haptics.unsave() }
         defer { savingIds.remove(id) }
+        toggledIds.insert(id)
 
         let removedIndex = savedListings.firstIndex { key($0.listingId) == id }
         let removedRow = removedIndex.map { savedListings[$0] }

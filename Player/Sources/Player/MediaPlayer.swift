@@ -201,6 +201,12 @@ public final class MediaPlayer {
     /// Full teardown for sign-out: stops the audio engine (dropping the
     /// prefetched next track), clears the queue and every piece of published
     /// state, wipes the lock-screen entry, and deactivates the audio session.
+    /// Deletes every played/read-ahead track kept on disk. Sign-out only —
+    /// track media can be private to the account that played it.
+    public static func clearPlayedAudioCache() {
+        AudioFileCache.clear()
+    }
+
     public func reset() {
         urlPlayer.stop()
         items = []
@@ -311,8 +317,18 @@ private extension MediaPlayer {
         {
             urlPlayer.play(url: audioURL)
         } else {
-            debugLog("MediaPlayer: No audio URL found for \(mediaID)")
-            avPlayer = nil
+            // Deleted / unavailable (its metadata is gone). Never claim it's
+            // playing — that left the previous track audible under the new
+            // id. Drop it and move on; nothing left to play stops the player.
+            debugLog("MediaPlayer: No audio URL found for \(mediaID) — skipping")
+            items.remove(at: index)
+            originalItems.removeAll { $0 == mediaID }
+            if items.indices.contains(index) {
+                playItem(at: index)
+            } else {
+                reset()
+            }
+            return
         }
 
         state = .playing(media: mediaID)
@@ -447,6 +463,29 @@ extension MediaPlayer: AudioSessionDelegate {
         guard case let .playing(mediaID) = state else { return }
         interruptedMediaID = mediaID
         interruptedElapsedTime = urlPlayer.elapsedTime
+        pause()
+    }
+
+    func audioSessionOutputLost() {
+        pause()
+    }
+
+    /// A reconfigured engine has stopped. Restart through pause → resume,
+    /// whose resume path restarts the engine and, if the scheduled audio was
+    /// dropped, reloads and seeks back. Deferred a beat: an unplug sends
+    /// this alongside the route change — that one pauses, and then there's
+    /// nothing to restart (no burst out of the speaker).
+    func audioEngineConfigurationChanged() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, case .playing = self.state else { return }
+            self.pause()
+            self.resume()
+        }
+    }
+
+    /// The engine died with the media server — show paused; Play restarts it.
+    func audioSessionMediaServicesReset() {
         pause()
     }
 

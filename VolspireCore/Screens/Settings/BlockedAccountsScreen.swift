@@ -18,6 +18,7 @@ struct BlockedAccountsScreen: View {
 
     /// `users.open_to_collab` — nil until loaded (the toggle waits for it).
     @State private var openToCollab: Bool?
+    @State private var collabLoadFailed = false
     @State private var savingCollab = false
     @State private var collabError: String?
 
@@ -28,21 +29,26 @@ struct BlockedAccountsScreen: View {
 
     var body: some View {
         SettingsSectionPage(title: "Privacy") {
-            SettingsGroup(title: "Collaboration") {
-                SettingsRow(
-                    title: "Open to collaboration",
-                    caption: "Show your city and your music on the Collab map so artists nearby can find you and reach out. Your exact location is never shared."
-                ) {
-                    Toggle("", isOn: Binding(
-                        get: { openToCollab ?? false },
-                        set: { setOpenToCollab($0) }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.ink)
-                    .disabled(openToCollab == nil || savingCollab)
+            if collabLoadFailed {
+                LoadErrorView(title: "Couldn't load this setting") { Task { await loadCollab() } }
+                    .padding(.vertical, 24)
+            } else {
+                SettingsGroup(title: "Collaboration") {
+                    SettingsRow(
+                        title: "Open to collaboration",
+                        caption: "Show your city and your music on the Collab map so artists nearby can find you and reach out. Your exact location is never shared."
+                    ) {
+                        Toggle("", isOn: Binding(
+                            get: { openToCollab ?? false },
+                            set: { setOpenToCollab($0) }
+                        ))
+                        .labelsHidden()
+                        .toggleStyle(.ink)
+                        .disabled(openToCollab == nil || savingCollab)
+                    }
                 }
+                .redacted(reason: openToCollab == nil ? .placeholder : [])
             }
-            .redacted(reason: openToCollab == nil ? .placeholder : [])
 
             if let collabError {
                 ErrorBanner(collabError)
@@ -69,7 +75,17 @@ struct BlockedAccountsScreen: View {
             }
         }
         .task { await load() }
-        .task { openToCollab = try? await dependencies.supabaseService.getOpenToCollab() }
+        .task { await loadCollab() }
+    }
+
+    private func loadCollab() async {
+        collabLoadFailed = false
+        do {
+            openToCollab = try await dependencies.supabaseService.getOpenToCollab()
+        } catch {
+            guard !error.isCancellation else { return }
+            collabLoadFailed = true
+        }
     }
 
     /// Saves straight away (no Save button on this page): flips optimistically,

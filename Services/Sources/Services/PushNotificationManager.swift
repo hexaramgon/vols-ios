@@ -114,13 +114,12 @@ public final class PushNotificationManager {
     /// Center — call when the user opens that conversation so its alerts don't
     /// linger. The message push payload carries `convo_id` in its userInfo.
     public func clearDeliveredNotifications(convoId: String) {
-        let center = UNUserNotificationCenter.current()
-        center.getDeliveredNotifications { delivered in
+        UNUserNotificationCenter.current().getDeliveredNotifications { delivered in
             let ids = delivered
                 .filter { ($0.request.content.userInfo["convo_id"] as? String) == convoId }
                 .map(\.request.identifier)
             guard !ids.isEmpty else { return }
-            center.removeDeliveredNotifications(withIdentifiers: ids)
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ids)
         }
     }
 

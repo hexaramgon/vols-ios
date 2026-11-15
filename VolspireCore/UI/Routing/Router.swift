@@ -40,6 +40,7 @@ enum Route: Hashable, Equatable {
     case network
 }
 
+@MainActor
 @Observable
 class Router {
     /// The tab's back-stack. A typed array (not `NavigationPath`) so the
@@ -76,6 +77,13 @@ class Router {
 
     func navigateToProfile(userId: String) {
         push(Route.profile(userId))
+    }
+
+    /// Same push, plus the name + avatar the tapped row already shows — the
+    /// profile's skeleton paints them on its first frame (see ProfileSeeds).
+    func navigateToProfile(userId: String, username: String?, avatarURL: URL?) {
+        ProfileSeeds.note(userId: userId, username: username, avatarURL: avatarURL)
+        navigateToProfile(userId: userId)
     }
 
     func navigateToSearch(query: String) {

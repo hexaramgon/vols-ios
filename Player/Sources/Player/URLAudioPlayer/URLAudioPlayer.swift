@@ -54,6 +54,8 @@ final class URLAudioPlayer {
     private var prefetchTasks: [URL: URLSessionDownloadTask] = [:]
     /// Read-ahead whose link is still being resolved (keeps it from starting twice).
     private var prefetchResolving: Set<URL> = []
+    /// Read-ahead videos whose audio is being extracted (same guard).
+    private var videoPrefetchExtracting: Set<URL> = []
 
     /// Exchanges a queued URL for a fetchable one just before downloading
     /// (set via `MediaPlayer.resolveMediaURL`). Downloads, the prefetch cache
@@ -202,11 +204,17 @@ final class URLAudioPlayer {
     /// later is gapless (no download gap, no lock-screen pause on skip). No-op for
     /// local files, videos, or URLs already prefetched / in flight.
     func prefetch(url: URL) {
+        let isVideo = Self.videoExtensions.contains(url.pathExtension.lowercased())
         guard !url.isFileURL,
-              !Self.videoExtensions.contains(url.pathExtension.lowercased()),
+              // A prefetched video goes straight into the played-audio cache,
+              // so only cacheable (stable-URL) videos are read ahead.
+              !isVideo || AudioFileCache.isCacheable(url),
+              // Already on disk from an earlier play / read-ahead.
+              (isVideo ? cachedVideo(for: url) == nil : AudioFileCache.file(for: url) == nil),
               prefetchedFiles[url] == nil,
               prefetchTasks[url] == nil,
-              !prefetchResolving.contains(url)
+              !prefetchResolving.contains(url),
+              !videoPrefetchExtracting.contains(url)
         else { return }
 
         prefetchResolving.insert(url)
@@ -214,22 +222,78 @@ final class URLAudioPlayer {
             let fetchURL = await self.fetchableURL(url)
             // Dropped from the read-ahead window while resolving.
             guard self.prefetchResolving.remove(url) != nil, let fetchURL else { return }
-            self.startPrefetch(url, from: fetchURL)
+            self.startPrefetch(url, from: fetchURL, isVideo: isVideo)
         }
     }
 
-    private func startPrefetch(_ url: URL, from fetchURL: URL) {
-        let task = URLSession.shared.downloadTask(with: fetchURL) { [weak self] tmpURL, response, error in
+    /// Video read-ahead runs only on unmetered networks: a video track can
+    /// be 100MB+, so on cellular / Low Data Mode it still loads on demand.
+    private static let videoPrefetchSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.allowsExpensiveNetworkAccess = false
+        config.allowsConstrainedNetworkAccess = false
+        return URLSession(configuration: config)
+    }()
+
+    private func startPrefetch(_ url: URL, from fetchURL: URL, isVideo: Bool) {
+        let session = isVideo ? Self.videoPrefetchSession : URLSession.shared
+        let generation = AudioFileCache.generation
+        let task = session.downloadTask(with: fetchURL) { [weak self] tmpURL, response, error in
             // Claimed synchronously here — see `claimDownload`.
             let outcome = Self.claimDownload(tmpURL, response: response, error: error, from: url, prefix: "prefetch-")
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                // Signed out meanwhile (or the player's gone): nobody owns it.
+                guard let self, AudioFileCache.generation == generation else {
+                    if case let .file(local) = outcome { try? FileManager.default.removeItem(at: local) }
+                    return
+                }
                 self.prefetchTasks[url] = nil
-                if case let .file(local) = outcome { self.prefetchedFiles[url] = local }
+                guard case let .file(local) = outcome else { return }
+                if isVideo {
+                    await self.cacheVideoReadAhead(local, for: url, generation: generation)
+                } else {
+                    self.prefetchedFiles[url] = local
+                }
             }
         }
         prefetchTasks[url] = task
         task.resume()
+    }
+
+    /// A read-ahead video also needs its audio extracted before it can play
+    /// (AudioKit can't open a video) — done now, so the skip is instant, and
+    /// both files go into the played-audio cache.
+    private func cacheVideoReadAhead(_ video: URL, for url: URL, generation: Int) async {
+        videoPrefetchExtracting.insert(url)
+        defer { videoPrefetchExtracting.remove(url) }
+        guard let audio = try? await extractAudioTrack(from: video) else {
+            try? FileManager.default.removeItem(at: video)
+            return
+        }
+        // Signed out during the extraction — drop both, don't refill the cache.
+        guard AudioFileCache.generation == generation else {
+            try? FileManager.default.removeItem(at: video)
+            try? FileManager.default.removeItem(at: audio)
+            return
+        }
+        cacheVideo(video, audio: audio, for: url)
+    }
+
+    /// Both halves of a video into the cache — or neither (one alone can't play).
+    private func cacheVideo(_ video: URL, audio: URL, for url: URL) {
+        if AudioFileCache.adopt(video, for: url),
+           AudioFileCache.adopt(audio, for: url, part: .extractedAudio) {
+            return
+        }
+        try? FileManager.default.removeItem(at: video)
+        try? FileManager.default.removeItem(at: audio)
+    }
+
+    /// A cached video track: its video (display) and extracted audio (playback).
+    private func cachedVideo(for url: URL) -> (video: URL, audio: URL)? {
+        guard let audio = AudioFileCache.file(for: url, part: .extractedAudio),
+              let video = AudioFileCache.file(for: url) else { return nil }
+        return (video, audio)
     }
 
     /// Drops read-ahead (in-flight or finished) for every URL not in `keep`.
@@ -240,8 +304,16 @@ final class URLAudioPlayer {
             prefetchTasks[url] = nil
         }
         for (url, file) in prefetchedFiles where !keep.contains(url) {
-            try? FileManager.default.removeItem(at: file)
+            releaseDownloadedFile(file, for: url)
             prefetchedFiles[url] = nil
+        }
+    }
+
+    /// A fully downloaded file nobody plays from any more: into the played-
+    /// audio cache (a later play skips the download), else deleted.
+    private func releaseDownloadedFile(_ file: URL, for url: URL) {
+        if !AudioFileCache.adopt(file, for: url) {
+            try? FileManager.default.removeItem(at: file)
         }
     }
 
@@ -389,6 +461,20 @@ private extension URLAudioPlayer {
         if !isVideoMode, let local = prefetchedFiles.removeValue(forKey: remoteURL) {
             tempFileURL = local // owned now, cleaned up with the rest
             loadAndPlayAudio(fileURL: local)
+            return
+        }
+        // Played before (Previous, replay, repeat-all, a re-tap) → straight from
+        // the played-audio cache: no link signing, no download. Not owned here
+        // (tempFileURL stays nil), so cleanup leaves it in place.
+        if !isVideoMode, let cached = AudioFileCache.file(for: remoteURL) {
+            loadAndPlayAudio(fileURL: cached)
+            return
+        }
+        // A video played or read ahead before: the cached video for display +
+        // its already-extracted audio — no download, no extraction.
+        if isVideoMode, let cached = cachedVideo(for: remoteURL) {
+            setupVideoDisplay(fileURL: cached.video)
+            loadAndPlayAudio(fileURL: cached.audio)
             return
         }
         downloadTask?.cancel()
@@ -689,6 +775,9 @@ private extension URLAudioPlayer {
     /// and reports up; `MediaPlayer` tears down and pauses.
     func fail(_ reason: String) {
         debugLog("URLAudioPlayer: \(reason)")
+        // A cached copy may be what failed (a read-ahead is cached before it's
+        // ever decoded) — drop it, or every replay would hit it and fail again.
+        if let currentURL { AudioFileCache.remove(currentURL) }
         setBuffering(false)
         delegate?.urlAudioPlayerDidFail(self)
     }
@@ -700,7 +789,7 @@ private extension URLAudioPlayer {
         if stopEngine {
             prefetchTasks.values.forEach { $0.cancel() }
             prefetchTasks.removeAll()
-            for file in prefetchedFiles.values { try? FileManager.default.removeItem(at: file) }
+            for (url, file) in prefetchedFiles { releaseDownloadedFile(file, for: url) }
             prefetchedFiles.removeAll()
         }
         setBuffering(false)
@@ -711,9 +800,20 @@ private extension URLAudioPlayer {
             cleanupVideo()
         }
 
-        // Clean up temp files
+        // Clean up temp files. A file that loaded fine goes into the played-
+        // audio cache instead (a failed load isn't cached — it would fail the
+        // same way forever): audio as-is; a video as video + extracted audio.
+        // The display player was released above, so moving its file is safe.
         if let tempFileURL {
-            try? FileManager.default.removeItem(at: tempFileURL)
+            if !isVideoMode, loadedFileURL == tempFileURL, let currentURL {
+                releaseDownloadedFile(tempFileURL, for: currentURL)
+            } else if isVideoMode, let extractedAudioURL, loadedFileURL == extractedAudioURL,
+                      let currentURL, AudioFileCache.isCacheable(currentURL) {
+                cacheVideo(tempFileURL, audio: extractedAudioURL, for: currentURL)
+                self.extractedAudioURL = nil
+            } else {
+                try? FileManager.default.removeItem(at: tempFileURL)
+            }
             self.tempFileURL = nil
         }
         if let extractedAudioURL {

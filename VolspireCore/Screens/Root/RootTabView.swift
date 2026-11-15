@@ -284,6 +284,8 @@ struct RootTabView: View {
         .task { await dependencies.libraryStore.loadIfNeeded() }
         // Cold launch: route a push tapped before the UI was ready to receive it.
         .task { routePendingPush() }
+        // Uploads left running (or cut off) last session: restart / post them.
+        .task { await resumeBackgroundUploads() }
         // Push primer: once, a beat after the app settles, for anyone who
         // hasn't been asked yet. Its button shows the system prompt.
         .task {
@@ -303,18 +305,15 @@ struct RootTabView: View {
             if phase == .active {
                 Task { await dependencies.inboxStore.appBecameActive() }
                 dependencies.inboxStore.startLiveUpdates()
+                Task { await resumeBackgroundUploads() }
             } else if phase == .background {
                 dependencies.inboxStore.stopLiveUpdates()
             }
         }
-        .task {
-            await dependencies.socialStore.loadMyProfileIfNeeded()
-            await rebuildProfileAvatar()
-        }
-        // Avatar edited (SocialStore refreshed) → re-crop the tab thumbnail.
-        .onChange(of: dependencies.socialStore.myProfile?.profileImageUrl) { _, _ in
-            Task { await rebuildProfileAvatar() }
-        }
+        // The avatar tab icon is off (tabIcon draws the Lucide glyph), so the
+        // full-size avatar download + crop no longer runs. To bring it back,
+        // call rebuildProfileAvatar() here and on profileImageUrl changes.
+        .task { await dependencies.socialStore.loadMyProfileIfNeeded() }
         .task { AnalyticsService.shared?.log(.pageView, metadata: ["to": .string(analyticsName(selectedTab))]) }
     }
 
@@ -376,6 +375,11 @@ struct RootTabView: View {
         }
     }
 
+    private func resumeBackgroundUploads() async {
+        guard let uid = dependencies.supabaseService.currentUserId else { return }
+        await BackgroundUploads.shared.resume(userId: uid)
+    }
+
     /// A track push opens the track: fetch it, start playback, and expand the
     /// player (that's the app's track view — comments included). Falls back to
     /// the notifications page if the track can't be loaded (deleted/offline);
@@ -395,6 +399,7 @@ struct RootTabView: View {
                     artwork: storage.resolveTrackUrl(track.coverUrl).flatMap { URL(string: $0) },
                     title: track.title ?? "Track",
                     artist: track.artistUsername,
+                    artistId: track.artistUserId,
                     audioURL: audioURL
                 )
             )
@@ -437,8 +442,8 @@ struct RootTabView: View {
     }
 
     /// Every tab — Profile included, for now — uses its plain Lucide icon
-    /// (Profile: the User glyph, not the avatar). The avatar crop below is kept
-    /// so it can come back.
+    /// (Profile: the User glyph, not the avatar). The avatar crop above is kept
+    /// (but not called) so it can come back.
     private func tabIcon(for item: TabBarItem) -> some View {
         item.image
             .renderingMode(.template)

@@ -4,6 +4,8 @@
 //
 //
 
+import Foundation
+import Kingfisher
 import MediaLibrary
 import Observation
 import Player
@@ -81,6 +83,29 @@ class Dependencies: Observable {
         // Sign-out resets on the way out (AppView); this resets again on the
         // way in, after any late response from the previous account has landed.
         authManager.willOpenAccount = { [unowned self] in resetForSignOut() }
+
+        BackgroundUploads.shared.configure(supabaseService)
+        // An upload that only finished after a relaunch has no screen
+        // waiting on it — say so, and let the feeds pick the track up.
+        NotificationCenter.default.addObserver(
+            forName: .backgroundUploadEnded, object: nil, queue: .main
+        ) { note in
+            let label = note.userInfo?["label"] as? String ?? "Your track"
+            let succeeded = note.userInfo?["succeeded"] as? Bool ?? false
+            let followUpFailed = note.userInfo?["followUpFailed"] as? Bool ?? false
+            MainActor.assumeIsolated {
+                if followUpFailed {
+                    NotificationCenter.default.post(name: .ownContentPosted, object: nil)
+                    ToastCenter.shared.show("Posted \u{201C}\(label)\u{201D}, but couldn\u{2019}t add it to the release",
+                                            style: .error)
+                } else if succeeded {
+                    NotificationCenter.default.post(name: .ownContentPosted, object: nil)
+                    ToastCenter.shared.show("Posted \u{201C}\(label)\u{201D}")
+                } else {
+                    ToastCenter.shared.show("Couldn\u{2019}t post \u{201C}\(label)\u{201D}", style: .error)
+                }
+            }
+        }
     }
 }
 
@@ -90,10 +115,24 @@ extension Dependencies {
     /// from the old account can land after the first reset: silence and fully
     /// clear the player, wipe the in-memory media registry, and reset per-user
     /// controller state.
-    /// Server-response caches are cleared by `AuthManager.signOut` itself;
-    /// Kingfisher's image cache stays (covers, avatars — public content).
+    /// Server-response caches are cleared by `AuthManager.signOut` itself.
     func resetForSignOut() {
         mediaPlayer.reset()
+        // After reset: stopping hands the current track's file to the cache.
+        MediaPlayer.clearPlayedAudioCache()
+        // Per-account leftovers on disk: recent searches, DM image layout keys,
+        // downloaded attachments, and the image cache — it holds private DM
+        // photos as well as public covers, so it's cleared too (covers just
+        // re-download for the next account).
+        RecentSearches.shared.clear()
+        ProfileSeeds.clear()
+        ChatImageAspects.clear()
+        AttachmentDownloads.removeAll()
+        ImageCache.default.clearMemoryCache()
+        ImageCache.default.clearDiskCache()
+        // A push tapped while signed out belongs to the previous account —
+        // never route it into the next one.
+        PushInbox.pending = nil
         playerController.resetForSignOut()
         Task { await mediaState.removeAll() }
         Task { await StorageService.clearSignedUrlMemo() }

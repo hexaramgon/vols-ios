@@ -9,12 +9,16 @@
 //
 
 import DesignSystem
+import Kingfisher
 import SwiftUI
 
 struct ProfileSkeleton: View {
     /// Own profile: Edit + round Share / Settings. Someone else's: Follow +
     /// Collab (equal width) + a round "…".
     var isOwnProfile = false
+    /// Name + avatar already known from the row that was tapped. Drawn over
+    /// the shimmer (the shimmer's mask would dim them) at the bones' spots.
+    var seed: ProfileSeeds.Seed? = nil
     private let bone = Color.vSkeleton
 
     var body: some View {
@@ -24,6 +28,31 @@ struct ProfileSkeleton: View {
             tracksSkeleton
         }
         .shimmering()
+        .overlayPreferenceValue(SeedAnchors.self) { anchors in
+            GeometryReader { proxy in
+                if let seed {
+                    if let url = seed.avatarURL, let avatar = anchors[.avatar] {
+                        let r = proxy[avatar]
+                        KFImage(url)
+                            .loadDiskFileSynchronously()
+                            .downsampled(to: 84, fade: 0)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: r.width, height: r.height)
+                            .clipShape(Circle())
+                            .position(x: r.midX, y: r.midY)
+                    }
+                    if let name = anchors[.name] {
+                        // Exactly the frame the hero's name will take (the
+                        // laid-out invisible copy below) — no jump on reveal.
+                        let r = proxy[name]
+                        heroName(seed.username)
+                            .frame(width: r.width, height: r.height, alignment: .leading)
+                            .position(x: r.midX, y: r.midY)
+                    }
+                }
+            }
+        }
         .ignoresSafeArea(edges: .top)
     }
 
@@ -40,12 +69,34 @@ struct ProfileSkeleton: View {
                     Circle()
                         .fill(bone)
                         .frame(width: 84, height: 84)
-                    VStack(alignment: .leading, spacing: 8) {
-                        capsuleBone(width: 170, height: 24)
-                        capsuleBone(width: 110, height: 13)
+                        // Seeded avatar covers this spot (bone hidden under it).
+                        .opacity(seed?.avatarURL == nil ? 1 : 0)
+                        .anchorPreference(key: SeedAnchors.self, value: .bounds) { [.avatar: $0] }
+                    if let seed {
+                        // The hero's own name column (ProfileHeroView
+                        // .darkContent): the name, then the location line
+                        // (its height is kept even when empty), so the
+                        // seeded name sits where the real one lands.
+                        VStack(alignment: .leading, spacing: 8) {
+                            heroName(seed.username)
+                                .opacity(0)
+                                .anchorPreference(key: SeedAnchors.self, value: .bounds) { [.name: $0] }
+                            HStack(spacing: 5) {
+                                LucideIcon(.mapPin, .xs)
+                                Text(verbatim: "Location").font(.appFootnote)
+                            }
+                            .opacity(0)
+                            .overlay(alignment: .leading) { capsuleBone(width: 110, height: 13) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            capsuleBone(width: 170, height: 24)
+                            capsuleBone(width: 110, height: 13)
+                        }
+                        .padding(.bottom, 8)
+                        Spacer(minLength: 0)
                     }
-                    .padding(.bottom, 8)
-                    Spacer(minLength: 0)
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -84,6 +135,17 @@ struct ProfileSkeleton: View {
             // the bones sit where the content lands.
             .padding(.top, ViewConst.safeAreaInsets.top + 44 + 8)
         }
+    }
+
+    /// The hero's name text, with its exact sizing rules (ProfileHeroView).
+    private func heroName(_ name: String) -> some View {
+        Text(name)
+            .font(.appTitleHero)
+            .foregroundStyle(Color.vText)
+            .lineLimit(1)
+            .allowsTightening(true)
+            .minimumScaleFactor(0.3)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var statBone: some View {
@@ -185,5 +247,15 @@ struct ProfileSkeleton: View {
             .fill(bone)
             .frame(height: height)
             .frame(maxWidth: .infinity)
+    }
+}
+
+/// Where the avatar / name bones sit, so a seed can be drawn over them
+/// outside the shimmer mask.
+private struct SeedAnchors: PreferenceKey {
+    enum Slot { case avatar, name }
+    static let defaultValue: [Slot: Anchor<CGRect>] = [:]
+    static func reduce(value: inout [Slot: Anchor<CGRect>], nextValue: () -> [Slot: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
     }
 }

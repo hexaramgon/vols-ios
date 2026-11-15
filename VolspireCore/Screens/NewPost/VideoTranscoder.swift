@@ -108,10 +108,65 @@ enum VideoTranscoder {
             end: CMTime(seconds: end, preferredTimescale: 600)
         )
         session.shouldOptimizeForNetworkUse = true
+        stripPrivateMetadata(session)
         let output = FileManager.default.temporaryDirectory
             .appendingPathComponent("trim_\(UUID().uuidString).mp4")
         try await session.export(to: output, as: .mp4)
         return output
+    }
+
+    // MARK: - Fallback (no re-encode, any codec)
+
+    /// Last resort when `prepare` fails: the source as-is in a .mov (the
+    /// permissive container), minus its metadata. Never upload the picked
+    /// file's raw bytes — camera-roll videos carry GPS + device info.
+    static func sanitizedCopy(_ input: URL) async throws -> URL {
+        let asset = AVURLAsset(url: input)
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
+            throw Failure.failed
+        }
+        stripPrivateMetadata(session)
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("upload-\(UUID().uuidString).mov")
+        try await session.export(to: output, as: .mov)
+        return output
+    }
+
+    /// In-memory variant of `sanitizedCopy` for attachments and folder files:
+    /// the same streams, re-muxed with no metadata (no quality loss). Keeps
+    /// the container (.mp4 stays .mp4, everything else becomes .mov). nil if
+    /// AVFoundation can't read it (e.g. WebM, which camera rolls never make).
+    static func removingMetadata(_ data: Data, fileExtension: String) async -> Data? {
+        let fm = FileManager.default
+        let ext = fileExtension.lowercased()
+        let input = fm.temporaryDirectory.appendingPathComponent("strip-in-\(UUID().uuidString).\(ext)")
+        let isMP4 = ext == "mp4" || ext == "m4v"
+        let output = fm.temporaryDirectory
+            .appendingPathComponent("strip-out-\(UUID().uuidString).\(isMP4 ? "mp4" : "mov")")
+        defer {
+            try? fm.removeItem(at: input)
+            try? fm.removeItem(at: output)
+        }
+        do {
+            try data.write(to: input)
+            let asset = AVURLAsset(url: input)
+            guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else {
+                return nil
+            }
+            stripPrivateMetadata(session)
+            try await session.export(to: output, as: isMP4 ? .mp4 : .mov)
+            return try Data(contentsOf: output)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Passthrough exports copy the source's metadata (QuickTime location,
+    /// device make/model, creation date) unless told not to. The re-encode
+    /// path writes none — AVAssetWriter starts with empty metadata.
+    static func stripPrivateMetadata(_ session: AVAssetExportSession) {
+        session.metadata = []
+        session.metadataItemFilter = .forSharing()
     }
 
     // MARK: - Remux (no re-encode)
@@ -121,6 +176,7 @@ enum VideoTranscoder {
             throw Failure.failed
         }
         session.shouldOptimizeForNetworkUse = true
+        stripPrivateMetadata(session)
         // Progress from the session's state stream; cancelling this task
         // cancels the export.
         let box = ExportBox(session: session)

@@ -49,9 +49,18 @@ extension UploadTrackScreen {
                         }
                     }
                 } label: {
-                    CapsuleButtonLabel(icon: .video, title: "Use a frame from your video", style: .secondary)
+                    CapsuleButtonLabel(
+                        icon: .video,
+                        title: viewModel.isProcessingVideo ? "Preparing video…" : "Use a frame from your video",
+                        style: .secondary
+                    )
                 }
                 .buttonStyle(.plain)
+                // Waits for the video to finish preparing — grabbing a frame
+                // while it compresses competes with the export for the decoder.
+                .disabled(viewModel.isProcessingVideo)
+                .opacity(viewModel.isProcessingVideo ? 0.45 : 1)
+                .animation(.easeOut(duration: 0.18), value: viewModel.isProcessingVideo)
             }
         }
     }
@@ -241,6 +250,7 @@ extension UploadTrackScreen {
     var hasPick: Bool {
         viewModel.isProcessingVideo || viewModel.mediaAttached
             || (viewModel.mediaType == .audio && viewModel.audioFileError != nil)
+            || (viewModel.mediaType == .video && viewModel.videoFileError != nil)
     }
 
     var pickBarTitle: String {
@@ -259,11 +269,12 @@ extension UploadTrackScreen {
             if viewModel.isProcessingVideo, viewModel.videoProcessingProgress > 0 {
                 return "\(Int(viewModel.videoProcessingProgress * 100))%"
             }
+            if let error = viewModel.videoFileError, viewModel.videoFile == nil { return error }
             if let asset = selectedLibraryAsset { return UploadPickBar.duration(asset.duration) }
             return nil
         }
-        if let error = viewModel.audioFileError, viewModel.audioData == nil { return error }
-        return viewModel.audioData.map { UploadClipRows.formatBytes($0.count) }
+        if let error = viewModel.audioFileError, viewModel.audioFile == nil { return error }
+        return viewModel.audioFile.map { UploadClipRows.formatBytes($0.bytes) }
     }
 
     func setPickExpanded(_ expanded: Bool) {
@@ -279,7 +290,7 @@ extension UploadTrackScreen {
         if viewModel.mediaType == .video {
             if viewModel.isProcessingVideo {
                 videoProcessingCard
-            } else if let data = viewModel.videoData {
+            } else if let file = viewModel.videoFile {
                 VStack(alignment: .leading, spacing: 8) {
                     // Right under the Library / Files switch: Trim far left,
                     // Audio only far right.
@@ -296,34 +307,40 @@ extension UploadTrackScreen {
                     // the mode swaps the container in place.
                     // Capped to about a third of the screen so the switch,
                     // the mode toggle, a row of the grid, and Continue all fit.
-                    UploadPreviewPlayer(data: data, fileName: viewModel.videoFileName,
+                    UploadPreviewPlayer(fileURL: file.url, fileName: viewModel.videoFileName,
                                         isVideo: !viewModel.videoAudioOnly,
                                         onStartPlaying: {
                                             if playerController.state.isPlaying { playerController.onPlayPause() }
                                         },
                                         maxVideoHeight: (UIScreen.size.height * 0.34).rounded())
-                    // A new trim is new bytes under the same name — rebuild.
-                    .id("\(viewModel.videoFileName ?? "")|\(trimKey)")
+                    // Keyed by the staged file: a trim, or a new pick under
+                    // the same name, is a new file — rebuild.
+                    .id(file.url)
                 }
+            } else if let error = viewModel.videoFileError {
+                Text(error)
+                    .font(.appFootnote)
+                    .foregroundStyle(Color.vError)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         } else {
             VStack(alignment: .leading, spacing: 12) {
-                if let data = viewModel.audioData {
+                if let file = viewModel.audioFile {
                     // One card: the file (name over type · size) with its
                     // player. Replace it with "Choose another file" below.
                     let name = viewModel.audioFileName ?? "Audio file"
                     let ext = (name as NSString).pathExtension.uppercased()
                     UploadPreviewPlayer(
-                        data: data, fileName: viewModel.audioFileName, isVideo: false,
+                        fileURL: file.url, fileName: viewModel.audioFileName, isVideo: false,
                         onStartPlaying: {
                             if playerController.state.isPlaying { playerController.onPlayPause() }
                         },
                         title: (name as NSString).deletingPathExtension,
-                        detail: [ext.isEmpty ? nil : ext, UploadClipRows.formatBytes(data.count)]
+                        detail: [ext.isEmpty ? nil : ext, UploadClipRows.formatBytes(file.bytes)]
                             .compactMap { $0 }.joined(separator: " · ")
                     )
                     // Fresh player if a different file is picked.
-                    .id(viewModel.audioFileName)
+                    .id(file.url)
                 }
                 if let error = viewModel.audioFileError {
                     Text(error)
@@ -394,11 +411,6 @@ extension UploadTrackScreen {
             asset: selectedLibraryAsset,
             progress: viewModel.videoProcessingProgress
         )
-    }
-
-    /// Identity of the current trim, for keying the preview.
-    var trimKey: String {
-        viewModel.videoTrim.map { "\($0.lowerBound)-\($0.upperBound)" } ?? "full"
     }
 
     /// Over an attached video, far left: a secondary capsule button that

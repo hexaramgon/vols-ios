@@ -16,9 +16,22 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _: UIApplication,
         didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        dependencies = .make()
+        dependencies = .make()   // configures the uploads' backend
+        // Before UIKit hands over background events: reconnects the uploads'
+        // session, so a relaunch receives them.
+        BackgroundUploads.shared.activate()
         UNUserNotificationCenter.current().delegate = self
         return true
+    }
+
+    /// The system relaunched the app for finished background uploads.
+    func application(
+        _: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        nonisolated(unsafe) let completion = completionHandler
+        BackgroundUploads.shared.handleEvents(identifier: identifier) { completion() }
     }
 
     // MARK: - APNs registration

@@ -20,6 +20,13 @@ struct NotificationsScreen: View {
     @Environment(InboxStore.self) private var inboxStore
     @Environment(SocialStore.self) private var socialStore
     @State private var viewModel = NotificationsScreenViewModel()
+    @Environment(\.isActiveRootTab) private var isActiveRootTab
+    /// Not covered by a pushed page (a row's destination) — reloading marks
+    /// everything read, so it only happens while the list is actually seen.
+    @State private var isOnScreen = false
+    /// Activity arrived while covered / on another tab — reload on return.
+    @State private var missedActivity = false
+    private var isVisible: Bool { isOnScreen && isActiveRootTab }
 
     /// Clears the tab bar + (when present) the floating mini-player.
     private var bottomInset: CGFloat { playerController.contentBottomInset }
@@ -45,10 +52,21 @@ struct NotificationsScreen: View {
         // marks it read) and keep the bell dot off.
         .onReceive(NotificationCenter.default.publisher(for: .pushReceived)) { note in
             guard note.userInfo?["convo_id"] == nil else { return }
-            Task {
-                await viewModel.load()
-                inboxStore.clearNotificationsDot()
-            }
+            missedActivity = true
+            catchUp()
+        }
+        .onAppear { isOnScreen = true; catchUp() }
+        .onDisappear { isOnScreen = false }
+        .onChange(of: isActiveRootTab) { _, _ in catchUp() }
+    }
+
+    /// Reloads (marking read) for activity that arrived — only while seen.
+    private func catchUp() {
+        guard isVisible, missedActivity else { return }
+        missedActivity = false
+        Task {
+            await viewModel.load()
+            inboxStore.clearNotificationsDot()
         }
     }
 

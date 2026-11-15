@@ -89,7 +89,7 @@ struct SearchOverlay: View {
                         onArtist: { a in
                             RecentSearches.shared.add(trimmedQuery)
                             closeSearch()
-                            router.navigateToProfile(userId: a.id)
+                            router.navigateToProfile(userId: a.id, username: a.username, avatarURL: a.avatarURL)
                         }
                     )
                     .padding(.vertical, 8)
@@ -154,7 +154,7 @@ struct SearchOverlay: View {
         guard t.audioURL != nil else { return }
         Task {
             await dependencies.mediaPlayer.play(MediaID(t.id), queue: [
-                Media(id: MediaID(t.id), meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, audioURL: t.audioURL)),
+                Media(id: MediaID(t.id), meta: MediaMeta(artwork: t.coverURL, title: t.title, artist: t.artist, artistId: t.artistId, audioURL: t.audioURL)),
             ])
         }
     }
@@ -273,6 +273,12 @@ final class RecentSearches {
 
     func remove(_ query: String) {
         save(items.filter { $0 != query })
+    }
+
+    /// Sign-out: the next account on this device mustn't see these.
+    func clear() {
+        items = []
+        UserDefaults.standard.removeObject(forKey: Self.key)
     }
 
     private func save(_ next: [String]) {
