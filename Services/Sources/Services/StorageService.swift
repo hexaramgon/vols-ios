@@ -191,7 +191,11 @@ public final class StorageService: Sendable {
                 .createSignedURLs(paths: misses.map(\.path), expiresIn: Self.signedUrlExpiry)
 
             for (i, miss) in misses.enumerated() where i < signedData.count {
-                let url = signedData[i].absoluteString
+                guard let signedURL = signedData[i].signedURL else {
+                    debugLog("[StorageService] Failed to sign \(miss.path): \(signedData[i].error ?? "unknown error")")
+                    continue
+                }
+                let url = signedURL.absoluteString
                 results[miss.index] = url
                 await Self.signedUrlMemo.store(miss.key, url: url, validFor: memoValidity)
             }
