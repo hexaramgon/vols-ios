@@ -19,3 +19,19 @@ APP=$APP_DD/Build/Products/Debug-iphonesimulator/Volspire.app
 IO=$QA_DIR/driver/io
 SHOTS=$QA_DIR/shots
 mkdir -p "$QA_DIR" "$SHOTS"
+
+# Some simulators expose two displays (simctl io then refuses to pick one:
+# "Cannot choose between 2 displays"). Echoes the --display flag for the primary
+# one when needed, else nothing. Probed once per simulator and cached.
+io_display() {
+  local cache="$QA_DIR/.io-display-$SIM"
+  if [ ! -f "$cache" ]; then
+    if xcrun simctl io "$SIM" screenshot --type=png "$QA_DIR/.io-probe.png" 2>&1 | grep -q "Cannot choose between"; then
+      echo "--display=1" > "$cache"
+    else
+      : > "$cache"
+    fi
+    rm -f "$QA_DIR/.io-probe.png"
+  fi
+  cat "$cache"
+}

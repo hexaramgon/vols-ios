@@ -6,7 +6,7 @@
 source "$(dirname "$0")/env.sh"
 name=$1; secs=$2; fps=${3:-10}; shift 3 2>/dev/null; [ "$1" = "--" ] && shift
 mp4="$SHOTS/$name.mp4"; rm -f "$mp4" "$SHOTS/${name}"_*.png
-xcrun simctl io "$SIM" recordVideo --codec=h264 --force "$mp4" >/dev/null 2>&1 & rec=$!
+xcrun simctl io "$SIM" recordVideo $(io_display) --codec=h264 --force "$mp4" >/dev/null 2>&1 & rec=$!
 sleep 1
 [ $# -gt 0 ] && "$SKILL_DIR/scripts/drv.sh" "$@" >/dev/null &
 sleep "$secs"; kill -INT $rec; wait $rec 2>/dev/null
