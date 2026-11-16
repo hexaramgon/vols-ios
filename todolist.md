@@ -1,5 +1,42 @@
 # To-Do
 
+## Known bugs
+
+- [ ] **Slow uploads get cut off by the server (Android confirmed; check iOS)**
+  — found 2026-11-15 while testing Android background uploads on a throttled
+  emulator link (~3 Mbps). A 26 MB WAV upload to `storage/v1/object/track-media/…`
+  ran ~51 s and then failed with `stream was reset: PROTOCOL_ERROR` (the server /
+  proxy at `api.volspire.com` reset the HTTP/2 stream). The same file on a fast
+  link uploads in ~5 s, so it's the length of the upload, not the file.
+  - Not the app's own timeout: Android's 30 s whole-request limit on uploads was
+    a separate bug and is fixed (uploads now only fail after a 60 s stall).
+  - Likely a body/idle timeout on the proxy in front of Supabase Storage, or the
+    standard (single-request) upload endpoint's limits. Options: raise the proxy
+    timeout, or switch large files to resumable (TUS) uploads, which upload in
+    chunks and survive a dropped connection.
+  - iOS uploads through a background URLSession to a signed upload URL — not
+    tested on a slow link yet; it may hit the same reset.
+
+## Shake to report (iOS + Android) — not started
+
+Neither app has it yet (checked 2026-11-15). Plan, following the common
+pattern (Google, Slack, Instagram):
+
+- [ ] **Shake → confirm first** — a small "Report a problem?" prompt, not the
+  form straight away (pocket / bus shakes are common).
+- [ ] **Auto screenshot** of the screen before the prompt; user can remove it.
+  (Drawing / blurring on it is the expensive part — skip for v1.)
+- [ ] **One description field** (+ optional category: Bug / Idea / Other).
+- [ ] **Auto-attached**: app version + build, OS + device, current screen,
+  user id, time, network type.
+- [ ] **Settings**: a "Shake to report" switch and a "Report a problem" row
+  (same form, for accessibility / people who never find the shake).
+- [ ] **Backend (in-house on Supabase)**: `bug_reports` table + private
+  screenshot bucket, RLS insert-only for users; optional email / Slack ping via
+  an edge function.
+- Alternative if we'd rather not maintain it: Sentry's User Feedback widget
+  (screenshots + linked crashes). Instabug / Shake SDK are the full paid options.
+
 ## Native Google Sign-In — console setup (code is already done & merged)
 
 The iOS code is fully wired (GoogleSignIn SDK + `signInWithIdToken(.google)` in

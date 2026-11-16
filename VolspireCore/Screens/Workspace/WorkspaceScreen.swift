@@ -79,7 +79,7 @@ struct WorkspaceScreen: View {
                     // Activity overview open: a tap anywhere outside closes it
                     // (buttons inside still win; inactive when closed).
                     .contentShape(.rect)
-                    .gesture(TapGesture().onEnded { activityExpanded = nil },
+                    .gesture(TapGesture().onEnded { withAnimation(WorkspaceActivityRail.expandAnimation) { activityExpanded = nil } },
                              including: activityExpanded != nil ? .all : .subviews)
                 }
                 .scrollIndicators(.hidden)

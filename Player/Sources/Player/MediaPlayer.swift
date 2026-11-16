@@ -604,12 +604,14 @@ extension MediaPlayer: URLAudioPlayerDelegate {
                 return
             }
         }
-        // Repeat off and the queue is done (a single track included): stop on
-        // this track. Progress is cleared so Play starts it over (not a resume
-        // at the very end, which would finish again at once).
+        // Repeat off and the queue is done: back to the top, paused — the first
+        // track at 0:00 with the whole queue up next again, so Play starts the
+        // playlist over (Apple Music). It used to stay on the finished last
+        // track with nothing queued. A single-track queue restarts that track.
         urlPlayer.stop()
         progress = nil
-        state = .paused(media: mediaID)
+        state = .paused(media: items.first ?? mediaID)
+        updateMeta()
         updateCommandProfile()
         updateSystemNowPlaying()
     }

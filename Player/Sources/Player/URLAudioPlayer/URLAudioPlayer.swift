@@ -624,9 +624,8 @@ private extension URLAudioPlayer {
         if !akPlayer.isPlaying, let savedTime = pausedAtTime, let fileURL = loadedFileURL {
             akPlayer.completionHandler = nil
             do {
-                try akPlayer.load(url: fileURL)
-                akPlayer.play()
-                akPlayer.seek(time: savedTime)
+                if akPlayer.file == nil { try akPlayer.load(url: fileURL) }
+                try restartPlayback(at: savedTime)
                 installCompletionHandler()
             } catch {
                 debugLog("URLAudioPlayer: Failed to reload on resume – \(error)")
@@ -670,29 +669,54 @@ private extension URLAudioPlayer {
         // Mid-switch the player still holds the outgoing track's file.
         guard fadeOutTask == nil else { return }
         akPlayer.completionHandler = nil
-        // A full load() is still required — AudioKit's seek(time:) needs the edit-time
-        // reset that load() performs (a bare seek mis-seeks to start/end). But reuse the
-        // player's already-open AVAudioFile via load(file:) so we DON'T reopen it from
-        // disk on every scrub release AND every repeat-one loop boundary. load(url:) is
-        // literally `AVAudioFile(forReading:)` + `load(file:)` internally, so this is
-        // the same schedule/edit-time reset minus the disk read. Falls back to the URL
-        // reopen if the open file isn't available.
+        // A seek to (or past) the end is the track finishing. AudioKit would just
+        // stop the player — no completion — leaving it "playing" at the end in
+        // silence, and the queue never moved on.
+        if duration > 0, time >= duration - 0.25 {
+            stopPlayerNode()
+            elapsedTime = duration
+            stopProgressUpdates()
+            emitProgress()
+            delegate?.urlAudioPlayerDidFinishPlaying(self)
+            return
+        }
         do {
-            if let file = akPlayer.file {
-                try akPlayer.load(file: file)
-            } else if let fileURL = loadedFileURL {
-                try akPlayer.load(url: fileURL)
-            } else {
-                return
-            }
-            akPlayer.play()
-            akPlayer.seek(time: time)
+            try restartPlayback(at: time)
             installCompletionHandler()
             elapsedTime = time
         } catch {
             debugLog("URLAudioPlayer: Seek failed – \(error)")
         }
         effectsProcessor.reapply(variSpeed: variSpeed, timePitch: timePitch)
+    }
+
+    /// Plays the loaded file from `time`. Not AudioKit's relative `seek(time:)`:
+    /// it stops the node BEFORE flagging itself as seeking, so the node's stop
+    /// callback marks the player stopped behind our back — the track's real end
+    /// then never fires its completion (stuck "playing" at 0:00 left). Instead:
+    /// a clean stop, then load(file:) — the edit-time reset `play(from:)` needs,
+    /// reusing the open AVAudioFile (no disk reopen on every scrub / repeat-one
+    /// loop) — then play(from:).
+    func restartPlayback(at time: TimeInterval) throws {
+        stopPlayerNode()
+        if let file = akPlayer.file {
+            try akPlayer.load(file: file)
+        } else if let fileURL = loadedFileURL {
+            try akPlayer.load(url: fileURL)
+        } else {
+            return
+        }
+        akPlayer.play(from: time > 0 ? time : nil)
+    }
+
+    /// Stops the AVAudioPlayerNode itself, not just AudioKit's status. When a
+    /// track plays to its end AudioKit only flips its status to stopped, so its
+    /// stop() is a no-op and the node is left "playing" a drained schedule —
+    /// stopping the engine over that left the next Play silent (progress ticking,
+    /// no audio). Status goes first, so the node's stop callback is ignored.
+    func stopPlayerNode() {
+        akPlayer.stop()
+        akPlayer.playerNode.stop()
     }
 
     /// `stopEngine: false` keeps the audio engine running — used when switching
@@ -708,7 +732,7 @@ private extension URLAudioPlayer {
         if stopEngine {
             fadeOutTask?.cancel()
             fadeOutTask = nil
-            akPlayer.stop()
+            stopPlayerNode()
             engine.stop()
             mixer.volume = 1
             return
@@ -718,7 +742,7 @@ private extension URLAudioPlayer {
         // Already fading (rapid skips) → that fade stops it.
         guard fadeOutTask == nil else { return }
         guard akPlayer.isPlaying, engine.avEngine.isRunning, mixer.volume > 0 else {
-            akPlayer.stop()
+            stopPlayerNode()
             return
         }
         fadeOutTask = Task { [weak self] in
@@ -730,7 +754,7 @@ private extension URLAudioPlayer {
             // Cancelled by a full stop, which already stopped the player and
             // may have started a newer fade — leave its state alone.
             guard !Task.isCancelled else { return }
-            self.akPlayer.stop()
+            self.stopPlayerNode()
             self.fadeOutTask = nil
         }
     }

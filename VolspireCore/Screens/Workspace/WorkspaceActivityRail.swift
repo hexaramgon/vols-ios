@@ -80,8 +80,12 @@ struct WorkspaceActivityRail: View {
                 }
             }
         }
-        .animation(.smooth(duration: 0.28), value: expanded)
+        .animation(Self.expandAnimation, value: expanded)
     }
+
+    /// Opening / closing / switching a person's card — shared with the
+    /// screen's tap-outside close, so the whole page moves on one curve.
+    static let expandAnimation: Animation = .smooth(duration: 0.32)
 
     /// The rail's loading shape — a title bone over avatar bones, in the
     /// loaded rail's geometry so the real one lands on it. Also the top of the
@@ -127,7 +131,9 @@ struct WorkspaceActivityRail: View {
         let selected = expanded == g.actorId
         let dimmed = expanded != nil && !selected
         return Button {
-            expanded = selected ? nil : g.actorId
+            // Animated at the source (not only the rail's own .animation) so
+            // the folders below slide with the card instead of jumping.
+            withAnimation(Self.expandAnimation) { expanded = selected ? nil : g.actorId }
         } label: {
             // Selected: a touch bigger, bold name, and a short accent bar
             // under it (the others dim) — no ring.
