@@ -47,6 +47,15 @@ final class URLAudioPlayer {
     private var progressTimer: Timer?
     private var downloadTask: URLSessionDownloadTask?
 
+    /// De-click on track switches: stopping the player mid-waveform is a hard
+    /// discontinuity, audible as a click — especially on a prefetched skip, where
+    /// the next track starts in the same instant. The outgoing track is faded out
+    /// first (the next load waits for it), and the next one fades in.
+    private var fadeOutTask: Task<Void, Never>?
+    private var fadeInTask: Task<Void, Never>?
+    private static let fadeDuration: TimeInterval = 0.03
+    private static let fadeSteps = 6
+
     // Next-track prefetch: download the upcoming track to a local file while the
     // current one plays, so a skip has no download gap (and the lock screen never
     // shows "paused" mid-buffer). Spotify-style read-ahead.
@@ -536,6 +545,16 @@ private extension URLAudioPlayer {
     }
 
     func loadAndPlayAudio(fileURL: URL) {
+        // The outgoing track is still fading out — load once it's silent.
+        if let fadeOutTask {
+            let url = currentURL
+            Task {
+                await fadeOutTask.value
+                guard self.currentURL == url else { return } // skipped again meanwhile
+                self.loadAndPlayAudio(fileURL: fileURL)
+            }
+            return
+        }
         do {
             try akPlayer.load(url: fileURL)
         } catch {
@@ -567,6 +586,7 @@ private extension URLAudioPlayer {
 
         effectsProcessor.reapply(variSpeed: variSpeed, timePitch: timePitch)
         akPlayer.play()
+        fadeIn()
 
         // Start the muted video player in sync
         if isVideoMode {
@@ -578,6 +598,11 @@ private extension URLAudioPlayer {
 
     func resumeAudio() {
         guard !akPlayer.isPlaying else { return }
+        // A switch faded the mixer out and was paused before the next track
+        // started — make sure the resumed audio is audible.
+        fadeInTask?.cancel()
+        fadeInTask = nil
+        mixer.volume = 1
         do {
             if !engine.avEngine.isRunning {
                 try engine.start()
@@ -642,6 +667,8 @@ private extension URLAudioPlayer {
     }
 
     func seekAudio(to time: TimeInterval) {
+        // Mid-switch the player still holds the outgoing track's file.
+        guard fadeOutTask == nil else { return }
         akPlayer.completionHandler = nil
         // A full load() is still required — AudioKit's seek(time:) needs the edit-time
         // reset that load() performs (a bare seek mis-seeks to start/end). But reuse the
@@ -675,8 +702,76 @@ private extension URLAudioPlayer {
         stopProgressUpdates()
 
         akPlayer.completionHandler = nil
-        akPlayer.stop()
-        if stopEngine { engine.stop() }
+        fadeInTask?.cancel()
+        fadeInTask = nil
+
+        if stopEngine {
+            fadeOutTask?.cancel()
+            fadeOutTask = nil
+            akPlayer.stop()
+            engine.stop()
+            mixer.volume = 1
+            return
+        }
+
+        // Track switch: fade the outgoing audio out before stopping it.
+        // Already fading (rapid skips) → that fade stops it.
+        guard fadeOutTask == nil else { return }
+        guard akPlayer.isPlaying, engine.avEngine.isRunning, mixer.volume > 0 else {
+            akPlayer.stop()
+            return
+        }
+        fadeOutTask = Task { [weak self] in
+            guard let self else { return }
+            await self.rampMixer(to: 0)
+            // The last volume step only takes effect on the next render cycle —
+            // stopping right away discards the end of the fade (a hard cut).
+            try? await Task.sleep(nanoseconds: UInt64(Self.renderSettleTime * 1_000_000_000))
+            // Cancelled by a full stop, which already stopped the player and
+            // may have started a newer fade — leave its state alone.
+            guard !Task.isCancelled else { return }
+            self.akPlayer.stop()
+            self.fadeOutTask = nil
+        }
+    }
+
+    /// Ramps the mixer up from silence for a newly started track.
+    func fadeIn() {
+        fadeInTask?.cancel()
+        mixer.volume = 0
+        // The effect chain (TimePitch especially) delays the new track's audio and
+        // emits a short glitch as it starts up — stay silent through that window,
+        // then ramp in as the real audio arrives.
+        let delay = effectChainLatency + Self.renderSettleTime
+        fadeInTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.rampMixer(to: 1)
+        }
+    }
+
+    /// Processing delay of the effect units between the player and the mixer.
+    var effectChainLatency: TimeInterval {
+        [variSpeed.avAudioNode, timePitch.avAudioNode, equalizer.avAudioNode, limiter.avAudioNode]
+            .reduce(0) { $0 + $1.latency }
+    }
+
+    /// Roughly two render cycles: long enough for a volume change to be heard.
+    static var renderSettleTime: TimeInterval {
+        max(0.02, AVAudioSession.sharedInstance().ioBufferDuration * 2)
+    }
+
+    /// Steps the mixer volume to `target` over `fadeDuration`. A cancelled ramp
+    /// leaves the volume wherever it got to (the canceller sets it).
+    func rampMixer(to target: AUValue) async {
+        let start = mixer.volume
+        let steps = Self.fadeSteps
+        let stepNanos = UInt64(Self.fadeDuration / Double(steps) * 1_000_000_000)
+        for step in 1 ... steps {
+            try? await Task.sleep(nanoseconds: stepNanos)
+            if Task.isCancelled { return }
+            mixer.volume = start + (target - start) * AUValue(step) / AUValue(steps)
+        }
     }
 }
 
