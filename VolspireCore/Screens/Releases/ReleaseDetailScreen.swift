@@ -528,7 +528,7 @@ struct EditReleaseScreen: View {
             nameLimit: CreateReleaseViewModel.titleLimit,
             name: $viewModel.editTitle,
             descriptionPrompt: "What's this release about?",
-            descriptionLimit: 1000,
+            descriptionLimit: InputLimits.releaseDescription,
             description: $viewModel.editDescription,
             hasChanges: viewModel.hasEditChanges,
             busy: viewModel.isSaving,

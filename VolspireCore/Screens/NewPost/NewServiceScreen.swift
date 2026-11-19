@@ -198,12 +198,12 @@ struct NewServiceScreen: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 13)
             .uploadFieldShell()
-            .charLimited($viewModel.title, 80)
+            .charLimited($viewModel.title, InputLimits.serviceTitle, singleLine: true)
 
             UploadDescriptionField(
                 text: $viewModel.longDescription,
                 prompt: "Describe your process, your sound, what makes your service stand out…",
-                limit: 1000,
+                limit: InputLimits.serviceDescription,
                 lines: 4...8
             )
         }
@@ -441,6 +441,8 @@ struct NewServiceScreen: View {
                         ),
                         titlePlaceholder: "Step title…",
                         detailPlaceholder: "Describe what happens in this step…",
+                        titleLimit: InputLimits.processStepTitle,
+                        detailLimit: InputLimits.processStepDetail,
                         onRemove: viewModel.processSteps.count > 1
                             ? { viewModel.processSteps.removeAll { $0.id == step.id } }
                             : nil
@@ -448,8 +450,10 @@ struct NewServiceScreen: View {
                 }
             }
 
-            UploadDashedAddButton("Add Step") {
-                viewModel.processSteps.append(.init())
+            if viewModel.processSteps.count < InputLimits.serviceMaxItems {
+                UploadDashedAddButton("Add Step") {
+                    viewModel.processSteps.append(.init())
+                }
             }
         }
     }
@@ -500,14 +504,18 @@ struct NewServiceScreen: View {
                     detail: $faq.answer,
                     titlePlaceholder: "Question…",
                     detailPlaceholder: "Answer…",
+                    titleLimit: InputLimits.faqQuestion,
+                    detailLimit: InputLimits.faqAnswer,
                     onRemove: viewModel.faqs.count > 1
                         ? { viewModel.faqs.removeAll { $0.id == faq.id } }
                         : nil
                 )
             }
 
-            UploadInlineAddButton("Add FAQ") {
-                viewModel.faqs.append(.init())
+            if viewModel.faqs.count < InputLimits.serviceMaxItems {
+                UploadInlineAddButton("Add FAQ") {
+                    viewModel.faqs.append(.init())
+                }
             }
         }
     }

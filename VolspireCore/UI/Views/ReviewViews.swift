@@ -255,12 +255,18 @@ struct WriteReviewSheet: View {
                     )
                     .font(.appBody).foregroundStyle(Color.vText).tint(Color.vText)
                     .lineLimit(3 ... 6)
-                    .charLimited($text, 2000)
+                    .charLimited($text, InputLimits.review)
                     .focused($textFocused)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .background(textFocused ? Color.vFieldFocus : Color.vField,
                                 in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+
+                    Text("\(text.limitCount)/\(InputLimits.review)")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
+                        .monospacedDigit()
+                        .frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 22)

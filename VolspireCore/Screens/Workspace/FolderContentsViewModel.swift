@@ -421,7 +421,7 @@ final class FolderContentsViewModel {
         for url in urls {
             let item = PendingUpload(
                 url: url,
-                fileName: url.lastPathComponent,
+                fileName: url.lastPathComponent.cappedFileName,
                 fileType: UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
             )
             pendingUploads.append(item)

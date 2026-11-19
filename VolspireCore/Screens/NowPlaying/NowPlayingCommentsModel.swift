@@ -118,7 +118,7 @@ final class NowPlayingCommentsModel {
     func send(trackId: String?, fileId: String? = nil) {
         // Cap to the server-side `comments` / `file_comments` CHECK length (defence in
         // depth; the DB constraint is authoritative since a raw RPC bypasses the client).
-        let content = String(commentText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1000))
+        let content = commentText.trimmingCharacters(in: .whitespacesAndNewlines).capped(at: InputLimits.comment)
         guard !content.isEmpty, !isSending, (trackId != nil || fileId != nil) else { return }
         let replyTo = replyingTo
         let parentId = replyTo?.commentId

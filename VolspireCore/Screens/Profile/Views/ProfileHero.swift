@@ -263,11 +263,9 @@ private extension ProfileHeroView {
             }
 
             if !viewModel.bio.isEmpty {
-                Text(viewModel.bio)
-                    .font(.appSubheadline)
-                    .foregroundStyle(Color.vText)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
+                // 3 lines, "See more" when it runs longer (bios cap at 300).
+                ExpandableText(viewModel.bio, lineLimit: 3, font: .appSubheadline,
+                               textColor: .vText, moreColor: .vText2)
                     .heroTextShadow(isLight ? 0 : 1)
             }
 

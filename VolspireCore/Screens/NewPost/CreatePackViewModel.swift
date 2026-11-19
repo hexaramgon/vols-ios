@@ -98,8 +98,8 @@ final class CreatePackViewModel {
     /// Mirrors the web's specific missing-fields hint.
     var missing: [String] {
         var out: [String] = []
-        if name.trimmingCharacters(in: .whitespaces).isEmpty { out.append("a pack name") }
-        if description.trimmingCharacters(in: .whitespaces).isEmpty { out.append("a description") }
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.append("a pack name") }
+        if description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.append("a description") }
         // Files aren't edited via update_pack, so don't require them when editing.
         if !isEditing, files.isEmpty { out.append("at least one file") }
         return out
@@ -112,7 +112,7 @@ final class CreatePackViewModel {
     private var original: Snapshot?
     private var current: Snapshot {
         Snapshot(name: name.trimmingCharacters(in: .whitespacesAndNewlines), packType: packType,
-                 price: price.trimmingCharacters(in: .whitespaces),
+                 price: price.trimmingCharacters(in: .whitespacesAndNewlines),
                  description: description.trimmingCharacters(in: .whitespacesAndNewlines),
                  tags: tags, visibility: visibility)
     }
@@ -160,7 +160,7 @@ final class CreatePackViewModel {
                 do {
                     guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.packs.maxUploadBytes),
                           !data.isEmpty else { continue }
-                    files.append(PackFileDraft(name: url.lastPathComponent, data: data))
+                    files.append(PackFileDraft(name: url.lastPathComponent.cappedFileName, data: data))
                 } catch let error as FileTooLargeError {
                     uploadState = .error("\(url.lastPathComponent): \(error.localizedDescription)")
                 } catch {
@@ -175,7 +175,7 @@ final class CreatePackViewModel {
     /// Takes a Workspace folder's downloaded files (and its name, if the pack
     /// has none yet). Reads off the main thread; deletes the temp copies.
     func applyPrefill(_ prefill: PackPrefill) {
-        if name.isEmpty { name = String(prefill.name.prefix(80)) }
+        if name.isEmpty { name = prefill.name.singleLined.capped(at: InputLimits.packName) }
         let limit = StorageBucket.packs.maxUploadBytes
         Task {
             for file in prefill.files {
@@ -219,7 +219,7 @@ final class CreatePackViewModel {
         do {
             let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
             let desc = trimmedDescription.isEmpty ? nil : trimmedDescription
-            let trimmedName = name.trimmingCharacters(in: .whitespaces)
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
             if let editingPackId {
                 try await supabaseService.updatePack(
                     packId: editingPackId,

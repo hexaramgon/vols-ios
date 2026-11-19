@@ -65,7 +65,7 @@ struct CommentComposerBar: View {
     }
 
     /// Comment cap — the server's (track and workspace-file comments).
-    static let commentLimit = 1000
+    static let commentLimit = InputLimits.comment
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -135,7 +135,7 @@ struct CommentComposerBar: View {
                     }
 
                     Spacer(minLength: 0)
-                    NearLimitCounter(count: model.commentText.count, limit: Self.commentLimit)
+                    NearLimitCounter(count: model.commentText.limitCount, limit: Self.commentLimit)
                         .environment(\.colorScheme, .dark)
                     if model.canSend || model.isSending {
                         sendButton
@@ -200,8 +200,8 @@ struct CommentComposerBar: View {
         // multi-line field, so this is the reliable way.)
         .onChange(of: model.commentText) { _, newValue in
             // The server's comment cap (post_comment / add_file_comment).
-            if newValue.count > Self.commentLimit {
-                model.commentText = String(newValue.prefix(Self.commentLimit))
+            if newValue.limitCount > Self.commentLimit {
+                model.commentText = newValue.capped(at: Self.commentLimit)
                 return
             }
             guard newValue.hasSuffix("\n") else { return }

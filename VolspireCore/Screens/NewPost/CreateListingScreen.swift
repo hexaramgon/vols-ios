@@ -214,7 +214,7 @@ struct CreateListingScreen: View {
                         .font(.appBodyMedium)
                         .foregroundStyle(Color.vText)
                         .submitLabel(.done)
-                        .charLimited(clip.title, 80)
+                        .charLimited(clip.title, InputLimits.clipTitle, singleLine: true)
                     Text(clipMeta(row))
                         .font(.appFootnote)
                         .foregroundStyle(missingTitle ? Color.vError : Color.vText2)

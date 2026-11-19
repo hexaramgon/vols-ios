@@ -463,7 +463,8 @@ struct RegisterScreen: View {
                         .foregroundStyle(locationFocused ? Color.vText : Color.vText3)
                     TextField(
                         "",
-                        text: Binding(get: { viewModel.location }, set: { viewModel.location = $0 }),
+                        text: Binding(get: { viewModel.location },
+                                      set: { viewModel.location = $0.singleLined.capped(at: InputLimits.location) }),
                         prompt: Text("City, Country (optional)").foregroundStyle(Color.vText3)
                     )
                     .font(.appBody)
@@ -484,7 +485,7 @@ struct RegisterScreen: View {
                     ForEach(locationCompleter.suggestions, id: \.self) { suggestion in
                         AuthRowDivider()
                         Button {
-                            viewModel.location = Self.formattedLocation(suggestion)
+                            viewModel.location = Self.formattedLocation(suggestion).capped(at: InputLimits.location)
                             locationCompleter.clear()
                             locationFocused = false
                         } label: {
@@ -520,7 +521,7 @@ struct RegisterScreen: View {
         let region = suggestion.subtitle
             .split(separator: ",").first
             .map(String.init)?
-            .trimmingCharacters(in: .whitespaces) ?? ""
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return region.isEmpty ? suggestion.title : "\(suggestion.title), \(region)"
     }
 

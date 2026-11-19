@@ -713,7 +713,7 @@ private extension ListingDetailScreen {
         Binding(
             get: { viewModel.replyingTo == nil ? viewModel.commentText : viewModel.replyText },
             set: { new in
-                let capped = String(new.prefix(1000))
+                let capped = new.capped(at: InputLimits.comment)
                 if viewModel.replyingTo == nil { viewModel.commentText = capped } else { viewModel.replyText = capped }
             }
         )
@@ -775,7 +775,7 @@ private extension ListingDetailScreen {
                         .tint(Color.vText)
                         .focused($focusedField, equals: .comment)
                         .lineLimit(focused ? 1 ... 6 : 1 ... 1)
-                    NearLimitCounter(count: dockText.wrappedValue.count, limit: 1000)
+                    NearLimitCounter(count: dockText.wrappedValue.limitCount, limit: InputLimits.comment)
                     if canSend || viewModel.isPostingComment {
                         SendButton(busy: viewModel.isPostingComment) {
                             Task {
@@ -936,7 +936,7 @@ struct RespondSheet: View {
     @State private var error: String?
     @FocusState private var focused: Bool
 
-    private let maxLength = 2000
+    private let maxLength = InputLimits.response
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -970,14 +970,14 @@ struct RespondSheet: View {
                 .background(focused ? Color.vFieldFocus : Color.vField,
                             in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
                 .onChange(of: message) { _, new in
-                    if new.count > maxLength { message = String(new.prefix(maxLength)) }
+                    if new.limitCount > maxLength { message = new.capped(at: maxLength) }
                 }
 
                 HStack {
                     Text(error ?? "Share a link, your style, availability.")
                         .foregroundStyle(error == nil ? Color.vText3 : Color.vError)
                     Spacer(minLength: 8)
-                    Text("\(message.count)/\(maxLength)").monospacedDigit().foregroundStyle(Color.vText3)
+                    Text("\(message.limitCount)/\(maxLength)").monospacedDigit().foregroundStyle(Color.vText3)
                 }
                 .font(.appCaption)
 

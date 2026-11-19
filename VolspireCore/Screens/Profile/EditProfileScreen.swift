@@ -63,6 +63,7 @@ struct EditProfileScreen: View {
 
     private enum Field: Hashable { case username, bio, location }
 
+
     var body: some View {
         // A pushed page laid out like the web's Settings → Profile: Photos,
         // Basic info, Roles. Save lives in the header.
@@ -116,8 +117,7 @@ struct EditProfileScreen: View {
     /// Same rule the signup wizard enforces, so a handle can't be edited into a
     /// shape that signup would have rejected.
     private var usernameValid: Bool {
-        editUsername.count >= 3
-            && editUsername.range(of: "^[a-zA-Z0-9_]+$", options: .regularExpression) != nil
+        RegisterViewModel.isValidUsername(editUsername)
     }
 
     /// Blocks Save on a known-bad handle. An unresolved check (`.idle` after a
@@ -132,7 +132,7 @@ struct EditProfileScreen: View {
     /// stops the field from showing something you won't get) and re-checks
     /// availability on the same 500ms debounce.
     private func usernameChanged(_ raw: String) {
-        editUsername = raw.lowercased().replacingOccurrences(of: " ", with: "_")
+        editUsername = RegisterViewModel.normalizeUsername(raw)
         usernameCheck?.cancel()
         let candidate = editUsername
         // Your own current handle is always fine — checking it would report it
@@ -331,6 +331,14 @@ private extension EditProfileScreen {
                 .lineLimit(3 ... 6)
                 .focused($focusedField, equals: .bio)
                 .settingsFieldStyle(focused: focusedField == .bio)
+                // Scalar-counted (InputLimits), matching the DB's
+                // `users_bio_max_length` check.
+                .charLimited($editBio, InputLimits.bio)
+                Text("\(editBio.limitCount)/\(InputLimits.bio)")
+                    .font(.appCaption)
+                    .foregroundStyle(Color.vText3)
+                    .monospacedDigit()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
 
             SettingsField(
@@ -369,6 +377,7 @@ private extension EditProfileScreen {
             .textInputAutocapitalization(.words)
             .autocorrectionDisabled()
             .focused($focusedField, equals: .location)
+            .charLimited($editLocation, InputLimits.location, singleLine: true)
             .onChange(of: editLocation) { _, newValue in
                 locationCompleter.update(newValue)
             }
@@ -387,7 +396,7 @@ private extension EditProfileScreen {
         ForEach(locationCompleter.suggestions, id: \.self) { suggestion in
             SettingsDivider()
             Button {
-                editLocation = formatted(suggestion)
+                editLocation = formatted(suggestion).capped(at: InputLimits.location)
                 locationCompleter.clear()
                 focusedField = nil
             } label: {
@@ -418,7 +427,7 @@ private extension EditProfileScreen {
         let region = suggestion.subtitle
             .split(separator: ",").first
             .map(String.init)?
-            .trimmingCharacters(in: .whitespaces) ?? ""
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return region.isEmpty ? suggestion.title : "\(suggestion.title), \(region)"
     }
 
@@ -482,9 +491,9 @@ private extension EditProfileScreen {
                 }
                 uploadedBannerURL = url
             }
-            let username = editUsername.trimmingCharacters(in: .whitespaces).lowercased()
-            let bio = editBio.trimmingCharacters(in: .whitespaces)
-            let location = editLocation.trimmingCharacters(in: .whitespaces)
+            let username = editUsername.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let bio = editBio.trimmingCharacters(in: .whitespacesAndNewlines)
+            let location = editLocation.trimmingCharacters(in: .whitespacesAndNewlines)
             let success = await viewModel.saveProfile(
                 userId: userId,
                 username: username,

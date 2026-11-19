@@ -90,6 +90,13 @@ private extension CollabRequestSheet {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+            .charLimited($viewModel.collabMessage, InputLimits.collabPitch)
+
+            Text("\(viewModel.collabMessage.limitCount)/\(InputLimits.collabPitch)")
+                .font(.appCaption)
+                .foregroundStyle(Color.vText3)
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 

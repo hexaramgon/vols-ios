@@ -268,7 +268,7 @@ final class UploadTrackViewModel {
     }
 
     var canUpload: Bool {
-        !title.trimmingCharacters(in: .whitespaces).isEmpty
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !genre.isEmpty
             && coverData != nil
             && mediaAttached
@@ -276,7 +276,7 @@ final class UploadTrackViewModel {
     }
 
     var validationHint: String? {
-        if title.trimmingCharacters(in: .whitespaces).isEmpty || genre.isEmpty
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || genre.isEmpty
             || coverData == nil || !mediaAttached
         {
             return "Add a title, genre, cover, and a file to publish"
@@ -339,7 +339,7 @@ final class UploadTrackViewModel {
     }
 
     private func filterCollaborators() {
-        let q = collabQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        let q = collabQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let base = allCollaborators ?? []
         if q.isEmpty {
             collabResults = collabFieldFocused ? base : []
@@ -414,7 +414,7 @@ final class UploadTrackViewModel {
     /// title from its name when empty.
     func applyPrefill(_ prefill: TrackFilePrefill) {
         if title.isEmpty {
-            title = String((prefill.fileName as NSString).deletingPathExtension.prefix(100))
+            title = (prefill.fileName as NSString).deletingPathExtension.singleLined.capped(at: InputLimits.trackTitle)
         }
         if prefill.isVideo {
             mediaType = .video
@@ -713,7 +713,7 @@ final class UploadTrackViewModel {
             let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
             let newTrackId = try await supabaseService.createTrackV2(
                 userId: userId,
-                title: title.trimmingCharacters(in: .whitespaces),
+                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 description: trimmedDescription.isEmpty ? nil : trimmedDescription,
                 genre: genre,
                 visibility: visibility,
@@ -741,7 +741,7 @@ final class UploadTrackViewModel {
             uploadState = .success
             NotificationCenter.default.post(name: .ownContentPosted, object: nil, userInfo: [
                 "confirmationTitle": "Track uploaded",
-                "confirmationSubtitle": title.trimmingCharacters(in: .whitespaces),
+                "confirmationSubtitle": title.trimmingCharacters(in: .whitespacesAndNewlines),
                 // Once the confirmation card dismisses, the app opens the new
                 // track in the expanded player (see RootTabView).
                 "trackId": newTrackId,

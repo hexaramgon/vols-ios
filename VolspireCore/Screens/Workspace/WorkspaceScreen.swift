@@ -221,12 +221,12 @@ struct WorkspaceScreen: View {
 
     /// Creates a folder via the shared store (which refetches the list in place).
     private func createFolder() async {
-        let name = newFolderName.trimmingCharacters(in: .whitespaces)
+        let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         isCreatingFolder = true
         defer { isCreatingFolder = false }
         do {
-            let desc = newFolderDescription.trimmingCharacters(in: .whitespaces)
+            let desc = newFolderDescription.trimmingCharacters(in: .whitespacesAndNewlines)
             _ = try await workspaceStore.createFolder(name: name, description: desc.isEmpty ? nil : desc)
             newFolderName = ""
             newFolderDescription = ""

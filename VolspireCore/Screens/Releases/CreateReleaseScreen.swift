@@ -58,7 +58,7 @@ final class CreateReleaseViewModel {
     /// cropper's full-screen cover fires that mid-flow.
     private let staged = StagedFiles()
 
-    static let titleLimit = 100
+    static let titleLimit = InputLimits.releaseTitle
 
     private let service: SupabaseService
     private let auth: AuthManager
@@ -72,18 +72,18 @@ final class CreateReleaseViewModel {
     /// Tracks are optional — a release can go up empty to announce it, and
     /// tracks get added later from its page. Genre only matters for tracks.
     var canPublish: Bool {
-        !title.trimmingCharacters(in: .whitespaces).isEmpty
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && cover.data != nil
             && (rows.isEmpty || !genre.isEmpty)
-            && rows.allSatisfy { !$0.title.trimmingCharacters(in: .whitespaces).isEmpty }
+            && rows.allSatisfy { !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     var hint: String? {
-        if cover.data == nil || title.trimmingCharacters(in: .whitespaces).isEmpty {
+        if cover.data == nil || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Add a cover and title to publish"
         }
         if !rows.isEmpty, genre.isEmpty { return "Pick a genre for the tracks" }
-        if rows.contains(where: { $0.title.trimmingCharacters(in: .whitespaces).isEmpty }) {
+        if rows.contains(where: { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             return "Every track needs a title"
         }
         return nil
@@ -115,7 +115,7 @@ final class CreateReleaseViewModel {
                     guard let staged else { continue }
                     self.staged.add(staged)
                     rows.append(Row(
-                        title: String((name as NSString).deletingPathExtension.prefix(Self.titleLimit)),
+                        title: (name as NSString).deletingPathExtension.singleLined.capped(at: Self.titleLimit),
                         fileName: name,
                         fileURL: staged
                     ))
@@ -155,7 +155,7 @@ final class CreateReleaseViewModel {
         publishError = nil
         defer { isPublishing = false }
 
-        let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if releaseId == nil {
             do {
                 releaseId = try await library.createRelease(
@@ -194,7 +194,7 @@ final class CreateReleaseViewModel {
                         // Streamed from disk — never loaded into memory.
                         let trackId = try await service.createTrackV2(
                             userId: userId,
-                            title: row.title.trimmingCharacters(in: .whitespaces),
+                            title: row.title.trimmingCharacters(in: .whitespacesAndNewlines),
                             description: nil,
                             genre: genre,
                             visibility: visibility,
@@ -299,7 +299,7 @@ struct CreateReleaseScreen: View {
                         ComposerTitleField(text: $viewModel.title, prompt: "Release title",
                                            limit: CreateReleaseViewModel.titleLimit)
                         ComposerStoryField(text: $viewModel.description,
-                                           prompt: "What's this release about?", limit: 1000)
+                                           prompt: "What's this release about?", limit: InputLimits.releaseDescription)
                     }
                     detailRows
                     tracksSection
@@ -424,7 +424,7 @@ struct CreateReleaseScreen: View {
                 get: { viewModel.rows.first { $0.id == row.id }?.title ?? "" },
                 set: { new in
                     if let i = viewModel.rows.firstIndex(where: { $0.id == row.id }) {
-                        viewModel.rows[i].title = String(new.prefix(CreateReleaseViewModel.titleLimit))
+                        viewModel.rows[i].title = new.singleLined.capped(at: CreateReleaseViewModel.titleLimit)
                     }
                 }
             ), prompt: Text("Track title").foregroundStyle(Color.vText3))

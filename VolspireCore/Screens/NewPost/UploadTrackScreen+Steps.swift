@@ -69,7 +69,7 @@ extension UploadTrackScreen {
     }
 
     var detailsComplete: Bool {
-        !viewModel.title.trimmingCharacters(in: .whitespaces).isEmpty
+        !viewModel.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !viewModel.genre.isEmpty
             && viewModel.coverData != nil
     }

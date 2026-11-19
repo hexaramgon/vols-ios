@@ -146,7 +146,7 @@ struct InlineCreateRow: View {
     /// as one of the list.
     var titleFont: Font = AppFont.trackTitle
     /// Name cap — 50, the server's cap for playlists and folders alike.
-    var maxLength = 50
+    var maxLength = InputLimits.playlistTitle
     let onCreate: (String) async -> Bool
 
     @State private var expanded = false
@@ -212,7 +212,7 @@ struct InlineCreateRow: View {
             .submitLabel(.done)
             .onSubmit { submit() }
             .disabled(busy)
-            .charLimited($name, maxLength)
+            .charLimited($name, maxLength, singleLine: true)
 
             Button { submit() } label: {
                 ZStack {

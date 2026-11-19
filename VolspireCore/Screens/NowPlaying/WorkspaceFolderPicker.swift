@@ -132,7 +132,7 @@ private struct FolderPickerSheet: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    InlineCreateRow(label: "New folder", placeholder: "Folder name") { name in
+                    InlineCreateRow(label: "New folder", placeholder: "Folder name", maxLength: InputLimits.folderName) { name in
                         await createAndAdd(name: name)
                     }
                     ForEach(folders, id: \.folderId) { folder in

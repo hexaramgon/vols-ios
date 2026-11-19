@@ -95,10 +95,17 @@ struct ReportSheet: View {
                 )
                 .font(.appBody).foregroundStyle(Color.vText).tint(Color.vText)
                 .lineLimit(2 ... 4)
+                .charLimited($details, InputLimits.reportDetails)
                 .focused($detailsFocused)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .background(detailsFocused ? Color.vFieldFocus : Color.vField, in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
+
+                Text("\(details.limitCount)/\(InputLimits.reportDetails)")
+                    .font(.appCaption)
+                    .foregroundStyle(Color.vText3)
+                    .monospacedDigit()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             }
             .padding(.horizontal, 20).padding(.top, 18)
 
@@ -154,8 +161,8 @@ struct ReportSheet: View {
                     targetType: targetType,
                     targetId: targetId,
                     reason: selected,
-                    // Matches the server-side `content_reports.details` CHECK length.
-                    details: details.isEmpty ? nil : String(details.prefix(2000))
+                    // Capped while typing at the `content_reports.details` CHECK.
+                    details: details.trimmedOrNil
                 )
                 submitting = false
                 // Stays up until the user taps Done (or the header close) —

@@ -64,11 +64,11 @@ struct CreatePackScreen: View {
                         ) { showCoverPicker = true }
                         typeSection
                         VStack(alignment: .leading, spacing: 10) {
-                            ComposerTitleField(text: $viewModel.name, prompt: "Pack name", limit: 80)
+                            ComposerTitleField(text: $viewModel.name, prompt: "Pack name", limit: InputLimits.packName)
                             ComposerStoryField(
                                 text: $viewModel.description,
                                 prompt: "What's in it — the sounds, the vibe, what makes it special…",
-                                limit: 600
+                                limit: InputLimits.packDescription
                             )
                         }
                         detailRows
@@ -235,7 +235,7 @@ struct CreatePackScreen: View {
     private var editDetailsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Details")
-            UploadTextField(label: "Name", text: $viewModel.name, prompt: "Pack name", limit: 80)
+            UploadTextField(label: "Name", text: $viewModel.name, prompt: "Pack name", limit: InputLimits.packName)
             if !FeatureFlags.freePacksOnly {
                 VStack(alignment: .leading, spacing: 8) {
                     UploadFieldLabel("Price")
@@ -259,7 +259,7 @@ struct CreatePackScreen: View {
                 UploadDescriptionField(
                     text: $viewModel.description,
                     prompt: "What's in it — the sounds, the vibe, what makes it special…",
-                    limit: 600
+                    limit: InputLimits.packDescription
                 )
             }
         }

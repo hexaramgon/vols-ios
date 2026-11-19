@@ -106,14 +106,14 @@ struct EditTrackScreen: View {
     private var detailsSection: some View {
         VStack(alignment: .leading, spacing: 14) {
             UploadSectionDivider("Details")
-            UploadTextField(label: "Title", text: $viewModel.title, prompt: "Track title", limit: 100)
+            UploadTextField(label: "Title", text: $viewModel.title, prompt: "Track title", limit: InputLimits.trackTitle)
             UploadGenreField(genre: viewModel.genre) { showGenrePicker = true }
             VStack(alignment: .leading, spacing: 8) {
                 UploadFieldLabel("Description (optional)")
                 UploadDescriptionField(
                     text: $viewModel.description,
                     prompt: "What's the story behind this track?",
-                    limit: 500
+                    limit: InputLimits.trackDescription
                 )
             }
         }

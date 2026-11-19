@@ -132,9 +132,26 @@ final class RegisterViewModel {
 
     var passwordsMatch: Bool { password == confirmPassword }
 
-    var usernameValid: Bool {
-        username.count >= 3
-            && username.range(of: "^[a-zA-Z0-9_]+$", options: .regularExpression) != nil
+    var usernameValid: Bool { Self.isValidUsername(username) }
+
+    // MARK: - Username shape
+    //
+    // 3–30 characters of lowercase letters, digits and underscores (the
+    // Instagram-style handle). Mirrors the `users_username_format` check
+    // constraint in the database; web and Android apply the same rule.
+
+    static let usernameMax = InputLimits.usernameMax
+
+    /// Normalizes keystrokes into the handle shape: lowercase, spaces → `_`,
+    /// anything else dropped, capped at `usernameMax`.
+    static func normalizeUsername(_ raw: String) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyz0123456789_")
+        let shaped = raw.lowercased().replacingOccurrences(of: " ", with: "_").filter { allowed.contains($0) }
+        return String(shaped.prefix(usernameMax))
+    }
+
+    static func isValidUsername(_ name: String) -> Bool {
+        name.range(of: "^[a-z0-9_]{3,30}$", options: .regularExpression) != nil
     }
 
     var canContinue: Bool {
@@ -156,7 +173,7 @@ final class RegisterViewModel {
     // MARK: - Username availability
 
     func usernameChanged(_ raw: String) {
-        username = raw.lowercased().replacingOccurrences(of: " ", with: "_")
+        username = Self.normalizeUsername(raw)
         usernameTask?.cancel()
         guard username.count >= 3 else {
             usernameStatus = .idle
@@ -230,7 +247,7 @@ final class RegisterViewModel {
     /// different combination when one is already taken.
     ///
     /// Word lengths are capped (6 + 8) so a handle is never longer than the
-    /// 20 characters the web app's own validation expects.
+    /// 20 characters — well inside the 30-character username limit.
     private static func generatedHandle(userId: String, attempt: Int) -> String {
         let seed = userId.replacingOccurrences(of: "-", with: "")
         let adjective = handleAdjectives[digest(seed, salt: attempt * 3, modulo: handleAdjectives.count)]
@@ -351,7 +368,7 @@ final class RegisterViewModel {
             email: email.trimmingCharacters(in: .whitespaces),
             password: password,
             username: username,
-            location: location.isEmpty ? nil : location,
+            location: location.trimmedOrNil,
             tags: tags
         )
         loading = false
@@ -424,7 +441,7 @@ final class RegisterViewModel {
             try await supabaseService.createUser(
                 username: username,
                 bio: nil,
-                location: location.isEmpty ? nil : location,
+                location: location.trimmedOrNil,
                 profileImageUrl: nil,
                 bannerImageUrl: nil,
                 tags: tags.isEmpty ? nil : tags
@@ -498,7 +515,7 @@ final class RegisterViewModel {
                 username: username,
                 bio: nil,
                 accountType: nil,
-                location: location.isEmpty ? nil : location,
+                location: location.trimmedOrNil,
                 profileImageUrl: avatarURL,
                 bannerImageUrl: bannerURL,
                 tags: tags.isEmpty ? nil : tags

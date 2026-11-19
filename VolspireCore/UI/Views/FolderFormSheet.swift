@@ -32,9 +32,9 @@ struct ItemFormSheet: View {
     var cover: CoverPicker? = nil
     /// Name cap — playlists are 50 (the playlist RPCs enforce it too);
     /// releases pass their own.
-    var nameLimit = 50
+    var nameLimit = InputLimits.playlistTitle
     /// Description cap — the server's: playlists 300 (default), releases 1000.
-    var descriptionLimit = 300
+    var descriptionLimit = InputLimits.playlistDescription
     let actionTitle: String
     let busy: Bool
     let onSubmit: () async -> Void
@@ -43,7 +43,7 @@ struct ItemFormSheet: View {
     @State private var coverItem: PhotosPickerItem?
     @State private var cropTarget: CropTarget?
 
-    private var valid: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var valid: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         // Hoisted: the PhotosPicker label closure is `@Sendable`, so it can't read
@@ -71,7 +71,7 @@ struct ItemFormSheet: View {
                     SheetTextField(prompt: "What's it about?", text: $description,
                                    axis: .vertical, lines: 3, maxLength: descriptionLimit)
                         .overlay(alignment: .bottomTrailing) {
-                            Text("\(description.count)/\(descriptionLimit)")
+                            Text("\(description.limitCount)/\(descriptionLimit)")
                                 .font(.appCaption)
                                 .foregroundStyle(Color.vText3)
                                 .monospacedDigit()
@@ -149,7 +149,11 @@ struct SheetTextField: View {
             .background(focused ? Color.vFieldFocus : Color.vField,
                         in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
             .onChange(of: text) { _, new in
-                if let maxLength, new.count > maxLength { text = String(new.prefix(maxLength)) }
+                // Scalars, not graphemes — the DB's char_length (InputLimits).
+                var value = new
+                if axis == .horizontal, value.contains(where: \.isNewline) { value = value.singleLined }
+                if let maxLength, value.limitCount > maxLength { value = value.capped(at: maxLength) }
+                if value != new { text = value }
             }
             // Delayed past the sheet's presentation (focusing mid-present can
             // hang — see the keyboarded-sheet rules); the .large sheet doesn't
@@ -214,8 +218,8 @@ struct FolderFormSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     /// 50 — the server's cap (create_folder / update_folder), as playlists.
-    private static let nameMax = 50
-    private static let descriptionMax = 300
+    private static let nameMax = InputLimits.folderName
+    private static let descriptionMax = InputLimits.folderDescription
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -238,7 +242,7 @@ struct FolderFormSheet: View {
                         maxLength: Self.descriptionMax
                     )
                     .overlay(alignment: .bottomTrailing) {
-                        Text("\(description.count)/\(Self.descriptionMax)")
+                        Text("\(description.limitCount)/\(Self.descriptionMax)")
                             .font(.appCaption)
                             .foregroundStyle(Color.vText3)
                             .monospacedDigit()
@@ -289,10 +293,10 @@ struct EditDetailsScreen<Extra: View>: View {
     var cover: Cover? = nil
     var nameLabel = "Name"
     let namePrompt: String
-    var nameLimit = 50
+    var nameLimit = InputLimits.playlistTitle
     @Binding var name: String
     var descriptionPrompt = "What's it about?"
-    var descriptionLimit = 300
+    var descriptionLimit = InputLimits.playlistDescription
     @Binding var description: String
     /// Whether anything differs from what was loaded.
     let hasChanges: Bool
@@ -376,8 +380,8 @@ struct EditDetailsScreen<Extra: View>: View {
 
 extension EditDetailsScreen where Extra == EmptyView {
     init(icon: LucideIcon.Name = .squarePen, title: String, subtitle: String, cover: Cover? = nil,
-         nameLabel: String = "Name", namePrompt: String, nameLimit: Int = 50, name: Binding<String>,
-         descriptionPrompt: String = "What's it about?", descriptionLimit: Int = 300,
+         nameLabel: String = "Name", namePrompt: String, nameLimit: Int = InputLimits.playlistTitle, name: Binding<String>,
+         descriptionPrompt: String = "What's it about?", descriptionLimit: Int = InputLimits.playlistDescription,
          description: Binding<String>, hasChanges: Bool, busy: Bool, error: String? = nil,
          onSave: @escaping () async -> Void) {
         self.init(icon: icon, title: title, subtitle: subtitle, cover: cover, nameLabel: nameLabel,

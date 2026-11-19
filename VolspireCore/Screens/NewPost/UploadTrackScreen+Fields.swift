@@ -67,9 +67,9 @@ extension UploadTrackScreen {
 
     var titleAndStory: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ComposerTitleField(text: $viewModel.title, prompt: "Track title", limit: 100)
+            ComposerTitleField(text: $viewModel.title, prompt: "Track title", limit: InputLimits.trackTitle)
             ComposerStoryField(text: $viewModel.description,
-                               prompt: "Tell listeners the story behind it…", limit: 500)
+                               prompt: "Tell listeners the story behind it…", limit: InputLimits.trackDescription)
         }
     }
 

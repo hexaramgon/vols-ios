@@ -280,10 +280,10 @@ final class ConversationViewModel {
 
     /// Matches the server-side `convo_messages.content` length cap (defence in depth;
     /// the server CHECK is authoritative since a raw RPC call bypasses the client).
-    static let maxMessageLength = 4000
+    static let maxMessageLength = InputLimits.message
 
     func send() async {
-        let text = String(draft.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxMessageLength))
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines).capped(at: Self.maxMessageLength)
         guard !text.isEmpty, !isSending, composerReady, collabRequestGate == nil else { return }
         draft = ""
         isSending = true
@@ -394,7 +394,7 @@ final class ConversationViewModel {
             return
         }
 
-        let text = String(caption.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.maxMessageLength))
+        let text = caption.trimmingCharacters(in: .whitespacesAndNewlines).capped(at: Self.maxMessageLength)
         isSending = true
         let tempId = "local-\(UUID().uuidString)"
         let sentAt = Date()

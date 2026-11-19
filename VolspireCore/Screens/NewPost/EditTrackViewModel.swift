@@ -54,11 +54,11 @@ final class EditTrackViewModel {
     var hasChanges: Bool { coverData != nil || current != original }
 
     var canSave: Bool {
-        !title.trimmingCharacters(in: .whitespaces).isEmpty && !genre.isEmpty && hasChanges
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !genre.isEmpty && hasChanges
     }
 
     var validationHint: String? {
-        title.trimmingCharacters(in: .whitespaces).isEmpty || genre.isEmpty
+        title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || genre.isEmpty
             ? "Add a title and genre to save" : nil
     }
 
@@ -87,7 +87,7 @@ final class EditTrackViewModel {
             let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
             try await supabaseService.updateTrack(
                 trackId: trackId,
-                title: title.trimmingCharacters(in: .whitespaces),
+                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 description: trimmedDescription.isEmpty ? nil : trimmedDescription,
                 genre: genre,
                 visibility: visibility,

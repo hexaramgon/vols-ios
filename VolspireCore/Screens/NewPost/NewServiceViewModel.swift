@@ -124,23 +124,23 @@ final class NewServiceViewModel {
 
     private var packagesValid: Bool {
         packages.allSatisfy { pkg in
-            !pkg.name.trimmingCharacters(in: .whitespaces).isEmpty
+            !pkg.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && (Double(pkg.price) ?? 0) > 0
                 && (Int(pkg.delivery) ?? 0) > 0
-                && pkg.features.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                && pkg.features.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         }
     }
 
     var missing: [String] {
         var out: [String] = []
-        if title.trimmingCharacters(in: .whitespaces).isEmpty { out.append("a title") }
-        if longDescription.trimmingCharacters(in: .whitespaces).isEmpty { out.append("a description") }
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.append("a title") }
+        if longDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out.append("a description") }
         if cheapestPackage == nil {
             out.append("at least one priced package")
         } else if !packagesValid {
             var needs: [String] = []
             if packages.contains(where: { (Int($0.delivery) ?? 0) <= 0 }) { needs.append("delivery days") }
-            if packages.contains(where: { !$0.features.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty } }) {
+            if packages.contains(where: { !$0.features.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }) {
                 needs.append("at least one feature")
             }
             if !needs.isEmpty { out.append("\(needs.joined(separator: " + ")) on every package") }
@@ -226,7 +226,7 @@ final class NewServiceViewModel {
             do {
                 guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.postUploads.maxUploadBytes) else { return }
                 portfolio[index].data = data
-                portfolio[index].fileName = url.lastPathComponent
+                portfolio[index].fileName = url.lastPathComponent.cappedFileName
             } catch let error as FileTooLargeError {
                 uploadState = .error(error.localizedDescription)
             } catch {
@@ -235,6 +235,15 @@ final class NewServiceViewModel {
         case .failure(let error):
             uploadState = .error(error.localizedDescription)
         }
+    }
+
+    /// A features / deliverables list as sent: trimmed, whitespace-only rows
+    /// dropped, at most `InputLimits.serviceMaxItems`.
+    private static func cleanedList(_ items: [String]) -> [String] {
+        Array(items
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(InputLimits.serviceMaxItems))
     }
 
     func publish() async {
@@ -251,29 +260,35 @@ final class NewServiceViewModel {
                 .filter { !$0.name.isEmpty && !$0.price.isEmpty }
                 .map { pkg in
                     SupabaseService.ServicePackageInput(
-                        name: pkg.name,
+                        name: pkg.name.trimmingCharacters(in: .whitespacesAndNewlines),
                         price: Double(pkg.price) ?? 0,
                         delivery: Int(pkg.delivery) ?? 0,
                         revisions: Int(pkg.revisions) ?? 1,
-                        features: pkg.features.filter { !$0.isEmpty }
+                        features: Self.cleanedList(pkg.features)
                     )
                 }
             let processPayload = processSteps
-                .filter { !$0.step.trimmingCharacters(in: .whitespaces).isEmpty }
-                .map { SupabaseService.ServiceProcessStepInput(step: $0.step, description: $0.description) }
+                .filter { !$0.step.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .prefix(InputLimits.serviceMaxItems)
+                .map { SupabaseService.ServiceProcessStepInput(
+                    step: $0.step.trimmingCharacters(in: .whitespacesAndNewlines),
+                    description: $0.description.trimmingCharacters(in: .whitespacesAndNewlines)) }
             let faqsPayload = faqs
-                .filter { !$0.question.trimmingCharacters(in: .whitespaces).isEmpty }
-                .map { SupabaseService.ServiceFaqInput(question: $0.question, answer: $0.answer) }
+                .filter { !$0.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                .prefix(InputLimits.serviceMaxItems)
+                .map { SupabaseService.ServiceFaqInput(
+                    question: $0.question.trimmingCharacters(in: .whitespacesAndNewlines),
+                    answer: $0.answer.trimmingCharacters(in: .whitespacesAndNewlines)) }
             let trimmedDescription = longDescription.trimmingCharacters(in: .whitespacesAndNewlines)
             let desc = trimmedDescription.isEmpty ? nil : trimmedDescription
-            let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
-            let deliverablesPayload = deliverables.filter { !$0.isEmpty }
+            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let deliverablesPayload = Self.cleanedList(deliverables)
 
             if let editingServiceId {
                 // Keep existing portfolio clips (paths) + upload any newly attached.
                 let portfolioEdits = portfolio.compactMap { clip -> SupabaseService.ListingAttachmentEdit? in
                     guard clip.existingFileUrl != nil || clip.data != nil else { return nil }
-                    return .init(title: clip.title.trimmingCharacters(in: .whitespaces),
+                    return .init(title: clip.title.trimmingCharacters(in: .whitespacesAndNewlines),
                                  existingFileUrl: clip.existingFileUrl, data: clip.data, fileName: clip.fileName)
                 }
                 try await supabaseService.updateService(
@@ -297,7 +312,7 @@ final class NewServiceViewModel {
             } else {
                 let portfolioPayload = portfolio.compactMap { clip -> SupabaseService.ListingAttachmentUpload? in
                     guard let data = clip.data, let fileName = clip.fileName else { return nil }
-                    return .init(title: clip.title.trimmingCharacters(in: .whitespaces), fileName: fileName, data: data)
+                    return .init(title: clip.title.trimmingCharacters(in: .whitespacesAndNewlines), fileName: fileName, data: data)
                 }
                 try await supabaseService.createService(
                     userId: userId,

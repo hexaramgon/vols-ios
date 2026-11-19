@@ -152,13 +152,19 @@ extension View {
 // MARK: - Field helpers (char caps, price filtering, keyboard Done)
 
 extension View {
-    /// Hard-caps a text binding at `limit` characters as the user types —
-    /// the clamp every form's title/description fields apply.
-    func charLimited(_ text: Binding<String>, _ limit: Int) -> some View {
+    /// Hard-caps a text binding at `limit` as the user types — the clamp
+    /// every form's text fields apply. Counted in Unicode scalars (Postgres
+    /// `char_length`), so emoji can't pass here and fail the DB check.
+    /// `singleLine` also folds out newlines / control characters (titles,
+    /// names, tags, list items).
+    func charLimited(_ text: Binding<String>, _ limit: Int, singleLine: Bool = false) -> some View {
         onChange(of: text.wrappedValue) { _, newValue in
-            if newValue.count > limit {
-                text.wrappedValue = String(newValue.prefix(limit))
+            var value = newValue
+            if singleLine, value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) }) {
+                value = value.singleLined
             }
+            if value.limitCount > limit { value = value.capped(at: limit) }
+            if value != newValue { text.wrappedValue = value }
         }
     }
 
@@ -212,9 +218,10 @@ struct UploadDescriptionField: View {
             .uploadFieldShell()
             .charLimited($text, limit)
 
-            Text("\(text.count)/\(limit)")
+            Text("\(text.limitCount)/\(limit)")
                 .font(.appCaption)
                 .foregroundStyle(Color.vText3)
+                .monospacedDigit()
         }
     }
 }
@@ -293,6 +300,9 @@ struct UploadEditableList: View {
     let placeholder: String
     let addLabel: String
     var compact = false
+    /// Per-item cap (single-line) and max rows — the service lists' limits.
+    var itemLimit = InputLimits.serviceListItem
+    var maxItems = InputLimits.serviceMaxItems
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 8 : 12) {
@@ -309,7 +319,7 @@ struct UploadEditableList: View {
                             },
                             set: {
                                 guard index < items.count else { return }
-                                items[index] = $0
+                                items[index] = $0.singleLined.capped(at: itemLimit)
                             }
                         ),
                         prompt: Text(placeholder).foregroundStyle(Color.vText3)
@@ -336,8 +346,10 @@ struct UploadEditableList: View {
 
             // Compact indents the add row under the fields (past the icon)
             // with a stretched hit area, like the features editor always did.
-            UploadInlineAddButton(addLabel, fullWidth: compact, indent: compact ? 23 : 0) {
-                items.append("")
+            if items.count < maxItems {
+                UploadInlineAddButton(addLabel, fullWidth: compact, indent: compact ? 23 : 0) {
+                    items.append("")
+                }
             }
         }
     }
@@ -351,6 +363,9 @@ struct UploadTwoFieldRow: View {
     @Binding var detail: String
     let titlePlaceholder: String
     let detailPlaceholder: String
+    /// Caps: the title is single-line; the detail gets a live counter.
+    let titleLimit: Int
+    let detailLimit: Int
     var onRemove: (() -> Void)?
 
     var body: some View {
@@ -366,19 +381,28 @@ struct UploadTwoFieldRow: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .uploadFieldShell()
+                .charLimited($title, titleLimit, singleLine: true)
 
-                TextField(
-                    "",
-                    text: $detail,
-                    prompt: Text(detailPlaceholder).foregroundStyle(Color.vText3),
-                    axis: .vertical
-                )
-                .font(.appBody)
-                .foregroundStyle(Color.vText)
-                .lineLimit(2...4)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .uploadFieldShell()
+                VStack(alignment: .trailing, spacing: 4) {
+                    TextField(
+                        "",
+                        text: $detail,
+                        prompt: Text(detailPlaceholder).foregroundStyle(Color.vText3),
+                        axis: .vertical
+                    )
+                    .font(.appBody)
+                    .foregroundStyle(Color.vText)
+                    .lineLimit(2...4)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .uploadFieldShell()
+                    .charLimited($detail, detailLimit)
+
+                    Text("\(detail.limitCount)/\(detailLimit)")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.vText3)
+                        .monospacedDigit()
+                }
             }
 
             if let onRemove {
@@ -514,7 +538,7 @@ struct UploadTextField: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 13)
                 .uploadFieldShell()
-                .charLimited($text, limit)
+                .charLimited($text, limit, singleLine: true)
         }
     }
 }
@@ -716,7 +740,7 @@ struct AudioClipDraft: Identifiable {
     var existingFileUrl: String?
 
     var hasFile: Bool { data != nil || existingFileUrl != nil }
-    var hasTitle: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
+    var hasTitle: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var isComplete: Bool { hasFile && hasTitle }
 }
 
@@ -813,6 +837,8 @@ struct UploadClipRows: View {
     @Binding var clips: [AudioClipDraft]
     var titlePlaceholder = "Clip title"
     var addLabel = "Add audio"
+    /// Hides the add button once this many rows exist.
+    var maxClips: Int? = nil
     /// Fired when a clip preview starts playing (pause the app's music).
     var onStartPlaying: () -> Void = {}
     let onAttach: (UUID) -> Void
@@ -823,8 +849,10 @@ struct UploadClipRows: View {
                 clipCard($clip)
             }
 
-            UploadDashedAddButton(addLabel) {
-                clips.append(AudioClipDraft())
+            if maxClips.map({ clips.count < $0 }) ?? true {
+                UploadDashedAddButton(addLabel) {
+                    clips.append(AudioClipDraft())
+                }
             }
         }
     }
@@ -845,6 +873,7 @@ struct UploadClipRows: View {
                 .padding(.vertical, 11)
                 // A file without a title is invalid → soft red fill.
                 .uploadFieldShell(invalid: row.hasFile && !row.hasTitle)
+                .charLimited(clip.title, InputLimits.clipTitle, singleLine: true)
 
                 Button {
                     clips.removeAll { $0.id == row.id }
@@ -945,13 +974,18 @@ struct UploadTagInput: View {
     var suggestions: [String] = []
     @State private var input = ""
 
+    /// Trim, lowercase, dedupe; each tag capped at `InputLimits.tag`, and no
+    /// new tags once there are `InputLimits.maxTags`.
     private func add(_ tag: String) {
-        let cleaned = tag.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !cleaned.isEmpty, !tags.contains(cleaned) else { return }
+        let cleaned = tag.singleLined.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased().capped(at: InputLimits.tag)
+        guard !cleaned.isEmpty, !tags.contains(cleaned), !atCap else { return }
         tags.append(cleaned)
     }
 
-    private var trimmedInput: String { input.trimmingCharacters(in: .whitespaces) }
+    private var atCap: Bool { tags.count >= InputLimits.maxTags }
+
+    private var trimmedInput: String { input.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private func commitInput() {
         withAnimation(.snappy(duration: 0.25)) { add(input) }
@@ -971,7 +1005,7 @@ struct UploadTagInput: View {
             }
 
             let remaining = suggestions.filter { !tags.contains($0) }
-            if !remaining.isEmpty {
+            if !remaining.isEmpty, !atCap {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Suggested")
                         .font(.appCaption)
@@ -998,22 +1032,29 @@ struct UploadTagInput: View {
             TextField(
                 "",
                 text: $input,
-                prompt: Text("Add a tag").foregroundStyle(Color.vText3)
+                prompt: Text(atCap ? "\(InputLimits.maxTags) tags max" : "Add a tag").foregroundStyle(Color.vText3)
             )
             .font(.appBody)
             .foregroundStyle(Color.vText)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .submitLabel(.done)
+            .disabled(atCap)
             .onSubmit(commitInput)
             // Space commits the tag too (matches the web tag input) — and a
             // pasted "a b c" becomes tags a + b with "c" left editable.
             .onChange(of: input) { _, newValue in
-                guard newValue.contains(" ") else { return }
-                var pieces = newValue.components(separatedBy: " ")
+                let flat = newValue.singleLined
+                guard flat.contains(" ") else {
+                    // Hard-cap the tag being typed (it's committed as-is).
+                    let capped = flat.capped(at: InputLimits.tag)
+                    if capped != newValue { input = capped }
+                    return
+                }
+                var pieces = flat.components(separatedBy: " ")
                 let remainder = pieces.removeLast()
                 withAnimation(.snappy(duration: 0.25)) { pieces.forEach { add($0) } }
-                input = remainder
+                input = atCap ? "" : remainder.capped(at: InputLimits.tag)
             }
 
             if !trimmedInput.isEmpty {
@@ -1066,13 +1107,13 @@ struct GenrePickerSheet: View {
     @State private var query = ""
 
     private var filtered: [String] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trackGenres }
         return trackGenres.filter { $0.localizedCaseInsensitiveContains(trimmed) }
     }
 
     private var customEntry: String? {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               !trackGenres.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame })
         else { return nil }
@@ -1095,6 +1136,8 @@ struct GenrePickerSheet: View {
                 .font(.appBody)
                 .foregroundStyle(Color.vText)
                 .autocorrectionDisabled()
+                // The query doubles as the custom genre, so it carries its cap.
+                .charLimited($query, InputLimits.genre, singleLine: true)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
@@ -1727,8 +1770,8 @@ struct ComposerStoryField: View {
                 .lineLimit(lines)
                 .charLimited($text, limit)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if text.count > limit * 4 / 5 {
-                Text("\(text.count)/\(limit)")
+            if text.limitCount > limit * 4 / 5 {
+                Text("\(text.limitCount)/\(limit)")
                     .font(.appCaption)
                     .foregroundStyle(Color.vText3)
                     .monospacedDigit()

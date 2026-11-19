@@ -762,7 +762,7 @@ struct ChatThread: View {
                     TextField("", text: Binding(
                         get: { viewModel.draft },
                         // The server's message cap (send_message*).
-                        set: { viewModel.draft = String($0.prefix(2000)) }
+                        set: { viewModel.draft = $0.capped(at: InputLimits.message) }
                     ), prompt: Text(pendingAttachment != nil ? "Add a caption…" : "Message…").foregroundStyle(Color.vText3), axis: .vertical)
                         .font(.appBody)
                         .foregroundStyle(Color.vText)
@@ -775,7 +775,7 @@ struct ChatThread: View {
                         .padding(.trailing, canSend || viewModel.isSending ? 0 : 12)
                         .padding(.vertical, 10)
 
-                    NearLimitCounter(count: viewModel.draft.count, limit: 2000)
+                    NearLimitCounter(count: viewModel.draft.limitCount, limit: InputLimits.message)
                         .padding(.bottom, 12)
                     if canSend || viewModel.isSending {
                         SendButton(busy: viewModel.isSending) { sendCurrent() }
@@ -900,7 +900,7 @@ struct ChatThread: View {
         let preview = mime.hasPrefix("image") ? UIImage(data: data) : nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             pendingAttachment = PendingAttachment(
-                data: data, fileName: url.lastPathComponent, fileType: mime, previewImage: preview
+                data: data, fileName: url.lastPathComponent.cappedFileName, fileType: mime, previewImage: preview
             )
         }
     }

@@ -101,6 +101,11 @@ public final class AuthManager {
         if lower.contains("expired") {
             return "That code expired — request a new one."
         }
+        // Leaked-password protection (Auth → Attack Protection): "Password is
+        // known to be weak and easy to guess…". Same copy as the web app.
+        if lower.contains("known to be weak") || lower.contains("pwned") {
+            return "This password has appeared in a data breach. Choose a different one."
+        }
         if lower.contains("weak password") || lower.contains("password should") {
             return "That password is too weak — try a longer one with a mix of characters."
         }

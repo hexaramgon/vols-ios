@@ -43,10 +43,10 @@ final class CreateListingViewModel {
     var uploadState: UploadState = .idle
 
     /// Server-enforced limits (mirror the create_listing / update_listing RPC).
-    static let titleLimit = 50
+    static let titleLimit = InputLimits.listingTitle
     /// Audio clips per listing (client-side; shown as "n/5" on the form).
-    static let clipLimit = 5
-    static let descriptionLimit = 500
+    static let clipLimit = InputLimits.listingMaxClips
+    static let descriptionLimit = InputLimits.listingDescription
 
     /// Non-nil when editing an existing listing (drives update vs create).
     private(set) var editingListingId: String?
@@ -70,7 +70,7 @@ final class CreateListingViewModel {
                  description: description.trimmingCharacters(in: .whitespacesAndNewlines),
                  tags: tags,
                  clips: attachments.map {
-                     .init(title: $0.title.trimmingCharacters(in: .whitespaces),
+                     .init(title: $0.title.trimmingCharacters(in: .whitespacesAndNewlines),
                            existingFileUrl: $0.existingFileUrl, hasNewFile: $0.data != nil)
                  })
     }
@@ -78,13 +78,13 @@ final class CreateListingViewModel {
     var hasChanges: Bool { original == nil || current != original }
 
     var canPost: Bool {
-        hasChanges && !title.trimmingCharacters(in: .whitespaces).isEmpty
+        hasChanges && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && attachmentsComplete
     }
 
     var validationHint: String? {
-        if title.trimmingCharacters(in: .whitespaces).isEmpty {
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Add a title to post"
         }
         if description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -129,8 +129,8 @@ final class CreateListingViewModel {
                 guard let data = try SecurityScopedFile.read(url, maxBytes: StorageBucket.postUploads.maxUploadBytes) else { return }
                 var clip = AudioClipDraft()
                 clip.data = data
-                clip.fileName = url.lastPathComponent
-                clip.title = String((url.lastPathComponent as NSString).deletingPathExtension.prefix(80))
+                clip.fileName = url.lastPathComponent.cappedFileName
+                clip.title = (url.lastPathComponent as NSString).deletingPathExtension.singleLined.capped(at: InputLimits.clipTitle)
                 attachments.append(clip)
             } catch let error as FileTooLargeError {
                 uploadState = .error(error.localizedDescription)
@@ -155,18 +155,18 @@ final class CreateListingViewModel {
             let uploads = attachments.compactMap { draft -> SupabaseService.ListingAttachmentUpload? in
                 guard let data = draft.data, let fileName = draft.fileName else { return nil }
                 return .init(
-                    title: draft.title.trimmingCharacters(in: .whitespaces),
+                    title: draft.title.trimmingCharacters(in: .whitespacesAndNewlines),
                     fileName: fileName,
                     data: data
                 )
             }
             let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
             let desc = trimmedDescription.isEmpty ? nil : trimmedDescription
-            let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
+            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
             let newListingId: String?
             if let editingListingId {
                 let edits = attachments.compactMap { draft -> SupabaseService.ListingAttachmentEdit? in
-                    let t = draft.title.trimmingCharacters(in: .whitespaces)
+                    let t = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard draft.existingFileUrl != nil || draft.data != nil else { return nil }
                     return .init(title: t, existingFileUrl: draft.existingFileUrl, data: draft.data, fileName: draft.fileName)
                 }
