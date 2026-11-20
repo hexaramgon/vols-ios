@@ -13,26 +13,23 @@ import Foundation
 /// typed enum (instead of raw strings) makes an `invalid_event_type` error
 /// impossible at the call site. Raw values match the web/DB exactly — keep them
 /// in sync with the RPC's `IN (...)` list.
+///
+/// Server-written types are deliberately absent and the RPC refuses them:
+/// `stream_counted` (send via `increment_track_stream`), `purchase_completed`
+/// and `refund_completed` (inserted by the Stripe webhook with the service role).
 public enum AnalyticsEventType: String, Sendable, CaseIterable {
     case audioSettingsChanged = "audio_settings_changed"
     case commentPosted = "comment_posted"
-    case connectModalOpened = "connect_modal_opened"
-    case connectOnboardingCompleted = "connect_onboarding_completed"
-    case connectOnboardingStarted = "connect_onboarding_started"
     case downloadClicked = "download_clicked"
     case downloadModalOpened = "download_modal_opened"
     case packLiked = "pack_liked"
     case packSaved = "pack_saved"
     case pageView = "page_view"
     case playbackError = "playback_error"
-    case purchaseAbandoned = "purchase_abandoned"
     case purchaseClicked = "purchase_clicked"
-    case purchaseCompleted = "purchase_completed"
     case purchaseInitiated = "purchase_initiated"
-    case refundCompleted = "refund_completed"
     case searchPerformed = "search_performed"
     case shareClicked = "share_clicked"
-    case streamCounted = "stream_counted"
     case tierImpression = "tier_impression"
     case trackEnded = "track_ended"
     case trackLiked = "track_liked"
